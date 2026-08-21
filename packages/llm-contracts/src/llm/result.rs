@@ -71,7 +71,7 @@ pub struct LlmError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_error: Option<serde_json::Value>,
+    pub native_error: Option<Box<serde_json::Value>>,
 }
 
 impl Validate for LlmError {
