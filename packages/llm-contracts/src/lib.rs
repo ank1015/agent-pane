@@ -4,10 +4,12 @@
 //! used in processes, HTTP APIs, queues, and persistence layers.
 
 pub mod identifiers;
+pub mod models;
 pub mod providers;
 pub mod validation;
 
 pub use identifiers::{MessageId, ModelId, ProviderId, ToolCallId};
+pub use models::*;
 pub use validation::{ContractError, Validate, ValidationError, ValidationIssue};
 
 /// JSON object used for provider-specific options, metadata, and native data.
