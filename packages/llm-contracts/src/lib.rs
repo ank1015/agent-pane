@@ -4,12 +4,14 @@
 //! used in processes, HTTP APIs, queues, and persistence layers.
 
 pub mod identifiers;
+pub mod llm;
 pub mod messages;
 pub mod models;
 pub mod providers;
 pub mod validation;
 
 pub use identifiers::{MessageId, ModelId, ProviderId, ToolCallId};
+pub use llm::*;
 pub use messages::*;
 pub use models::*;
 pub use validation::{ContractError, Validate, ValidationError, ValidationIssue};
