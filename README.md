@@ -8,7 +8,8 @@ A Cargo workspace for applications and shared Rust packages.
 agent-pane/
 ├── apps/                     # Runnable binaries
 ├── packages/
-│   └── llm-contracts/        # Shared LLM domain contracts
+│   ├── llm-contracts/        # Shared LLM domain contracts
+│   └── provider-openai/      # Non-streaming OpenAI transport
 └── Cargo.toml                # Workspace configuration
 ```
 
