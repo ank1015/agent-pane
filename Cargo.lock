@@ -496,7 +496,77 @@ dependencies = [
 ]
 
 [[package]]
+name = "provider-anthropic"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "httpdate",
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "provider-chatgpt"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "httpdate",
+ "llm-contracts",
+ "provider-openai",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "provider-deepseek"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "httpdate",
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "provider-fireworks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "httpdate",
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "provider-openai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "httpdate",
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "provider-openrouter"
 version = "0.1.0"
 dependencies = [
  "async-trait",
