@@ -9,7 +9,12 @@ agent-pane/
 ├── apps/                     # Runnable binaries
 ├── packages/
 │   ├── llm-contracts/        # Shared LLM domain contracts
-│   └── provider-openai/      # Non-streaming OpenAI transport
+│   ├── provider-anthropic/   # Non-streaming Anthropic transport
+│   ├── provider-chatgpt/     # ChatGPT backend transport
+│   ├── provider-deepseek/    # Non-streaming DeepSeek transport
+│   ├── provider-fireworks/   # Non-streaming Fireworks transport
+│   ├── provider-openai/      # Non-streaming OpenAI transport
+│   └── provider-openrouter/  # Non-streaming OpenRouter transport
 └── Cargo.toml                # Workspace configuration
 ```
 
