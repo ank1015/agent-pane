@@ -3,9 +3,11 @@
 mod config;
 mod error;
 mod models;
+mod request;
 
 pub use config::{ChatGptConfig, DEFAULT_CHATGPT_TIMEOUT};
 pub use models::{CHATGPT_MODELS, ChatGptModel, find_model};
+pub use request::{CHATGPT_NATIVE_INPUT_TAG, build_response_request};
 
 /// Provider identifier used by this package.
 pub const CHATGPT_PROVIDER: &str = "chatgpt";
