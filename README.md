@@ -6,7 +6,10 @@ A Cargo workspace for applications and shared Rust packages.
 
 ```text
 agent-pane/
-├── apps/                     # Runnable binaries
+├── apps/
+│   ├── dashboard/            # React + Vite web client
+│   ├── llm-gateway/          # Stateless LLM gateway service
+│   └── platform/             # Dashboard backend and service orchestrator
 ├── packages/
 │   ├── llm-contracts/        # Shared LLM domain contracts
 │   ├── provider-anthropic/   # Non-streaming Anthropic transport
@@ -34,12 +37,24 @@ cargo clippy --workspace --all-targets
 
 # Format every workspace member
 cargo fmt --all
+
+# Run the dashboard
+cd apps/dashboard
+pnpm install
+pnpm dev
+
+# Run the dashboard backend (llm-gateway must also be running)
+cargo run -p platform
+
+# Build and run llm-gateway + platform together
+./scripts/dev-servers.sh
 ```
 
 ## Add a member
 
-The workspace discovers shared libraries under `packages/` automatically. Add
-`apps/*` to the root `members` list when the first application is created:
+The Cargo workspace discovers Rust applications under `apps/` and shared
+libraries under `packages/` automatically. Non-Rust applications are excluded
+from Cargo explicitly:
 
 ```sh
 cargo new --bin apps/my-app
