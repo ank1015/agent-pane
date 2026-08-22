@@ -7,4 +7,5 @@ mod chatgpt_auth;
 pub mod config;
 pub mod db;
 pub mod gateway;
+pub mod http;
 pub mod vault;
