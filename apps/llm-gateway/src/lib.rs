@@ -1,5 +1,6 @@
 //! Personal multi-provider LLM gateway.
 
+pub mod account;
 pub mod auth;
 pub mod config;
 pub mod db;
