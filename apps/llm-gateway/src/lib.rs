@@ -4,6 +4,7 @@ pub mod account;
 pub mod auth;
 pub mod catalog;
 mod chatgpt_auth;
+pub mod cli;
 pub mod config;
 pub mod db;
 pub mod gateway;
