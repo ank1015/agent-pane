@@ -1,0 +1,7 @@
+#root {
+  min-height: 100dvh;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
