@@ -1,0 +1,24 @@
+//! Direct E2B implementation of the execution runtime.
+//!
+//! The connector talks to E2B's envd APIs directly. Filesystem semantics that
+//! envd does not expose are implemented by short-lived inline Python commands;
+//! no resident agent-pane daemon is installed in the sandbox.
+
+mod artifacts;
+mod backend;
+mod config;
+mod environment;
+mod error;
+mod http;
+mod process;
+mod runner;
+mod transport;
+
+pub use config::{E2bConnectionConfig, E2bEnvironmentConfig, E2bNativeGrant, E2bWorkspaceRoot};
+pub use environment::E2bExecutionEnvironment;
+pub use error::{E2bConnectorError, E2bTransportError};
+pub use http::E2bHttpTransport;
+pub use transport::{
+    E2bTransport, RemoteProcessEvent, RemoteProcessRequest, RemoteProcessStream,
+    RemoteProcessSummary, RemoteStreamKind,
+};
