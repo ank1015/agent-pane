@@ -6,11 +6,13 @@ use axum::{
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::upstream::execution_gateway::ExecutionGatewayError;
 use crate::upstream::llm_gateway::LlmGatewayError;
 
 #[derive(Debug)]
 pub enum ApiError {
     InvalidRequest(String),
+    ExecutionGateway(ExecutionGatewayError),
     LlmGateway(LlmGatewayError),
 }
 
@@ -26,6 +28,12 @@ impl From<LlmGatewayError> for ApiError {
     }
 }
 
+impl From<ExecutionGatewayError> for ApiError {
+    fn from(error: ExecutionGatewayError) -> Self {
+        Self::ExecutionGateway(error)
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let response = match self {
@@ -34,6 +42,20 @@ impl IntoResponse for ApiError {
                 Json(ErrorResponse::new("invalid_request", message)),
             )
                 .into_response(),
+            Self::ExecutionGateway(ExecutionGatewayError::Rejected { status, body }) => {
+                (status, Json(body)).into_response()
+            }
+            Self::ExecutionGateway(error) => {
+                tracing::error!(%error, "execution gateway request failed");
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorResponse::new(
+                        "execution_gateway_unavailable",
+                        "the execution gateway is unavailable or returned an invalid response",
+                    )),
+                )
+                    .into_response()
+            }
             Self::LlmGateway(LlmGatewayError::Rejected { status, body }) => {
                 (status, Json(body)).into_response()
             }
@@ -90,6 +112,16 @@ pub(crate) fn rejected_body(bytes: &[u8]) -> Value {
                 "code": "llm_gateway_error",
                 "message": "the LLM gateway rejected the request"
             }
+        })
+    })
+}
+
+pub(crate) fn execution_gateway_rejected_body(bytes: &[u8]) -> Value {
+    serde_json::from_slice(bytes).unwrap_or_else(|_| {
+        serde_json::json!({
+            "code": "internal",
+            "message": "the execution gateway rejected the request",
+            "retryable": false
         })
     })
 }

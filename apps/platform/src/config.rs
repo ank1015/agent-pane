@@ -7,6 +7,8 @@ const DEFAULT_BIND_ADDRESS: &str = "127.0.0.1:3100";
 const DEFAULT_MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const DEFAULT_LLM_GATEWAY_URL: &str = "http://127.0.0.1:3000";
 const DEFAULT_LLM_GATEWAY_TIMEOUT_SECONDS: u64 = 30;
+const DEFAULT_EXECUTION_GATEWAY_URL: &str = "http://127.0.0.1:8790";
+const DEFAULT_EXECUTION_GATEWAY_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_CHATGPT_OAUTH_CALLBACK_ADDRESS: &str = "127.0.0.1:1455";
 const DEFAULT_CHATGPT_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEFAULT_CHATGPT_OAUTH_ISSUER: &str = "https://auth.openai.com";
@@ -18,6 +20,9 @@ pub struct AppConfig {
     pub llm_gateway_url: Url,
     pub llm_gateway_admin_token: Zeroizing<String>,
     pub llm_gateway_timeout: Duration,
+    pub execution_gateway_url: Url,
+    pub execution_gateway_control_token: Zeroizing<String>,
+    pub execution_gateway_timeout: Duration,
     pub chatgpt_oauth_callback_address: SocketAddr,
     pub chatgpt_oauth_client_id: String,
     pub chatgpt_oauth_issuer: Url,
@@ -64,6 +69,32 @@ impl AppConfig {
         )?;
         require_positive("PLATFORM_LLM_GATEWAY_TIMEOUT_SECONDS", timeout_seconds)?;
 
+        let execution_gateway_url = parse_http_url(
+            "PLATFORM_EXECUTION_GATEWAY_URL",
+            &env::var("PLATFORM_EXECUTION_GATEWAY_URL")
+                .unwrap_or_else(|_| DEFAULT_EXECUTION_GATEWAY_URL.to_owned()),
+        )?;
+        let execution_gateway_control_token = Zeroizing::new(
+            env::var("PLATFORM_EXECUTION_GATEWAY_CONTROL_TOKEN")
+                .or_else(|_| env::var("EXECUTION_GATEWAY_CONTROL_TOKEN"))
+                .map_err(|_| ConfigError::MissingExecutionGatewayControlToken)
+                .and_then(|value| {
+                    if value.trim().is_empty() {
+                        Err(ConfigError::MissingExecutionGatewayControlToken)
+                    } else {
+                        Ok(value)
+                    }
+                })?,
+        );
+        let execution_gateway_timeout_seconds = parse_integer(
+            "PLATFORM_EXECUTION_GATEWAY_TIMEOUT_SECONDS",
+            DEFAULT_EXECUTION_GATEWAY_TIMEOUT_SECONDS,
+        )?;
+        require_positive(
+            "PLATFORM_EXECUTION_GATEWAY_TIMEOUT_SECONDS",
+            execution_gateway_timeout_seconds,
+        )?;
+
         let chatgpt_oauth_callback_address: SocketAddr =
             env::var("PLATFORM_CHATGPT_OAUTH_CALLBACK_ADDRESS")
                 .unwrap_or_else(|_| DEFAULT_CHATGPT_OAUTH_CALLBACK_ADDRESS.to_owned())
@@ -96,6 +127,9 @@ impl AppConfig {
             llm_gateway_url,
             llm_gateway_admin_token,
             llm_gateway_timeout: Duration::from_secs(timeout_seconds),
+            execution_gateway_url,
+            execution_gateway_control_token,
+            execution_gateway_timeout: Duration::from_secs(execution_gateway_timeout_seconds),
             chatgpt_oauth_callback_address,
             chatgpt_oauth_client_id,
             chatgpt_oauth_issuer,
@@ -145,6 +179,10 @@ pub enum ConfigError {
         "PLATFORM_LLM_GATEWAY_ADMIN_TOKEN or GATEWAY_ADMIN_TOKEN must contain the gateway admin token"
     )]
     MissingLlmGatewayAdminToken,
+    #[error(
+        "PLATFORM_EXECUTION_GATEWAY_CONTROL_TOKEN or EXECUTION_GATEWAY_CONTROL_TOKEN must contain the execution gateway control token"
+    )]
+    MissingExecutionGatewayControlToken,
     #[error("PLATFORM_BIND_ADDRESS is not a valid socket address")]
     InvalidBindAddress(#[source] std::net::AddrParseError),
     #[error("PLATFORM_CHATGPT_OAUTH_CALLBACK_ADDRESS is not a valid socket address")]
