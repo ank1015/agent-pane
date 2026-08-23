@@ -6,7 +6,16 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import type { IconSvgElement } from '@hugeicons/react'
-import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
+import {
+  Navigate,
+  NavLink,
+  Route,
+  Routes,
+  matchPath,
+  useLocation,
+} from 'react-router-dom'
+import { MachinesSection } from './features/machines/MachinesSection'
+import { SandboxAccountPage } from './features/machines/SandboxAccountPage'
 import { ProvidersTable } from './features/providers/ProvidersTable'
 import { useDashboardStore } from './stores/dashboard-store'
 import './App.css'
@@ -35,7 +44,6 @@ const NAVIGATION: NavigationItem[] = [
     id: 'machines',
     path: '/machines',
     label: 'Machines',
-    description: 'Manage the machines available to your agents.',
     emptyMessage: 'Connected machines will appear here.',
     icon: ComputerIcon,
   },
@@ -55,8 +63,14 @@ function App() {
   const expandSidebar = useDashboardStore((state) => state.expandSidebar)
   const toggleSidebar = useDashboardStore((state) => state.toggleSidebar)
   const { pathname } = useLocation()
+  const sandboxAccountMatch = matchPath(
+    '/machine/accounts/:accountId',
+    pathname,
+  )
   const activeItem =
-    NAVIGATION.find((item) => item.path === pathname) ?? NAVIGATION[0]
+    sandboxAccountMatch !== null
+      ? NAVIGATION.find((item) => item.id === 'machines')!
+      : NAVIGATION.find((item) => item.path === pathname) ?? NAVIGATION[0]
 
   return (
     <div
@@ -110,7 +124,14 @@ function App() {
               <NavLink
                 key={item.id}
                 to={item.path}
-                className="cursor-nav-item dashboard-nav-item"
+                className={({ isActive }) =>
+                  `cursor-nav-item dashboard-nav-item${
+                    isActive ||
+                    (item.id === 'machines' && sandboxAccountMatch !== null)
+                      ? ' dashboard-nav-item--active'
+                      : ''
+                  }`
+                }
                 title={isSidebarCollapsed ? item.label : undefined}
               >
                 <span className="nav-icon-frame" aria-hidden="true">
@@ -139,27 +160,36 @@ function App() {
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route path="/projects" element={null} />
           <Route path="/machines" element={null} />
+          <Route path="/machine/accounts/:accountId" element={null} />
           <Route path="/providers" element={null} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
         </Routes>
 
         <div className="cursor-container">
-          <header
-            className={`page-header${
-              activeItem.id === 'providers' ? ' page-header--providers' : ''
-            }`}
-          >
-            <h1 className="cursor-page-title">{activeItem.label}</h1>
-            {activeItem.description ? (
-              <p className="cursor-caption page-description">
-                {activeItem.description}
-              </p>
-            ) : null}
-          </header>
+          {activeItem.id !== 'machines' ? (
+            <header
+              className={`page-header${
+                activeItem.id === 'providers' ? ' page-header--section' : ''
+              }`}
+            >
+              <h1 className="cursor-page-title">{activeItem.label}</h1>
+              {activeItem.description ? (
+                <p className="cursor-caption page-description">
+                  {activeItem.description}
+                </p>
+              ) : null}
+            </header>
+          ) : null}
 
-          {activeItem.id === 'providers' ? (
+          {sandboxAccountMatch !== null ? (
+            <SandboxAccountPage
+              accountId={sandboxAccountMatch.params.accountId ?? ''}
+            />
+          ) : activeItem.id === 'providers' ? (
             <ProvidersTable />
-          ) : (
+          ) : activeItem.id === 'machines' ? (
+            <MachinesSection />
+          ) : activeItem.id === 'projects' ? (
             <section
               className="cursor-card cursor-empty dashboard-empty-state"
               aria-labelledby={`${activeItem.id}-empty-title`}
@@ -180,7 +210,7 @@ function App() {
                 </div>
               </div>
             </section>
-          )}
+          ) : null}
         </div>
       </main>
     </div>

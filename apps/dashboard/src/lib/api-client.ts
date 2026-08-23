@@ -107,5 +107,14 @@ function errorMessage(body: unknown): string {
     return body.error.message
   }
 
+  if (
+    typeof body === 'object' &&
+    body !== null &&
+    'message' in body &&
+    typeof body.message === 'string'
+  ) {
+    return body.message
+  }
+
   return 'The request could not be completed.'
 }
