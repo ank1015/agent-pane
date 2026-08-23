@@ -8,9 +8,19 @@ A Cargo workspace for applications and shared Rust packages.
 agent-pane/
 ├── apps/
 │   ├── dashboard/            # React + Vite web client
+│   ├── execution-gateway/    # Durable cloud router for machine execution
 │   ├── llm-gateway/          # Stateless LLM gateway service
+│   ├── machine-daemon/       # Deployable local machine execution process
 │   └── platform/             # Dashboard backend and service orchestrator
 ├── packages/
+│   ├── connector-e2b/        # Direct E2B execution-runtime adapter
+│   ├── connector-tensorlake/ # Direct Tensorlake execution-runtime adapter
+│   ├── connector-blaxel/     # Direct Blaxel execution-runtime adapter
+│   ├── connector-daytona/    # Direct Daytona execution-runtime adapter
+│   ├── execution-contracts/  # Serializable machine execution protocol
+│   ├── execution-local/      # Local reference execution backend
+│   ├── execution-protocol/   # Gateway/daemon transport envelopes
+│   ├── execution-runtime/    # Async execution capability traits
 │   ├── llm-contracts/        # Shared LLM domain contracts
 │   ├── provider-anthropic/   # Non-streaming Anthropic transport
 │   ├── provider-chatgpt/     # ChatGPT backend transport
@@ -46,7 +56,7 @@ pnpm dev
 # Run the dashboard backend (llm-gateway must also be running)
 cargo run -p platform
 
-# Build and run llm-gateway + platform together
+# Build and run llm-gateway, platform, and execution-gateway together
 ./scripts/dev-servers.sh
 ```
 
