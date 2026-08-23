@@ -2,8 +2,9 @@
 
 The dashboard backend-for-frontend. `platform` exposes client-oriented APIs and
 coordinates the workspace's internal services; it does not take ownership of
-their data. The first feature slice is `providers`, which maps dashboard
-provider operations to `llm-gateway`'s authenticated account-management API.
+their data. The `providers` feature maps dashboard provider operations to
+`llm-gateway`, while `machines` maps machine and sandbox operations to
+`execution-gateway`.
 
 ## Architecture
 
@@ -17,8 +18,13 @@ src/
 │   ├── chatgpt_oauth.rs    # ChatGPT PKCE login and callback state
 │   ├── model.rs            # API contracts
 │   └── mod.rs              # Application service
+├── machines/               # Machines and sandbox-account feature slice
+│   ├── http.rs             # Dashboard-facing routes
+│   ├── model.rs            # API contracts
+│   └── mod.rs              # Application service
 ├── upstream/
-│   └── llm_gateway.rs      # Internal-service adapter
+│   ├── execution_gateway.rs # Execution gateway control adapter
+│   └── llm_gateway.rs       # LLM gateway admin adapter
 ├── config.rs               # Process configuration
 ├── error.rs                # Shared HTTP error mapping
 ├── lib.rs                  # Router composition
@@ -35,10 +41,13 @@ persistence, and neither service offers a credential reveal endpoint.
 
 ## Local setup
 
-Start `llm-gateway` first, then configure platform. The platform token must be
+Start `llm-gateway` and `execution-gateway` first, then configure platform. The platform token must be
 the same value as `GATEWAY_ADMIN_TOKEN` used by `llm-gateway`. When both
 processes load the same root `.env`, platform automatically falls back to that
 variable; `PLATFORM_LLM_GATEWAY_ADMIN_TOKEN` can override it.
+Likewise, `PLATFORM_EXECUTION_GATEWAY_CONTROL_TOKEN` must match
+`EXECUTION_GATEWAY_CONTROL_TOKEN`; platform falls back to the latter when all
+services load the root `.env`.
 
 ```sh
 cp apps/platform/.env.example .env.platform
@@ -49,7 +58,36 @@ cargo run -p platform
 ```
 
 The default listener is `http://127.0.0.1:3100`. Liveness is available at
-`GET /health`; `GET /ready` checks that `llm-gateway` is reachable and ready.
+`GET /health`; `GET /ready` checks both upstream gateways.
+
+## Sandbox accounts API
+
+```text
+GET    /api/machines
+GET    /api/machines/sandbox-accounts
+POST   /api/machines/sandbox-accounts
+GET    /api/machines/sandbox-accounts/{account_id}
+DELETE /api/machines/sandbox-accounts/{account_id}
+PUT    /api/machines/sandbox-accounts/{account_id}/credentials
+```
+
+`GET /api/machines` returns both `connector_accounts` and `machine_daemons` in
+one response for the Machines page. Connector accounts are account metadata;
+machine daemons include their environment descriptor and current online state.
+
+Create an E2B, Daytona, Blaxel, or Tensorlake account:
+
+```json
+{
+  "provider": "e2b",
+  "name": "main",
+  "api_key": "..."
+}
+```
+
+Platform forwards the API key once over its authenticated control connection.
+`execution-gateway` encrypts and stores it; neither service exposes a secret
+read endpoint, and platform responses contain account metadata only.
 
 ## Providers API
 

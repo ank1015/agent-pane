@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod error;
+pub mod machines;
 pub mod providers;
 pub mod upstream;
 
@@ -15,20 +16,23 @@ use axum::{
 use serde::Serialize;
 
 use providers::{ProviderService, chatgpt_oauth::ChatGptLoginService};
-use upstream::llm_gateway::LlmGatewayClient;
+use upstream::{execution_gateway::ExecutionGatewayClient, llm_gateway::LlmGatewayClient};
 
 #[derive(Clone)]
 struct AppState {
-    gateway: LlmGatewayClient,
+    llm_gateway: LlmGatewayClient,
+    execution_gateway: ExecutionGatewayClient,
 }
 
 pub fn router(
     gateway: LlmGatewayClient,
+    execution_gateway: ExecutionGatewayClient,
     chatgpt_login: ChatGptLoginService,
     max_request_bytes: usize,
 ) -> Router {
     let state = AppState {
-        gateway: gateway.clone(),
+        llm_gateway: gateway.clone(),
+        execution_gateway: execution_gateway.clone(),
     };
 
     Router::new()
@@ -38,6 +42,9 @@ pub fn router(
             ProviderService::new(gateway),
             chatgpt_login,
         ))
+        .merge(machines::router(machines::MachineService::new(
+            execution_gateway,
+        )))
         .layer(DefaultBodyLimit::max(max_request_bytes))
         .with_state(state)
 }
@@ -47,10 +54,17 @@ async fn health() -> Json<HealthResponse> {
 }
 
 async fn readiness(axum::extract::State(state): axum::extract::State<AppState>) -> Response {
-    match state.gateway.ready().await {
-        Ok(()) => Json(HealthResponse { status: "ready" }).into_response(),
-        Err(error) => {
-            tracing::warn!(%error, "llm gateway readiness check failed");
+    let (llm_gateway, execution_gateway) =
+        tokio::join!(state.llm_gateway.ready(), state.execution_gateway.ready());
+    match (llm_gateway, execution_gateway) {
+        (Ok(()), Ok(())) => Json(HealthResponse { status: "ready" }).into_response(),
+        (llm_gateway, execution_gateway) => {
+            if let Err(error) = llm_gateway {
+                tracing::warn!(%error, "llm gateway readiness check failed");
+            }
+            if let Err(error) = execution_gateway {
+                tracing::warn!(%error, "execution gateway readiness check failed");
+            }
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(HealthResponse {
