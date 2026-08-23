@@ -1,28 +1,29 @@
 [package]
-name = "platform"
+name = "connector-e2b"
+description = "E2B-backed implementation of the execution runtime"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-axum.workspace = true
+async-trait.workspace = true
 base64.workspace = true
-chrono.workspace = true
-dotenvy.workspace = true
-execution-protocol.workspace = true
-rand.workspace = true
+bytes.workspace = true
+execution-contracts.workspace = true
+execution-runtime.workspace = true
+futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
-zeroize.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

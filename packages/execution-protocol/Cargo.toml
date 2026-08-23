@@ -1,0 +1,17 @@
+[package]
+name = "execution-protocol"
+description = "Shared wire protocol for execution gateways and machine daemons"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+execution-contracts.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

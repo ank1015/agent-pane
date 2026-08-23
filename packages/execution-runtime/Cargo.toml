@@ -1,0 +1,20 @@
+[package]
+name = "execution-runtime"
+description = "Runtime traits and capability composition for remote execution environments"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+execution-contracts.workspace = true
+futures-core.workspace = true
+thiserror.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

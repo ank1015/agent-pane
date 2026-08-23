@@ -1,0 +1,40 @@
+[package]
+name = "execution-gateway"
+description = "Cloud gateway for routing durable operations to execution environments"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+axum = { workspace = true, features = ["ws"] }
+base64.workspace = true
+chrono.workspace = true
+credential-vault.workspace = true
+execution-contracts.workspace = true
+execution-protocol.workspace = true
+futures-util.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+execution-local.workspace = true
+execution-runtime.workspace = true
+machine-daemon = { path = "../machine-daemon" }
+reqwest.workspace = true
+tempfile = "3.0"
+tower = "0.5"
+
+[lints]
+workspace = true

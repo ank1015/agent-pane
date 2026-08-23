@@ -9,6 +9,10 @@
 .env.*
 !.env.example
 
+# Local machine-daemon identity, credentials, and device configuration
+/.machine-daemon/
+/apps/machine-daemon/machine-daemon.local.json
+
 # Editor and operating-system files
 .DS_Store
 .idea/
