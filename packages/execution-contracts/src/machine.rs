@@ -4,12 +4,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Capability, EnvironmentId, MachineId, ProtocolVersion, Validate, ValidationError,
-    WorkspaceRoot,
+    Capability, MachineId, ProtocolVersion, Validate, ValidationError, WorkspaceRoot,
     validation::{append_nested, finish, issue, require_non_empty},
 };
 
-/// Operating system reported by an execution environment.
+/// Operating system reported by an execution machine.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OperatingSystem {
@@ -20,7 +19,7 @@ pub enum OperatingSystem {
     Other { name: String },
 }
 
-/// Native path syntax used by an environment.
+/// Native path syntax used by a machine.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PathConvention {
@@ -35,12 +34,11 @@ pub struct ShellDescriptor {
     pub executable: String,
 }
 
-/// Serializable description and capability manifest for one execution target.
+/// Serializable description and capability manifest for a machine.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct EnvironmentDescriptor {
+pub struct MachineDescriptor {
     pub protocol_version: ProtocolVersion,
     pub machine_id: MachineId,
-    pub environment_id: EnvironmentId,
     pub name: String,
     pub operating_system: OperatingSystem,
     pub architecture: String,
@@ -53,20 +51,20 @@ pub struct EnvironmentDescriptor {
     pub capabilities: Vec<Capability>,
 }
 
-impl Validate for EnvironmentDescriptor {
+impl Validate for MachineDescriptor {
     fn validate(&self) -> Result<(), ValidationError> {
         let mut issues = Vec::new();
-        append_nested(&mut issues, "environment", self.protocol_version.validate());
-        require_non_empty(&mut issues, "environment.name", &self.name);
-        require_non_empty(&mut issues, "environment.architecture", &self.architecture);
+        append_nested(&mut issues, "machine", self.protocol_version.validate());
+        require_non_empty(&mut issues, "machine.name", &self.name);
+        require_non_empty(&mut issues, "machine.architecture", &self.architecture);
         if let OperatingSystem::Other { name } = &self.operating_system {
-            require_non_empty(&mut issues, "environment.operating_system.name", name);
+            require_non_empty(&mut issues, "machine.operating_system.name", name);
         }
         if let Some(shell) = &self.default_shell {
-            require_non_empty(&mut issues, "environment.default_shell.name", &shell.name);
+            require_non_empty(&mut issues, "machine.default_shell.name", &shell.name);
             require_non_empty(
                 &mut issues,
-                "environment.default_shell.executable",
+                "machine.default_shell.executable",
                 &shell.executable,
             );
         }
@@ -75,13 +73,13 @@ impl Validate for EnvironmentDescriptor {
         for (index, root) in self.workspace_roots.iter().enumerate() {
             append_nested(
                 &mut issues,
-                format_args!("environment.workspace_roots[{index}]"),
+                format_args!("machine.workspace_roots[{index}]"),
                 root.validate(),
             );
             if !root_ids.insert(&root.id) {
                 issue(
                     &mut issues,
-                    "environment.workspace_roots",
+                    "machine.workspace_roots",
                     format!("workspace root `{}` is duplicated", root.id),
                 );
             }
@@ -91,13 +89,13 @@ impl Validate for EnvironmentDescriptor {
         for (index, capability) in self.capabilities.iter().enumerate() {
             append_nested(
                 &mut issues,
-                format_args!("environment.capabilities[{index}]"),
+                format_args!("machine.capabilities[{index}]"),
                 capability.validate(),
             );
             if !capabilities.insert((&capability.id, capability.major)) {
                 issue(
                     &mut issues,
-                    "environment.capabilities",
+                    "machine.capabilities",
                     format!(
                         "capability `{}` major version {} is duplicated",
                         capability.id, capability.major

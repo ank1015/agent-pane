@@ -39,7 +39,7 @@ impl Validate for ProtocolVersion {
     }
 }
 
-/// Independently versioned environment capability.
+/// Independently versioned execution capability.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct Capability {
     pub id: CapabilityId,

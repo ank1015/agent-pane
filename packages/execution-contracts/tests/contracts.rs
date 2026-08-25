@@ -1,13 +1,12 @@
 use std::collections::BTreeMap;
 
 use execution_contracts::{
-    ApplyMutationRequest, Capability, CommandSpec, EnvironmentDescriptor, EnvironmentId,
-    EnvironmentInheritance, EnvironmentVariables, ExecutionId, ExecutionPersistence,
-    ExecutionPolicy, MachineId, MutationAtomicity, MutationOperation, MutationPlan,
-    MutationPostActions, NetworkMode, OperatingSystem, OperationId, PathConvention, PathSpec,
-    ProcessOutputPolicy, ProtocolVersion, ReadMode, ReadRequest, SandboxMode,
-    StartExecutionRequest, StdinMode, TextPageRequest, Validate, WorkspaceRoot, WorkspaceRootId,
-    parse_json,
+    ApplyMutationRequest, Capability, CommandSpec, EnvironmentInheritance, EnvironmentVariables,
+    ExecutionId, ExecutionPersistence, ExecutionPolicy, MachineDescriptor, MachineId,
+    MutationAtomicity, MutationOperation, MutationPlan, MutationPostActions, NetworkMode,
+    OperatingSystem, OperationId, PathConvention, PathSpec, ProcessOutputPolicy, ProtocolVersion,
+    ReadMode, ReadRequest, SandboxMode, StartExecutionRequest, StdinMode, TextPageRequest,
+    Validate, WorkspaceRoot, WorkspaceRootId, parse_json,
 };
 use schemars::schema_for;
 use serde_json::{Value, json};
@@ -25,11 +24,10 @@ fn workspace_path(path: &str) -> PathSpec {
 }
 
 #[test]
-fn environment_manifest_round_trips_and_admits_additive_fields() {
-    let descriptor = EnvironmentDescriptor {
+fn machine_manifest_round_trips_and_admits_additive_fields() {
+    let descriptor = MachineDescriptor {
         protocol_version: ProtocolVersion::V1,
         machine_id: id::<MachineId>("machine-1"),
-        environment_id: id::<EnvironmentId>("local"),
         name: "MacBook workspace".to_owned(),
         operating_system: OperatingSystem::Macos,
         architecture: "aarch64".to_owned(),
@@ -51,21 +49,20 @@ fn environment_manifest_round_trips_and_admits_additive_fields() {
         .expect("descriptor object")
         .insert("future_transport_hint".to_owned(), json!("quic"));
 
-    let decoded: EnvironmentDescriptor =
+    let decoded: MachineDescriptor =
         serde_json::from_value(value).expect("additive fields remain compatible");
     assert_eq!(decoded, descriptor);
 
-    let schema = serde_json::to_value(schema_for!(EnvironmentDescriptor)).expect("schema");
+    let schema = serde_json::to_value(schema_for!(MachineDescriptor)).expect("schema");
     assert!(schema["properties"]["capabilities"].is_object());
 }
 
 #[test]
-fn environment_validation_rejects_invalid_versions_and_duplicates() {
+fn machine_validation_rejects_invalid_versions_and_duplicates() {
     let duplicate = Capability::v1("workspace.query").expect("valid capability");
-    let descriptor = EnvironmentDescriptor {
+    let descriptor = MachineDescriptor {
         protocol_version: ProtocolVersion { major: 0, minor: 1 },
         machine_id: id::<MachineId>("machine-1"),
-        environment_id: id::<EnvironmentId>("local"),
         name: "Local".to_owned(),
         operating_system: OperatingSystem::Linux,
         architecture: "x86_64".to_owned(),

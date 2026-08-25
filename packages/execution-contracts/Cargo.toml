@@ -1,6 +1,6 @@
 [package]
 name = "execution-contracts"
-description = "Shared contracts for remote execution environments"
+description = "Shared contracts for remote execution machines"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

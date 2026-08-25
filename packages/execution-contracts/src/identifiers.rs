@@ -75,7 +75,7 @@ macro_rules! non_empty_string_id {
 non_empty_string_id!(MachineId, "Stable identifier for a registered machine.");
 non_empty_string_id!(
     EnvironmentId,
-    "Identifier for an execution environment exposed by a machine."
+    "Stable identifier for a saved execution environment."
 );
 non_empty_string_id!(
     WorkspaceRootId,

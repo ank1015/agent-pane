@@ -6,7 +6,7 @@ use crate::{
     validation::{finish, issue, require_non_empty},
 };
 
-/// A path resolved by the target environment.
+/// A path resolved by the target machine.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PathSpec {
@@ -50,7 +50,7 @@ impl Validate for PathSpec {
     }
 }
 
-/// A workspace root advertised by an execution environment.
+/// A workspace root advertised by an execution machine.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct WorkspaceRoot {
     pub id: WorkspaceRootId,

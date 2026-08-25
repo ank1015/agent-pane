@@ -1,11 +1,11 @@
 # execution-contracts
 
 Transport-neutral Rust contracts for executing agent tools against local,
-remote, and sandboxed environments.
+remote, and sandbox-backed machines.
 
 The crate defines five layers:
 
-- environment discovery and versioned capability negotiation;
+- machine discovery and versioned capability negotiation;
 - bounded workspace queries for reads, listings, and search;
 - validated workspace mutation plans with prepare/commit and one-shot apply;
 - durable process sessions with attachable output and idempotent input writes;

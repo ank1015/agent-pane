@@ -28,7 +28,7 @@ pub enum ExecutionErrorCode {
     Internal,
 }
 
-/// Transport-neutral error returned by an execution environment.
+/// Transport-neutral error returned by an execution runtime.
 #[derive(Clone, Debug, Deserialize, Error, JsonSchema, PartialEq, Serialize)]
 #[error("{message}")]
 pub struct ExecutionError {
