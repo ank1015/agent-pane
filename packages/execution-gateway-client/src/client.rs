@@ -1,13 +1,15 @@
 use serde::de::DeserializeOwned;
 
-use execution_contracts::{ExecutionError, MachineId};
+use execution_contracts::{EnvironmentId, ExecutionError, MachineId};
 use execution_protocol::{
-    CreateOperationRequest, MachineSummary, Operation, OperationEvent, OperationRecord,
+    CreateOperationRequest, Environment, MachineSummary, Operation, OperationEvent, OperationRecord,
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use url::Url;
 
-use crate::{ExecutionGatewayClientError, ExecutionGatewayConfig, GatewayExecutionEnvironment};
+use crate::{
+    ExecutionGatewayClientError, ExecutionGatewayConfig, GatewayEnvironment, GatewayMachineRuntime,
+};
 
 #[derive(Clone)]
 pub struct ExecutionGatewayClient {
@@ -76,6 +78,32 @@ impl ExecutionGatewayClient {
         .await
     }
 
+    pub async fn environment_record(
+        &self,
+        environment_id: &EnvironmentId,
+    ) -> Result<Environment, ExecutionGatewayClientError> {
+        self.send_json(
+            self.http
+                .get(self.url(&["v1", "environments", environment_id.as_str()])?),
+        )
+        .await
+    }
+
+    pub async fn create_environment_operation(
+        &self,
+        environment_id: &EnvironmentId,
+        operation: Operation,
+    ) -> Result<OperationRecord, ExecutionGatewayClientError> {
+        self.send_json(
+            self.http
+                .post(self.url(&["v1", "environments", environment_id.as_str(), "operations"])?)
+                .json(&CreateOperationRequest {
+                    operation: Box::new(operation),
+                }),
+        )
+        .await
+    }
+
     pub async fn operation(
         &self,
         operation_id: &str,
@@ -111,11 +139,18 @@ impl ExecutionGatewayClient {
         .await
     }
 
-    pub async fn environment(
+    pub async fn machine_runtime(
         &self,
         machine_id: &MachineId,
-    ) -> Result<GatewayExecutionEnvironment, ExecutionGatewayClientError> {
-        GatewayExecutionEnvironment::connect(self.clone(), machine_id).await
+    ) -> Result<GatewayMachineRuntime, ExecutionGatewayClientError> {
+        GatewayMachineRuntime::connect(self.clone(), machine_id).await
+    }
+
+    pub async fn environment(
+        &self,
+        environment_id: &EnvironmentId,
+    ) -> Result<GatewayEnvironment, ExecutionGatewayClientError> {
+        GatewayEnvironment::connect(self.clone(), environment_id).await
     }
 
     fn url(&self, segments: &[&str]) -> Result<Url, ExecutionGatewayClientError> {
