@@ -1,109 +1,122 @@
 use execution_contracts::{
-    ARTIFACTS_CAPABILITY, BASIC_FILESYSTEM_CAPABILITY, CODE_INTELLIGENCE_CAPABILITY,
-    EnvironmentDescriptor, MEDIA_PROCESSING_CAPABILITY, MachineId, PROCESS_SESSION_CAPABILITY,
-    Validate, WORKSPACE_MUTATION_CAPABILITY, WORKSPACE_QUERY_CAPABILITY,
+    EnvironmentId, MachineDescriptor, MachineId, PathSpec, Validate, WorkspaceRootId,
 };
+use execution_protocol::Environment;
 use execution_runtime::{
-    ArtifactStore, BasicFileSystem, CodeIntelligence, ExecutionEnvironment, MediaProcessing,
-    ProcessRuntime, WorkspaceMutation, WorkspaceQuery, validate_capability_consistency,
+    ArtifactStore, BasicFileSystem, CodeIntelligence, ExecutionRuntime, MediaProcessing,
+    ProcessRuntime, WorkspaceMutation, WorkspaceQuery,
 };
 
-use crate::{ExecutionGatewayClient, ExecutionGatewayClientError};
+use crate::{ExecutionGatewayClient, ExecutionGatewayClientError, GatewayMachineRuntime};
 
-#[derive(Clone)]
-pub struct GatewayExecutionEnvironment {
-    pub(crate) client: ExecutionGatewayClient,
-    pub(crate) descriptor: EnvironmentDescriptor,
+/// An HTTP-backed execution runtime anchored at a saved working location.
+pub struct GatewayEnvironment {
+    environment: Environment,
+    runtime: GatewayMachineRuntime,
 }
 
-impl GatewayExecutionEnvironment {
+impl GatewayEnvironment {
     pub async fn connect(
         client: ExecutionGatewayClient,
-        machine_id: &MachineId,
+        environment_id: &EnvironmentId,
     ) -> Result<Self, ExecutionGatewayClientError> {
-        let machine = client.machine(machine_id).await?;
-        if &machine.machine_id != machine_id || &machine.descriptor.machine_id != machine_id {
-            return Err(ExecutionGatewayClientError::InvalidDescriptor(
-                "gateway machine identity does not match the requested machine".to_owned(),
+        let environment = client.environment_record(environment_id).await?;
+        if &environment.environment_id != environment_id {
+            return Err(ExecutionGatewayClientError::InvalidEnvironment(
+                "gateway environment identity does not match the requested environment".to_owned(),
             ));
         }
-        Self::from_descriptor(client, machine.descriptor)
+        PathSpec::workspace(
+            environment.workspace_root_id.clone(),
+            environment.path.clone(),
+        )
+        .validate()
+        .map_err(|error| ExecutionGatewayClientError::InvalidEnvironment(error.to_string()))?;
+        let machine = client.machine(&environment.machine_id).await?;
+        if machine.machine_id != environment.machine_id
+            || machine.descriptor.machine_id != environment.machine_id
+        {
+            return Err(ExecutionGatewayClientError::InvalidEnvironment(
+                "gateway environment machine identity is inconsistent".to_owned(),
+            ));
+        }
+        if !machine
+            .descriptor
+            .workspace_roots
+            .iter()
+            .any(|root| root.id == environment.workspace_root_id)
+        {
+            return Err(ExecutionGatewayClientError::InvalidEnvironment(
+                "gateway environment workspace root is not exposed by its machine".to_owned(),
+            ));
+        }
+        let runtime = GatewayMachineRuntime::for_environment(
+            client,
+            machine.descriptor,
+            environment.environment_id.clone(),
+        )?;
+        Ok(Self {
+            environment,
+            runtime,
+        })
     }
 
-    pub fn from_descriptor(
-        client: ExecutionGatewayClient,
-        descriptor: EnvironmentDescriptor,
-    ) -> Result<Self, ExecutionGatewayClientError> {
-        descriptor
-            .validate()
-            .map_err(|error| ExecutionGatewayClientError::InvalidDescriptor(error.to_string()))?;
-        if !has_capability(&descriptor, WORKSPACE_QUERY_CAPABILITY) {
-            return Err(ExecutionGatewayClientError::InvalidDescriptor(
-                "environment must advertise workspace.query v1".to_owned(),
-            ));
-        }
-        let environment = Self { client, descriptor };
-        validate_capability_consistency(&environment)
-            .map_err(|error| ExecutionGatewayClientError::InvalidDescriptor(error.to_string()))?;
-        Ok(environment)
+    #[must_use]
+    pub fn environment_id(&self) -> &EnvironmentId {
+        &self.environment.environment_id
     }
 
     #[must_use]
     pub fn machine_id(&self) -> &MachineId {
-        &self.descriptor.machine_id
+        &self.environment.machine_id
     }
 
     #[must_use]
-    pub fn client(&self) -> &ExecutionGatewayClient {
-        &self.client
+    pub fn workspace_root_id(&self) -> &WorkspaceRootId {
+        &self.environment.workspace_root_id
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.environment.path
+    }
+
+    #[must_use]
+    pub fn record(&self) -> &Environment {
+        &self.environment
     }
 }
 
-impl ExecutionEnvironment for GatewayExecutionEnvironment {
-    fn descriptor(&self) -> &EnvironmentDescriptor {
-        &self.descriptor
+impl ExecutionRuntime for GatewayEnvironment {
+    fn descriptor(&self) -> &MachineDescriptor {
+        self.runtime.descriptor()
     }
 
     fn workspace_query(&self) -> &dyn WorkspaceQuery {
-        self
+        self.runtime.workspace_query()
     }
 
     fn workspace_mutation(&self) -> Option<&dyn WorkspaceMutation> {
-        has_capability(&self.descriptor, WORKSPACE_MUTATION_CAPABILITY)
-            .then_some(self as &dyn WorkspaceMutation)
+        self.runtime.workspace_mutation()
     }
 
     fn process_runtime(&self) -> Option<&dyn ProcessRuntime> {
-        has_capability(&self.descriptor, PROCESS_SESSION_CAPABILITY)
-            .then_some(self as &dyn ProcessRuntime)
+        self.runtime.process_runtime()
     }
 
     fn artifact_store(&self) -> Option<&dyn ArtifactStore> {
-        has_capability(&self.descriptor, ARTIFACTS_CAPABILITY).then_some(self as &dyn ArtifactStore)
+        self.runtime.artifact_store()
     }
 
     fn filesystem(&self) -> Option<&dyn BasicFileSystem> {
-        has_capability(&self.descriptor, BASIC_FILESYSTEM_CAPABILITY)
-            .then_some(self as &dyn BasicFileSystem)
+        self.runtime.filesystem()
     }
 
     fn code_intelligence(&self) -> Option<&dyn CodeIntelligence> {
-        has_capability(&self.descriptor, CODE_INTELLIGENCE_CAPABILITY)
-            .then_some(self as &dyn CodeIntelligence)
+        self.runtime.code_intelligence()
     }
 
     fn media_processing(&self) -> Option<&dyn MediaProcessing> {
-        has_capability(&self.descriptor, MEDIA_PROCESSING_CAPABILITY)
-            .then_some(self as &dyn MediaProcessing)
+        self.runtime.media_processing()
     }
-}
-
-impl CodeIntelligence for GatewayExecutionEnvironment {}
-impl MediaProcessing for GatewayExecutionEnvironment {}
-
-fn has_capability(descriptor: &EnvironmentDescriptor, id: &str) -> bool {
-    descriptor
-        .capabilities
-        .iter()
-        .any(|capability| capability.id.as_str() == id && capability.major == 1)
 }
