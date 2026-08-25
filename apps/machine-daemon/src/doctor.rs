@@ -5,8 +5,8 @@ use execution_contracts::{
     ExecutionPersistence, ExecutionPolicy, InspectRequest, NetworkMode, OperationId, PathSpec,
     ProcessEventKind, ProcessOutputPolicy, SandboxMode, StartExecutionRequest, StdinMode,
 };
-use execution_local::LocalExecutionEnvironment;
-use execution_runtime::{ExecutionEnvironment, OperationContext};
+use execution_local::LocalExecutionRuntime;
+use execution_runtime::{ExecutionRuntime, OperationContext};
 use futures_util::StreamExt;
 use serde::Serialize;
 use uuid::Uuid;
@@ -25,18 +25,18 @@ pub struct DoctorCheck {
 }
 
 pub async fn run(
-    environment: Arc<LocalExecutionEnvironment>,
+    runtime: Arc<LocalExecutionRuntime>,
     state_directory: &Path,
     gateway: Option<&str>,
 ) -> DoctorReport {
     let mut checks = Vec::new();
-    checks.push(match environment.validate_capabilities() {
+    checks.push(match runtime.validate_capabilities() {
         Ok(()) => passed("capabilities", "descriptor and runtime capabilities agree"),
         Err(source) => failed("capabilities", source.to_string()),
     });
 
-    for root in &environment.descriptor().workspace_roots {
-        let result = environment
+    for root in &runtime.descriptor().workspace_roots {
+        let result = runtime
             .workspace_query()
             .inspect(
                 &OperationContext::new(),
@@ -66,7 +66,7 @@ pub async fn run(
         },
     );
 
-    checks.push(process_check(environment.as_ref()).await);
+    checks.push(process_check(runtime.as_ref()).await);
     if let Some(gateway) = gateway {
         checks.push(match url::Url::parse(gateway) {
             Ok(url) if matches!(url.scheme(), "ws" | "wss") => {
@@ -83,16 +83,16 @@ pub async fn run(
     }
 }
 
-async fn process_check(environment: &LocalExecutionEnvironment) -> DoctorCheck {
-    let Some(root) = environment.descriptor().workspace_roots.first() else {
+async fn process_check(runtime: &LocalExecutionRuntime) -> DoctorCheck {
+    let Some(root) = runtime.descriptor().workspace_roots.first() else {
         return failed("process_runtime", "no workspace root is configured");
     };
-    let Some(runtime) = environment.process_runtime() else {
+    let Some(process_runtime) = runtime.process_runtime() else {
         return failed("process_runtime", "process capability is missing");
     };
     let execution_id =
         ExecutionId::new(Uuid::now_v7().to_string()).expect("UUID execution identifier is valid");
-    let start = runtime
+    let start = process_runtime
         .start(
             &OperationContext::new(),
             StartExecutionRequest {
@@ -131,7 +131,7 @@ async fn process_check(environment: &LocalExecutionEnvironment) -> DoctorCheck {
     if let Err(source) = start {
         return failed("process_runtime", source.to_string());
     }
-    let stream = runtime
+    let stream = process_runtime
         .attach(
             &OperationContext::new(),
             AttachExecutionRequest {

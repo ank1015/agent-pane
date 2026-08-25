@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Context;
-use execution_contracts::EnvironmentDescriptor;
+use execution_contracts::MachineDescriptor;
 use execution_protocol::{ClaimMachineRequest, ClaimMachineResponse};
 use reqwest::{StatusCode, Url};
 
@@ -10,7 +10,7 @@ use crate::credential::{self, CloudCredential};
 pub async fn register(
     gateway: &str,
     registration_token: String,
-    descriptor: &EnvironmentDescriptor,
+    descriptor: &MachineDescriptor,
     state_directory: &Path,
 ) -> anyhow::Result<CloudCredential> {
     let endpoint = registration_endpoint(gateway)?;

@@ -3,8 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use execution_contracts::{EnvironmentId, GrantId, MachineId, WorkspaceRootId};
-use execution_local::{LocalExecutionConfig, LocalNativeGrant, LocalWorkspaceRoot};
+use execution_contracts::{GrantId, MachineId, WorkspaceRootId};
+use execution_local::{LocalNativeGrant, LocalRuntimeConfig, LocalWorkspaceRoot};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -13,7 +13,6 @@ use thiserror::Error;
 pub struct DaemonConfig {
     #[serde(default)]
     pub machine_id: Option<String>,
-    pub environment_id: String,
     pub name: String,
     pub state_directory: PathBuf,
     #[serde(default = "default_listen")]
@@ -124,9 +123,7 @@ impl DaemonConfig {
             })
     }
 
-    pub fn local_config(&self, machine_id: MachineId) -> Result<LocalExecutionConfig, ConfigError> {
-        let environment_id = EnvironmentId::new(self.environment_id.clone())
-            .map_err(|source| ConfigError::Invalid(source.to_string()))?;
+    pub fn local_config(&self, machine_id: MachineId) -> Result<LocalRuntimeConfig, ConfigError> {
         let roots = self
             .workspace_roots
             .iter()
@@ -152,9 +149,8 @@ impl DaemonConfig {
                 })
             })
             .collect::<Result<Vec<_>, ConfigError>>()?;
-        Ok(LocalExecutionConfig {
+        Ok(LocalRuntimeConfig {
             machine_id,
-            environment_id,
             name: self.name.clone(),
             state_directory: self.state_directory.clone(),
             workspace_roots: roots,

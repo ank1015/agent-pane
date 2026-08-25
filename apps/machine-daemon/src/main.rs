@@ -2,15 +2,15 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use execution_local::LocalExecutionEnvironment;
-use execution_runtime::ExecutionEnvironment;
+use execution_local::LocalExecutionRuntime;
+use execution_runtime::ExecutionRuntime;
 use machine_daemon::{config::DaemonConfig, credential, doctor, identity, registration, transport};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "machine-daemon",
-    about = "Expose this device as an execution environment"
+    about = "Expose this device as an execution runtime"
 )]
 struct Cli {
     #[arg(
@@ -48,7 +48,7 @@ enum Command {
     },
     /// Serve newline-delimited JSON over stdin/stdout for SSH and sandbox launchers.
     Stdio,
-    /// Print the environment descriptor as JSON.
+    /// Print the runtime descriptor as JSON.
     Describe,
     /// Validate roots, state storage, shell execution, and gateway configuration.
     Doctor,
@@ -61,10 +61,10 @@ async fn main() -> anyhow::Result<()> {
     let config = DaemonConfig::load(&cli.config).await?;
     let machine_id =
         identity::load_or_create(&config.state_directory, config.machine_id.as_deref()).await?;
-    let environment = Arc::new(
-        LocalExecutionEnvironment::new(config.local_config(machine_id)?)
+    let runtime = Arc::new(
+        LocalExecutionRuntime::new(config.local_config(machine_id)?)
             .await
-            .context("initialize local execution environment")?,
+            .context("initialize local execution runtime")?,
     );
 
     match cli.command {
@@ -72,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
             let claimed = registration::register(
                 &gateway,
                 token,
-                environment.descriptor(),
+                runtime.descriptor(),
                 &config.state_directory,
             )
             .await?;
@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Serve { listen } => {
             transport::serve::run(
-                environment,
+                runtime,
                 listen.unwrap_or(config.listen),
                 config.auth_token()?,
             )
@@ -90,30 +90,23 @@ async fn main() -> anyhow::Result<()> {
             let cloud = credential::load(&config.state_directory)
                 .await?
                 .context("machine is not registered; run `machine-daemon register` first")?;
-            if cloud.machine_id != environment.descriptor().machine_id {
+            if cloud.machine_id != runtime.descriptor().machine_id {
                 anyhow::bail!("stored cloud credential belongs to a different machine identity");
             }
             transport::connect::run(
-                environment,
+                runtime,
                 gateway.unwrap_or(cloud.websocket_url),
                 Some(cloud.credential),
             )
             .await?;
         }
-        Command::Stdio => transport::stdio::run(environment).await?,
+        Command::Stdio => transport::stdio::run(runtime).await?,
         Command::Describe => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(environment.descriptor())?
-            );
+            println!("{}", serde_json::to_string_pretty(runtime.descriptor())?);
         }
         Command::Doctor => {
-            let report = doctor::run(
-                environment,
-                &config.state_directory,
-                config.gateway.as_deref(),
-            )
-            .await;
+            let report =
+                doctor::run(runtime, &config.state_directory, config.gateway.as_deref()).await;
             println!("{}", serde_json::to_string_pretty(&report)?);
             if !report.healthy {
                 anyhow::bail!("one or more doctor checks failed");

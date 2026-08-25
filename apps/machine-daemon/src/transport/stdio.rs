@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use execution_local::LocalExecutionEnvironment;
-use execution_runtime::ExecutionEnvironment;
+use execution_local::LocalExecutionRuntime;
+use execution_runtime::ExecutionRuntime;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     sync::mpsc,
@@ -14,11 +14,11 @@ use crate::{
     session::{self, protocol_error},
 };
 
-pub async fn run(environment: Arc<LocalExecutionEnvironment>) -> anyhow::Result<()> {
+pub async fn run(runtime: Arc<LocalExecutionRuntime>) -> anyhow::Result<()> {
     let (incoming_tx, incoming_rx) = mpsc::channel(64);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(64);
-    let descriptor = environment.descriptor().clone();
-    let dispatcher = Dispatcher::new(environment);
+    let descriptor = runtime.descriptor().clone();
+    let dispatcher = Dispatcher::new(runtime);
     let session_output = outgoing_tx.clone();
     let session_task = tokio::spawn(session::run(
         descriptor,

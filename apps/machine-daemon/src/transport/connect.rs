@@ -1,8 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
-use execution_local::LocalExecutionEnvironment;
-use execution_runtime::ExecutionEnvironment;
+use execution_local::LocalExecutionRuntime;
+use execution_runtime::ExecutionRuntime;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{
@@ -18,13 +18,13 @@ use crate::{
 };
 
 pub async fn run(
-    environment: Arc<LocalExecutionEnvironment>,
+    runtime: Arc<LocalExecutionRuntime>,
     gateway: String,
     token: Option<String>,
 ) -> anyhow::Result<()> {
     let mut delay = Duration::from_secs(1);
     loop {
-        match connect_once(Arc::clone(&environment), &gateway, token.as_deref()).await {
+        match connect_once(Arc::clone(&runtime), &gateway, token.as_deref()).await {
             Ok(()) => tracing::warn!(%gateway, "gateway connection closed"),
             Err(source) => tracing::warn!(%gateway, %source, "gateway connection failed"),
         }
@@ -34,7 +34,7 @@ pub async fn run(
 }
 
 async fn connect_once(
-    environment: Arc<LocalExecutionEnvironment>,
+    runtime: Arc<LocalExecutionRuntime>,
     gateway: &str,
     token: Option<&str>,
 ) -> anyhow::Result<()> {
@@ -49,7 +49,7 @@ async fn connect_once(
     }
     request.headers_mut().insert(
         "x-machine-id",
-        environment
+        runtime
             .descriptor()
             .machine_id
             .as_str()
@@ -63,9 +63,9 @@ async fn connect_once(
     let (mut socket_writer, mut socket_reader) = socket.split();
     let (incoming_tx, incoming_rx) = mpsc::channel(64);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(64);
-    let dispatcher = Dispatcher::new(Arc::clone(&environment));
+    let dispatcher = Dispatcher::new(Arc::clone(&runtime));
     let session_task = tokio::spawn(session::run(
-        environment.descriptor().clone(),
+        runtime.descriptor().clone(),
         dispatcher,
         incoming_rx,
         outgoing_tx.clone(),

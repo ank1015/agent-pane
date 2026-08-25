@@ -1,6 +1,6 @@
 [package]
 name = "machine-daemon"
-description = "Deployable daemon exposing local execution environments"
+description = "Deployable daemon exposing local execution machines"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

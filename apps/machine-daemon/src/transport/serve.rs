@@ -10,9 +10,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use execution_contracts::EnvironmentDescriptor;
-use execution_local::LocalExecutionEnvironment;
-use execution_runtime::ExecutionEnvironment;
+use execution_contracts::MachineDescriptor;
+use execution_local::LocalExecutionRuntime;
+use execution_runtime::ExecutionRuntime;
 use serde::Serialize;
 use tokio::{net::TcpListener, sync::mpsc};
 
@@ -25,7 +25,7 @@ use crate::{
 
 #[derive(Clone)]
 struct AppState {
-    environment: Arc<LocalExecutionEnvironment>,
+    runtime: Arc<LocalExecutionRuntime>,
     token: Option<String>,
 }
 
@@ -35,11 +35,11 @@ struct Health {
 }
 
 pub async fn run(
-    environment: Arc<LocalExecutionEnvironment>,
+    runtime: Arc<LocalExecutionRuntime>,
     listen: SocketAddr,
     token: Option<String>,
 ) -> anyhow::Result<()> {
-    let state = AppState { environment, token };
+    let state = AppState { runtime, token };
     let router = Router::new()
         .route("/health", get(health))
         .route("/v1/descriptor", get(descriptor))
@@ -61,7 +61,7 @@ async fn descriptor(State(state): State<AppState>, headers: HeaderMap) -> Respon
     if !pairing::authorized(&headers, state.token.as_deref()) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    Json(state.environment.descriptor().clone()).into_response()
+    Json(state.runtime.descriptor().clone()).into_response()
 }
 
 async fn websocket(
@@ -73,18 +73,18 @@ async fn websocket(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     upgrade
-        .on_upgrade(move |socket| run_socket(socket, state.environment))
+        .on_upgrade(move |socket| run_socket(socket, state.runtime))
         .into_response()
 }
 
-async fn run_socket(socket: WebSocket, environment: Arc<LocalExecutionEnvironment>) {
+async fn run_socket(socket: WebSocket, runtime: Arc<LocalExecutionRuntime>) {
     use futures_util::{SinkExt, StreamExt};
 
     let (mut socket_writer, mut socket_reader) = socket.split();
     let (incoming_tx, incoming_rx) = mpsc::channel(64);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(64);
-    let descriptor: EnvironmentDescriptor = environment.descriptor().clone();
-    let dispatcher = Dispatcher::new(environment);
+    let descriptor: MachineDescriptor = runtime.descriptor().clone();
+    let dispatcher = Dispatcher::new(runtime);
     let session_task = tokio::spawn(session::run(
         descriptor,
         dispatcher,

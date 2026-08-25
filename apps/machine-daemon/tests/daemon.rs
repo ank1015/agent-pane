@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use execution_contracts::{EnvironmentId, MachineId, WorkspaceRootId};
-use execution_local::{LocalExecutionConfig, LocalExecutionEnvironment, LocalWorkspaceRoot};
-use execution_runtime::ExecutionEnvironment;
+use execution_contracts::{MachineId, WorkspaceRootId};
+use execution_local::{LocalExecutionRuntime, LocalRuntimeConfig, LocalWorkspaceRoot};
+use execution_runtime::ExecutionRuntime;
 use machine_daemon::{
     config::DaemonConfig,
     dispatch::Dispatcher,
@@ -21,15 +21,14 @@ where
     T::try_from(value.to_owned()).expect("valid test identifier")
 }
 
-async fn environment() -> (TempDir, Arc<LocalExecutionEnvironment>) {
+async fn runtime() -> (TempDir, Arc<LocalExecutionRuntime>) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let workspace = directory.path().join("workspace");
     tokio::fs::create_dir_all(&workspace)
         .await
         .expect("create workspace");
-    let environment = LocalExecutionEnvironment::new(LocalExecutionConfig {
+    let runtime = LocalExecutionRuntime::new(LocalRuntimeConfig {
         machine_id: id::<MachineId>("machine-1"),
-        environment_id: id::<EnvironmentId>("host"),
         name: "Daemon fixture".to_owned(),
         state_directory: directory.path().join("state"),
         workspace_roots: vec![LocalWorkspaceRoot {
@@ -41,8 +40,8 @@ async fn environment() -> (TempDir, Arc<LocalExecutionEnvironment>) {
         native_grants: Vec::new(),
     })
     .await
-    .expect("local environment");
-    (directory, Arc::new(environment))
+    .expect("local runtime");
+    (directory, Arc::new(runtime))
 }
 
 #[tokio::test]
@@ -59,9 +58,9 @@ async fn generated_identity_is_stable() {
 
 #[tokio::test]
 async fn session_announces_descriptor_and_dispatches_requests() {
-    let (_directory, environment) = environment().await;
-    let descriptor = environment.descriptor().clone();
-    let dispatcher = Dispatcher::new(environment);
+    let (_directory, runtime) = runtime().await;
+    let descriptor = runtime.descriptor().clone();
+    let dispatcher = Dispatcher::new(runtime);
     let (incoming_tx, incoming_rx) = mpsc::channel(4);
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(4);
     let task = tokio::spawn(session::run(
@@ -91,7 +90,7 @@ async fn session_announces_descriptor_and_dispatches_requests() {
         response,
         ServerMessage::Response {
             request_id,
-            response: Response::Descriptor(value),
+            response: Response::MachineDescriptor(value),
         } if request_id == "describe-1" && value == descriptor
     ));
     drop(incoming_tx);
@@ -108,7 +107,6 @@ async fn config_paths_are_resolved_relative_to_the_config_file() {
     tokio::fs::write(
         &config_path,
         br#"{
-            "environment_id": "host",
             "name": "Fixture",
             "state_directory": "state",
             "workspace_roots": [
@@ -129,9 +127,9 @@ async fn config_paths_are_resolved_relative_to_the_config_file() {
 }
 
 #[tokio::test]
-async fn doctor_verifies_the_real_local_environment() {
-    let (directory, environment) = environment().await;
-    let report = doctor::run(environment, &directory.path().join("state"), None).await;
+async fn doctor_verifies_the_real_local_runtime() {
+    let (directory, runtime) = runtime().await;
+    let report = doctor::run(runtime, &directory.path().join("state"), None).await;
     assert!(report.healthy, "doctor checks: {:?}", report.checks);
     assert!(
         report

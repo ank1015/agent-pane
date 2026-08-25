@@ -1,5 +1,4 @@
 {
-  "environment_id": "host",
   "name": "My workstation",
   "state_directory": ".machine-daemon",
   "listen": "127.0.0.1:8787",

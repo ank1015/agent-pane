@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use execution_contracts::{EnvironmentDescriptor, ExecutionError, ExecutionErrorCode};
+use execution_contracts::{ExecutionError, ExecutionErrorCode, MachineDescriptor};
 use execution_runtime::OperationContext;
 use tokio::sync::{Mutex, mpsc};
 
@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub async fn run(
-    descriptor: EnvironmentDescriptor,
+    descriptor: MachineDescriptor,
     dispatcher: Dispatcher,
     mut incoming: mpsc::Receiver<ClientMessage>,
     outgoing: mpsc::Sender<ServerMessage>,

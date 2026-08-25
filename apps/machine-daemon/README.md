@@ -34,7 +34,7 @@ saved WebSocket URL; it does not bypass registration.
 
 `stdio` uses newline-delimited JSON. WebSockets use one JSON object per text
 frame. Every session begins with a `ready` message containing the protocol name
-and environment descriptor. Requests use a caller-generated `request_id` and a
+and machine descriptor. Requests use a caller-generated `request_id` and a
 tagged operation. Unary operations produce `response`; process attachment and
 artifact opening produce `stream_item` messages followed by `stream_end`.
 
