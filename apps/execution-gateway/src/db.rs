@@ -1,10 +1,12 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use execution_contracts::{EnvironmentDescriptor, ExecutionError, MachineId, TimestampMs};
+use execution_contracts::{
+    EnvironmentId, ExecutionError, MachineDescriptor, MachineId, TimestampMs, WorkspaceRootId,
+};
 use execution_protocol::{
-    ConnectorKind, MachineSummary, Operation, OperationEvent, OperationRecord, OperationStatus,
-    Response, StreamItem,
+    ConnectorKind, Environment, MachineSummary, Operation, OperationEvent, OperationRecord,
+    OperationStatus, Response, StreamItem,
 };
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use thiserror::Error;
@@ -71,7 +73,7 @@ impl Database {
         &self,
         registration_hash: &[u8],
         credential_hash: &[u8],
-        descriptor: &EnvironmentDescriptor,
+        descriptor: &MachineDescriptor,
     ) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
         let row = sqlx::query("select id from machine_registrations where token_hash = $1 and claimed_at is null and expires_at > now() for update")
@@ -81,18 +83,18 @@ impl Database {
         };
         let registration_id: Uuid = row.try_get("id")?;
         sqlx::query(
-            "insert into machines (machine_id, environment_id, name, connector_kind, descriptor, credential_hash)
-             values ($1, $2, $3, 'machine_daemon', $4, $5)
-             on conflict (machine_id) do update set environment_id = excluded.environment_id, name = excluded.name,
+            "insert into machines (machine_id, name, connector_kind, descriptor, credential_hash)
+             values ($1, $2, 'machine_daemon', $3, $4)
+             on conflict (machine_id) do update set name = excluded.name,
              connector_kind = excluded.connector_kind, descriptor = excluded.descriptor,
              credential_hash = excluded.credential_hash, deleted_at = null, updated_at = now()",
         )
         .bind(descriptor.machine_id.as_str())
-        .bind(descriptor.environment_id.as_str())
         .bind(&descriptor.name)
         .bind(serde_json::to_value(descriptor)?)
         .bind(credential_hash)
-        .execute(&mut *tx).await?;
+        .execute(&mut *tx)
+        .await?;
         sqlx::query("update machine_registrations set claimed_at = now() where id = $1")
             .bind(registration_id)
             .execute(&mut *tx)
@@ -124,11 +126,10 @@ impl Database {
     pub async fn mark_seen(
         &self,
         machine_id: &str,
-        descriptor: &EnvironmentDescriptor,
+        descriptor: &MachineDescriptor,
     ) -> Result<(), DbError> {
-        sqlx::query("update machines set descriptor = $2, environment_id = $3, last_seen_at = now(), updated_at = now() where machine_id = $1 and deleted_at is null")
+        sqlx::query("update machines set descriptor = $2, last_seen_at = now(), updated_at = now() where machine_id = $1 and deleted_at is null")
             .bind(machine_id).bind(serde_json::to_value(descriptor)?)
-            .bind(descriptor.environment_id.as_str())
             .execute(&self.pool).await?;
         Ok(())
     }
@@ -150,11 +151,86 @@ impl Database {
     }
 
     pub async fn delete_machine(&self, machine_id: &str) -> Result<bool, DbError> {
-        sqlx::query(
+        let mut transaction = self.pool.begin().await?;
+        let result = sqlx::query(
             "update machines set credential_hash = null, deleted_at = now(), updated_at = now()
              where machine_id = $1 and deleted_at is null",
         )
         .bind(machine_id)
+        .execute(&mut *transaction)
+        .await?;
+        if result.rows_affected() == 1 {
+            sqlx::query(
+                "update environments set deleted_at = now()
+                 where machine_id = $1 and deleted_at is null",
+            )
+            .bind(machine_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn create_environment(
+        &self,
+        environment_id: &EnvironmentId,
+        machine_id: &MachineId,
+        workspace_root_id: &WorkspaceRootId,
+        path: &str,
+    ) -> Result<Option<Environment>, DbError> {
+        let row = sqlx::query(
+            "insert into environments
+                 (environment_id, machine_id, workspace_root_id, path)
+             select $1, machine_id, $3, $4
+             from machines
+             where machine_id = $2 and deleted_at is null
+             returning *",
+        )
+        .bind(environment_id.as_str())
+        .bind(machine_id.as_str())
+        .bind(workspace_root_id.as_str())
+        .bind(path)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(environment_from_row).transpose()
+    }
+
+    pub async fn environment(&self, environment_id: &str) -> Result<Option<Environment>, DbError> {
+        sqlx::query(
+            "select * from environments
+             where environment_id = $1 and deleted_at is null",
+        )
+        .bind(environment_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(environment_from_row)
+        .transpose()
+    }
+
+    pub async fn environments(
+        &self,
+        machine_id: Option<&str>,
+    ) -> Result<Vec<Environment>, DbError> {
+        sqlx::query(
+            "select * from environments
+             where deleted_at is null and ($1::text is null or machine_id = $1)
+             order by created_at, environment_id",
+        )
+        .bind(machine_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(environment_from_row)
+        .collect()
+    }
+
+    pub async fn delete_environment(&self, environment_id: &str) -> Result<bool, DbError> {
+        sqlx::query(
+            "update environments set deleted_at = now()
+             where environment_id = $1 and deleted_at is null",
+        )
+        .bind(environment_id)
         .execute(&self.pool)
         .await
         .map(|result| result.rows_affected() == 1)
@@ -164,11 +240,13 @@ impl Database {
     pub async fn create_operation(
         &self,
         machine_id: &str,
+        environment_id: Option<&EnvironmentId>,
         operation: &Operation,
     ) -> Result<OperationRecord, DbError> {
         let id = Uuid::now_v7();
-        let row = sqlx::query("insert into machine_operations (id, machine_id, status, operation) values ($1, $2, 'queued', $3) returning *")
-            .bind(id).bind(machine_id).bind(serde_json::to_value(operation)?)
+        let row = sqlx::query("insert into machine_operations (id, machine_id, environment_id, status, operation) values ($1, $2, $3, 'queued', $4) returning *")
+            .bind(id).bind(machine_id).bind(environment_id.map(EnvironmentId::as_str))
+            .bind(serde_json::to_value(operation)?)
             .fetch_one(&self.pool).await?;
         operation_from_row(row)
     }
@@ -257,7 +335,7 @@ impl Database {
 }
 
 fn machine_from_row(row: sqlx::postgres::PgRow) -> Result<MachineRecord, DbError> {
-    let descriptor: EnvironmentDescriptor = serde_json::from_value(row.try_get("descriptor")?)?;
+    let descriptor: MachineDescriptor = serde_json::from_value(row.try_get("descriptor")?)?;
     let connector = connector(row.try_get::<String, _>("connector_kind")?.as_str())?;
     let created: DateTime<Utc> = row.try_get("created_at")?;
     let updated: DateTime<Utc> = row.try_get("updated_at")?;
@@ -265,7 +343,6 @@ fn machine_from_row(row: sqlx::postgres::PgRow) -> Result<MachineRecord, DbError
     Ok(MachineRecord {
         summary: MachineSummary {
             machine_id: descriptor.machine_id.clone(),
-            environment_id: descriptor.environment_id.clone(),
             name: row.try_get("name")?,
             connector,
             online: false,
@@ -278,6 +355,23 @@ fn machine_from_row(row: sqlx::postgres::PgRow) -> Result<MachineRecord, DbError
     })
 }
 
+fn environment_from_row(row: sqlx::postgres::PgRow) -> Result<Environment, DbError> {
+    let environment_id = EnvironmentId::new(row.try_get::<String, _>("environment_id")?)
+        .map_err(|error| DbError::Contract(error.to_string()))?;
+    let machine_id = MachineId::new(row.try_get::<String, _>("machine_id")?)
+        .map_err(|error| DbError::Contract(error.to_string()))?;
+    let workspace_root_id = WorkspaceRootId::new(row.try_get::<String, _>("workspace_root_id")?)
+        .map_err(|error| DbError::Contract(error.to_string()))?;
+    let created: DateTime<Utc> = row.try_get("created_at")?;
+    Ok(Environment {
+        environment_id,
+        machine_id,
+        workspace_root_id,
+        path: row.try_get("path")?,
+        created_at: timestamp(created),
+    })
+}
+
 fn operation_from_row(row: sqlx::postgres::PgRow) -> Result<OperationRecord, DbError> {
     let id: Uuid = row.try_get("id")?;
     let machine_id = MachineId::new(row.try_get::<String, _>("machine_id")?)
@@ -287,6 +381,11 @@ fn operation_from_row(row: sqlx::postgres::PgRow) -> Result<OperationRecord, DbE
     Ok(OperationRecord {
         operation_id: id.to_string(),
         machine_id,
+        environment_id: row
+            .try_get::<Option<String>, _>("environment_id")?
+            .map(EnvironmentId::new)
+            .transpose()
+            .map_err(|error| DbError::Contract(error.to_string()))?,
         status: status(&row.try_get::<String, _>("status")?)?,
         operation: Box::new(serde_json::from_value(row.try_get("operation")?)?),
         response: row
@@ -305,6 +404,7 @@ fn operation_from_row(row: sqlx::postgres::PgRow) -> Result<OperationRecord, DbE
 fn connector(value: &str) -> Result<ConnectorKind, DbError> {
     match value {
         "machine_daemon" => Ok(ConnectorKind::MachineDaemon),
+        "sandbox" => Ok(ConnectorKind::Sandbox),
         "e2b" => Ok(ConnectorKind::E2b),
         "ssh" => Ok(ConnectorKind::Ssh),
         _ => Err(DbError::Contract(format!("unknown connector {value}"))),
