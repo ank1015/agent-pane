@@ -50,6 +50,8 @@ All routes below require `EXECUTION_GATEWAY_API_TOKEN` as a bearer token:
 - `GET /v1/machines`
 - `GET /v1/machines/{machine_id}`
 - `POST /v1/machines/{machine_id}/operations`
+- `GET /v1/environments/{environment_id}`
+- `POST /v1/environments/{environment_id}/operations`
 - `GET /v1/operations/{operation_id}`
 - `GET /v1/operations/{operation_id}/events?after=0&limit=100`
 - `POST /v1/operations/{operation_id}/cancel`
@@ -58,6 +60,10 @@ Operations use the tagged `execution_protocol::Operation` JSON shape. A
 request is accepted durably and returns an operation record immediately. Unary
 results appear on that record; process and artifact streams are stored as
 sequence-numbered events for resumption.
+
+Environment operations use the same operation lifecycle and routing as direct
+machine operations. Their operation records additionally carry the saved
+`environment_id` as provenance.
 
 Example descriptor request:
 
@@ -70,9 +76,101 @@ curl -sS -X POST \
 ```
 
 `MachineConnector` is the extension point for provider-backed or direct
-connectors. The router already recognizes `machine_daemon`, `e2b`, and `ssh`;
-the latter two return an explicit unsupported error until their connectors are
-installed.
+connectors. The router supports machine-daemon connections and materialized
+E2B, Daytona, Blaxel, and Tensorlake sandboxes.
+
+## Environments
+
+An environment is an immutable saved working location consisting of a machine,
+a workspace root, and a normalized root-relative path. It is not a security
+boundary: operations may address other allowed paths on the machine. Creating
+an environment does not require the machine to be online or the path to exist.
+
+The control-plane API requires `EXECUTION_GATEWAY_CONTROL_TOKEN`:
+
+- `GET /v1/control/environments?machine_id={machine_id}`
+- `POST /v1/control/environments`
+- `GET /v1/control/environments/{environment_id}`
+- `DELETE /v1/control/environments/{environment_id}`
+
+Create requests have this shape:
+
+```json
+{
+  "machine_id": "machine-id",
+  "workspace_root_id": "workspace",
+  "path": "projects/example"
+}
+```
+
+Deleting an environment is a soft deletion so existing operation provenance is
+retained. Deleting a machine also soft-deletes its active environments.
+
+## Snapshots
+
+Snapshots are immutable metadata records for snapshots retained by E2B,
+Daytona, Blaxel, or Tensorlake. A snapshot is permanently bound to one sandbox
+account, so materialization always uses the same provider and credentials that
+own the provider snapshot ID.
+
+The control-plane API requires `EXECUTION_GATEWAY_CONTROL_TOKEN`:
+
+- `GET /v1/control/snapshots?provider={provider}&sandbox_account_id={account_id}&sandbox_id={sandbox_id}`
+- `POST /v1/control/snapshots`
+- `GET /v1/control/snapshots/{snapshot_id}`
+- `DELETE /v1/control/snapshots/{snapshot_id}`
+
+Create requests have this shape:
+
+```json
+{
+  "provider": "e2b",
+  "sandbox_account_id": "optional-account-id",
+  "provider_snapshot_id": "provider-snapshot-id",
+  "sandbox_id": "provider-sandbox-id"
+}
+```
+
+If `sandbox_account_id` is omitted, the provider's default enabled account is
+chosen when the snapshot record is created. Supplying it chooses that account
+explicitly. The account must be enabled and must belong to `provider`.
+
+The API manages the gateway's snapshot records. Provider-specific creation and
+deletion calls are separate concerns and are not performed by these endpoints.
+
+## Sandbox environment templates
+
+A sandbox environment template combines a fixed snapshot with an absolute
+working directory and an optional creation script. Materializing a template
+creates a fresh provider sandbox from the snapshot, waits for it to be ready,
+runs the script in the requested directory, and returns a normal environment.
+Each call can run independently, allowing many environments from the same
+template in parallel.
+
+The control-plane API requires `EXECUTION_GATEWAY_CONTROL_TOKEN`:
+
+- `GET /v1/control/sandbox-environment-templates`
+- `POST /v1/control/sandbox-environment-templates`
+- `GET /v1/control/sandbox-environment-templates/{template_id}`
+- `PATCH /v1/control/sandbox-environment-templates/{template_id}`
+- `DELETE /v1/control/sandbox-environment-templates/{template_id}`
+- `GET /v1/control/sandbox-environment-templates/{template_id}/environments`
+- `POST /v1/control/sandbox-environment-templates/{template_id}/environments`
+
+Create requests have this shape:
+
+```json
+{
+  "name": "TypeScript workspace",
+  "snapshot_id": "snapshot-id",
+  "cwd": "/workspace/project",
+  "creation_script": "npm install"
+}
+```
+
+Deleting an environment created from a template also terminates and removes
+its provider sandbox. Deleting a persistent-machine environment remains a
+metadata-only soft deletion.
 
 ## Sandbox accounts
 
@@ -99,3 +197,7 @@ Create requests accept `e2b`, `daytona`, `blaxel`, or `tensorlake`:
 ```
 
 API keys are encrypted before storage and are never returned by the API.
+The optional `config` object holds non-secret provider settings such as the
+Blaxel workspace. `make_default` only controls which account is selected when
+a snapshot create request omits `sandbox_account_id`; materialization itself
+always uses the account fixed on the snapshot.

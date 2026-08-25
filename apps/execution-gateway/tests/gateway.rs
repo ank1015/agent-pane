@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use credential_vault::CredentialVault;
-use execution_contracts::{EnvironmentId, MachineId, WorkspaceRootId};
+use execution_contracts::{MachineId, WorkspaceRootId};
 use execution_gateway::{
     config::Config,
     connection_registry::ConnectionRegistry,
@@ -11,14 +11,19 @@ use execution_gateway::{
     routing::OperationRouter,
     sandbox_accounts::{SandboxAccount, SandboxAccountService},
 };
-use execution_local::{LocalExecutionConfig, LocalExecutionEnvironment, LocalWorkspaceRoot};
+use execution_local::{LocalExecutionRuntime, LocalRuntimeConfig, LocalWorkspaceRoot};
 use execution_protocol::{
-    CreateOperationRequest, CreateRegistrationRequest, MachineSummary, Operation, OperationRecord,
-    OperationStatus, RegistrationCreated, Response,
+    CreateEnvironmentRequest, CreateOperationRequest, CreateRegistrationRequest, Environment,
+    MachineSummary, Operation, OperationRecord, OperationStatus, RegistrationCreated, Response,
 };
-use execution_runtime::ExecutionEnvironment;
+use execution_runtime::ExecutionRuntime;
 use reqwest::StatusCode;
 use tokio::net::TcpListener;
+
+#[path = "support/sandbox_templates.rs"]
+mod sandbox_templates;
+#[path = "support/snapshots.rs"]
+mod snapshots;
 
 fn id<T>(value: String) -> T
 where
@@ -100,6 +105,11 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         assert_eq!(decrypted.api_key(), api_key);
         accounts.push(account);
     }
+
+    let template_snapshot =
+        snapshots::assert_snapshot_control_api(&client, &base, accounts[0].id, accounts[1].id)
+            .await;
+    sandbox_templates::assert_template_control_api(&client, &base, &template_snapshot).await;
 
     let duplicate = client
         .post(format!("{base}/v1/control/sandbox-accounts"))
@@ -227,14 +237,14 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .await
         .expect("workspace");
     let machine_id = id::<MachineId>(format!("machine-{}", uuid::Uuid::now_v7()));
-    let environment = Arc::new(
-        LocalExecutionEnvironment::new(LocalExecutionConfig {
+    let workspace_root_id = id::<WorkspaceRootId>("workspace".to_owned());
+    let runtime = Arc::new(
+        LocalExecutionRuntime::new(LocalRuntimeConfig {
             machine_id: machine_id.clone(),
-            environment_id: id::<EnvironmentId>("host".to_owned()),
             name: "Integration daemon".to_owned(),
             state_directory: directory.path().join("state"),
             workspace_roots: vec![LocalWorkspaceRoot {
-                id: id::<WorkspaceRootId>("workspace".to_owned()),
+                id: workspace_root_id.clone(),
                 name: "Workspace".to_owned(),
                 path: workspace,
                 read_only: false,
@@ -242,18 +252,18 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
             native_grants: Vec::new(),
         })
         .await
-        .expect("execution environment"),
+        .expect("execution runtime"),
     );
     let credential = machine_daemon::registration::register(
         &base,
         registration.registration_token,
-        environment.descriptor(),
+        runtime.descriptor(),
         &directory.path().join("state"),
     )
     .await
     .expect("claim registration");
     let daemon = tokio::spawn(machine_daemon::transport::connect::run(
-        Arc::clone(&environment),
+        Arc::clone(&runtime),
         credential.websocket_url,
         Some(credential.credential),
     ));
@@ -302,7 +312,203 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
     let operation: OperationRecord = create.json().await.expect("operation response");
     let completed = wait_for_operation(&client, &base, &operation.operation_id).await;
     assert_eq!(completed.status, OperationStatus::Completed);
-    assert!(matches!(completed.response, Some(Response::Descriptor(_))));
+    assert!(matches!(
+        completed.response,
+        Some(Response::MachineDescriptor(_))
+    ));
+
+    let unauthorized_environment = client
+        .post(format!("{base}/v1/control/environments"))
+        .bearer_auth("test-api")
+        .json(&CreateEnvironmentRequest {
+            machine_id: machine_id.clone(),
+            workspace_root_id: workspace_root_id.clone(),
+            path: "project".to_owned(),
+        })
+        .send()
+        .await
+        .expect("unauthorized environment create");
+    assert_eq!(unauthorized_environment.status(), StatusCode::UNAUTHORIZED);
+
+    let invalid_root = client
+        .post(format!("{base}/v1/control/environments"))
+        .bearer_auth("test-control")
+        .json(&CreateEnvironmentRequest {
+            machine_id: machine_id.clone(),
+            workspace_root_id: id("missing-root".to_owned()),
+            path: "project".to_owned(),
+        })
+        .send()
+        .await
+        .expect("invalid environment root");
+    assert_eq!(invalid_root.status(), StatusCode::BAD_REQUEST);
+
+    let create_environment = client
+        .post(format!("{base}/v1/control/environments"))
+        .bearer_auth("test-control")
+        .json(&CreateEnvironmentRequest {
+            machine_id: machine_id.clone(),
+            workspace_root_id: workspace_root_id.clone(),
+            path: "project/./".to_owned(),
+        })
+        .send()
+        .await
+        .expect("create environment");
+    assert_eq!(create_environment.status(), StatusCode::CREATED);
+    let environment: Environment = create_environment
+        .json()
+        .await
+        .expect("environment response");
+    assert_eq!(environment.machine_id, machine_id);
+    assert_eq!(environment.workspace_root_id, workspace_root_id);
+    assert_eq!(environment.path, "project");
+
+    let duplicate = client
+        .post(format!("{base}/v1/control/environments"))
+        .bearer_auth("test-control")
+        .json(&CreateEnvironmentRequest {
+            machine_id: machine_id.clone(),
+            workspace_root_id: workspace_root_id.clone(),
+            path: "project".to_owned(),
+        })
+        .send()
+        .await
+        .expect("duplicate environment");
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+
+    let environments: Vec<Environment> = client
+        .get(format!(
+            "{base}/v1/control/environments?machine_id={}",
+            machine_id.as_str()
+        ))
+        .bearer_auth("test-control")
+        .send()
+        .await
+        .expect("list environments")
+        .json()
+        .await
+        .expect("environment list");
+    assert_eq!(environments.len(), 1);
+    assert_eq!(&environments[0], &environment);
+
+    let fetched: Environment = client
+        .get(format!(
+            "{base}/v1/environments/{}",
+            environment.environment_id.as_str()
+        ))
+        .bearer_auth("test-api")
+        .send()
+        .await
+        .expect("get operational environment")
+        .json()
+        .await
+        .expect("operational environment response");
+    assert_eq!(fetched, environment);
+
+    let create = client
+        .post(format!(
+            "{base}/v1/environments/{}/operations",
+            environment.environment_id.as_str()
+        ))
+        .bearer_auth("test-api")
+        .json(&CreateOperationRequest {
+            operation: Box::new(Operation::Describe),
+        })
+        .send()
+        .await
+        .expect("create environment operation");
+    assert_eq!(create.status(), StatusCode::ACCEPTED);
+    let operation: OperationRecord = create.json().await.expect("environment operation response");
+    assert_eq!(
+        operation.environment_id.as_ref(),
+        Some(&environment.environment_id)
+    );
+    let completed = wait_for_operation(&client, &base, &operation.operation_id).await;
+    assert_eq!(
+        completed.environment_id,
+        Some(environment.environment_id.clone())
+    );
+    assert_eq!(completed.status, OperationStatus::Completed);
+
+    let deleted = client
+        .delete(format!(
+            "{base}/v1/control/environments/{}",
+            environment.environment_id.as_str()
+        ))
+        .bearer_auth("test-control")
+        .send()
+        .await
+        .expect("delete environment");
+    assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+
+    let replacement: Environment = client
+        .post(format!("{base}/v1/control/environments"))
+        .bearer_auth("test-control")
+        .json(&CreateEnvironmentRequest {
+            machine_id: machine_id.clone(),
+            workspace_root_id: workspace_root_id.clone(),
+            path: "project".to_owned(),
+        })
+        .send()
+        .await
+        .expect("recreate environment location")
+        .json()
+        .await
+        .expect("replacement environment");
+    assert_ne!(replacement.environment_id, environment.environment_id);
+
+    let deleted_machine = client
+        .delete(format!(
+            "{base}/v1/control/machines/{}",
+            machine_id.as_str()
+        ))
+        .bearer_auth("test-control")
+        .send()
+        .await
+        .expect("delete machine");
+    assert_eq!(deleted_machine.status(), StatusCode::NO_CONTENT);
+    let deleted_with_machine = client
+        .get(format!(
+            "{base}/v1/environments/{}",
+            replacement.environment_id.as_str()
+        ))
+        .bearer_auth("test-api")
+        .send()
+        .await
+        .expect("get environment deleted with machine");
+    assert_eq!(deleted_with_machine.status(), StatusCode::NOT_FOUND);
+
+    let registration: RegistrationCreated = client
+        .post(format!("{base}/v1/admin/machine-registrations"))
+        .bearer_auth("test-admin")
+        .json(&CreateRegistrationRequest {
+            label: Some("re-registration fixture".to_owned()),
+            expires_in_seconds: None,
+        })
+        .send()
+        .await
+        .expect("create re-registration")
+        .json()
+        .await
+        .expect("re-registration response");
+    machine_daemon::registration::register(
+        &base,
+        registration.registration_token,
+        runtime.descriptor(),
+        &directory.path().join("state"),
+    )
+    .await
+    .expect("re-register machine");
+    let still_deleted = client
+        .get(format!(
+            "{base}/v1/environments/{}",
+            replacement.environment_id.as_str()
+        ))
+        .bearer_auth("test-api")
+        .send()
+        .await
+        .expect("get environment after machine re-registration");
+    assert_eq!(still_deleted.status(), StatusCode::NOT_FOUND);
 
     daemon.abort();
     server.abort();
