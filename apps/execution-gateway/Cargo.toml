@@ -1,6 +1,6 @@
 [package]
 name = "execution-gateway"
-description = "Cloud gateway for routing durable operations to execution environments"
+description = "Cloud gateway for routing durable operations to execution machines"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +11,14 @@ async-trait.workspace = true
 axum = { workspace = true, features = ["ws"] }
 base64.workspace = true
 chrono.workspace = true
+connector-blaxel = { path = "../../packages/connector-blaxel" }
+connector-daytona = { path = "../../packages/connector-daytona" }
+connector-e2b = { path = "../../packages/connector-e2b" }
+connector-tensorlake = { path = "../../packages/connector-tensorlake" }
 credential-vault.workspace = true
 execution-contracts.workspace = true
 execution-protocol.workspace = true
+execution-runtime.workspace = true
 futures-util.workspace = true
 rand.workspace = true
 serde.workspace = true
@@ -23,9 +28,11 @@ sqlx.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]

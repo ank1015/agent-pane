@@ -8,7 +8,7 @@ use axum::{
     routing::{get, post, put},
 };
 use chrono::Utc;
-use execution_contracts::{ExecutionErrorCode, Validate};
+use execution_contracts::Validate;
 use execution_protocol::{
     ClaimMachineRequest, ClaimMachineResponse, ConnectorKind, CreateOperationRequest,
     CreateRegistrationRequest, MachineSummary, OperationEvent, OperationRecord,
@@ -21,25 +21,30 @@ use uuid::Uuid;
 use crate::{
     authentication,
     config::Config,
-    connection_registry::{ConnectionRegistry, execution_error},
+    connection_registry::ConnectionRegistry,
     db::Database,
     routing::OperationRouter,
     sandbox_accounts::{
         CreateSandboxAccountRequest, RotateSandboxCredentialsRequest, SandboxAccount,
-        SandboxAccountError, SandboxAccountService, UpdateSandboxAccountNameRequest,
+        SandboxAccountService, UpdateSandboxAccountNameRequest,
     },
+    sandbox_machines::SandboxSecretStore,
+    sandbox_materialization::SandboxMaterializer,
     token,
 };
 
+pub(crate) use crate::api_error::ApiError;
+
 #[derive(Clone)]
 pub struct AppState {
-    database: Database,
+    pub(crate) database: Database,
     connections: ConnectionRegistry,
-    router: OperationRouter,
+    pub(crate) router: OperationRouter,
     admin_token: Arc<str>,
-    api_token: Arc<str>,
-    control_token: Arc<str>,
-    sandbox_accounts: SandboxAccountService,
+    pub(crate) api_token: Arc<str>,
+    pub(crate) control_token: Arc<str>,
+    pub(crate) sandbox_accounts: SandboxAccountService,
+    pub(crate) sandbox_materializer: SandboxMaterializer,
     daemon_websocket_url: Arc<str>,
     registration_ttl: Duration,
 }
@@ -50,6 +55,8 @@ pub fn router(
     connections: ConnectionRegistry,
     operation_router: OperationRouter,
 ) -> Router {
+    let sandbox_accounts = SandboxAccountService::new(database.clone(), config.vault.clone());
+    let sandbox_secrets = SandboxSecretStore::new(database.clone(), config.vault.clone());
     let state = AppState {
         database: database.clone(),
         connections,
@@ -57,7 +64,12 @@ pub fn router(
         admin_token: Arc::from(config.admin_token.as_str()),
         api_token: Arc::from(config.api_token.as_str()),
         control_token: Arc::from(config.control_token.as_str()),
-        sandbox_accounts: SandboxAccountService::new(database.clone(), config.vault.clone()),
+        sandbox_materializer: SandboxMaterializer::new(
+            database.clone(),
+            sandbox_accounts.clone(),
+            sandbox_secrets,
+        ),
+        sandbox_accounts,
         daemon_websocket_url: Arc::from(config.daemon_websocket_url.as_str()),
         registration_ttl: config.registration_ttl,
     };
@@ -97,6 +109,9 @@ pub fn router(
             post(cancel_operation),
         )
         .route("/v1/operations/{operation_id}/events", get(get_events))
+        .merge(crate::environments::routes())
+        .merge(crate::snapshot_http::routes())
+        .merge(crate::sandbox_template_http::routes())
         .layer(DefaultBodyLimit::max(config.max_request_bytes))
         .with_state(state)
 }
@@ -344,7 +359,11 @@ async fn update_machine_name(
         .await
         .map_err(ApiError::database)?
         .ok_or_else(ApiError::not_found)?;
-    machine.summary.online = state.connections.online(&machine_id).await;
+    machine.summary.online = match machine.summary.connector {
+        ConnectorKind::MachineDaemon => state.connections.online(&machine_id).await,
+        ConnectorKind::Sandbox => true,
+        ConnectorKind::E2b | ConnectorKind::Ssh => false,
+    };
     Ok(Json(machine.summary))
 }
 
@@ -388,10 +407,16 @@ async fn machine_summaries(
         if connector.is_some_and(|connector| machine.summary.connector != connector) {
             continue;
         }
-        machine.summary.online = state
-            .connections
-            .online(machine.summary.machine_id.as_str())
-            .await;
+        machine.summary.online = match machine.summary.connector {
+            ConnectorKind::MachineDaemon => {
+                state
+                    .connections
+                    .online(machine.summary.machine_id.as_str())
+                    .await
+            }
+            ConnectorKind::Sandbox => true,
+            ConnectorKind::E2b | ConnectorKind::Ssh => false,
+        };
         machines.push(machine.summary);
     }
     Ok(machines)
@@ -409,7 +434,11 @@ async fn get_machine(
         .await
         .map_err(ApiError::database)?
         .ok_or_else(ApiError::not_found)?;
-    machine.summary.online = state.connections.online(&machine_id).await;
+    machine.summary.online = match machine.summary.connector {
+        ConnectorKind::MachineDaemon => state.connections.online(&machine_id).await,
+        ConnectorKind::Sandbox => true,
+        ConnectorKind::E2b | ConnectorKind::Ssh => false,
+    };
     Ok(Json(machine.summary))
 }
 
@@ -428,7 +457,7 @@ async fn create_operation(
         .ok_or_else(ApiError::not_found)?;
     let record = state
         .database
-        .create_operation(&machine_id, &request.operation)
+        .create_operation(&machine_id, None, &request.operation)
         .await
         .map_err(ApiError::database)?;
     let id = Uuid::parse_str(&record.operation_id).map_err(|e| ApiError::bad(e.to_string()))?;
@@ -500,7 +529,7 @@ async fn get_events(
     ))
 }
 
-fn require(headers: &HeaderMap, token: &str) -> Result<(), ApiError> {
+pub(crate) fn require(headers: &HeaderMap, token: &str) -> Result<(), ApiError> {
     authentication::bearer(headers, token)
         .then_some(())
         .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "invalid bearer token"))
@@ -513,73 +542,4 @@ fn validate_machine_name(name: &str) -> Result<(), ApiError> {
         ));
     }
     Ok(())
-}
-
-pub struct ApiError {
-    status: StatusCode,
-    error: execution_contracts::ExecutionError,
-}
-impl ApiError {
-    fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        Self {
-            status,
-            error: execution_error(ExecutionErrorCode::InvalidRequest, message, false),
-        }
-    }
-    fn bad(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::BAD_REQUEST, message)
-    }
-    fn not_found() -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            error: execution_error(ExecutionErrorCode::NotFound, "resource not found", false),
-        }
-    }
-    fn sandbox_account(error: SandboxAccountError) -> Self {
-        match error {
-            SandboxAccountError::InvalidName
-            | SandboxAccountError::ConfigMustBeObject
-            | SandboxAccountError::InvalidApiKey
-            | SandboxAccountError::DisabledDefault => Self::bad(error.to_string()),
-            SandboxAccountError::NameConflict => Self {
-                status: StatusCode::CONFLICT,
-                error: execution_error(ExecutionErrorCode::AlreadyExists, error.to_string(), false),
-            },
-            SandboxAccountError::Database(crate::db::DbError::Contract(message))
-                if message == "sandbox account owns active machines" =>
-            {
-                Self {
-                    status: StatusCode::CONFLICT,
-                    error: execution_error(ExecutionErrorCode::Conflict, message, false),
-                }
-            }
-            internal => {
-                tracing::error!(error=%internal, "sandbox account operation failed");
-                Self {
-                    status: StatusCode::INTERNAL_SERVER_ERROR,
-                    error: execution_error(
-                        ExecutionErrorCode::Internal,
-                        "internal sandbox account error",
-                        true,
-                    ),
-                }
-            }
-        }
-    }
-    fn database(error: impl std::fmt::Display) -> Self {
-        tracing::error!(%error, "database error");
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            error: execution_error(
-                ExecutionErrorCode::Internal,
-                "internal database error",
-                true,
-            ),
-        }
-    }
-}
-impl IntoResponse for ApiError {
-    fn into_response(self) -> HttpResponse {
-        (self.status, Json(self.error)).into_response()
-    }
 }
