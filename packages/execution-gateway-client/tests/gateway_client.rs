@@ -14,14 +14,14 @@ use axum::{
     routing::{get, post},
 };
 use execution_contracts::{
-    Capability, EnvironmentDescriptor, ExecutionError, ExecutionErrorCode, ExecutionId, FileKind,
-    FileMetadata, InspectRequest, MachineId, OperatingSystem, PROCESS_SESSION_CAPABILITY,
+    Capability, ExecutionError, ExecutionErrorCode, ExecutionId, FileKind, FileMetadata,
+    InspectRequest, MachineDescriptor, MachineId, OperatingSystem, PROCESS_SESSION_CAPABILITY,
     PathConvention, PathSpec, ProcessEvent, ProcessEventKind, ProtocolVersion, TimestampMs,
     WORKSPACE_QUERY_CAPABILITY, WorkspaceRoot,
 };
 use execution_gateway_client::{ExecutionGatewayClient, ExecutionGatewayConfig};
 use execution_protocol::{ConnectorKind, MachineSummary};
-use execution_runtime::{ExecutionEnvironment, OperationContext};
+use execution_runtime::{ExecutionRuntime, OperationContext};
 use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -40,24 +40,50 @@ enum Mode {
 #[derive(Clone)]
 struct MockState {
     mode: Mode,
-    descriptor: EnvironmentDescriptor,
+    descriptor: MachineDescriptor,
     operation: Arc<Mutex<Option<Value>>>,
+    operation_target: Arc<Mutex<Option<String>>>,
     authorization: Arc<Mutex<Option<String>>>,
     polled: Arc<Notify>,
     cancellations: Arc<AtomicUsize>,
 }
 
 #[tokio::test]
-async fn environment_executes_a_typed_unary_operation() {
+async fn environment_runtime_uses_the_saved_location_and_environment_operation_route() {
     let (client, state) = mock_client(Mode::Unary).await;
-    let machine_id = id::<MachineId>("machine-1");
     let environment = client
-        .environment(&machine_id)
+        .environment(&id("environment-1"))
         .await
         .expect("environment connects");
+
+    assert_eq!(environment.environment_id().as_str(), "environment-1");
+    assert_eq!(environment.machine_id().as_str(), "machine-1");
+    assert_eq!(environment.workspace_root_id().as_str(), "root");
+    assert_eq!(environment.path(), "project");
+
+    environment
+        .workspace_query()
+        .inspect(&OperationContext::new(), inspect_request())
+        .await
+        .expect("environment operation succeeds");
+
+    assert_eq!(
+        state.operation_target.lock().await.as_deref(),
+        Some("environment-1")
+    );
+}
+
+#[tokio::test]
+async fn machine_runtime_executes_a_typed_unary_operation() {
+    let (client, state) = mock_client(Mode::Unary).await;
+    let machine_id = id::<MachineId>("machine-1");
+    let runtime = client
+        .machine_runtime(&machine_id)
+        .await
+        .expect("runtime connects");
     let request = inspect_request();
 
-    let metadata = environment
+    let metadata = runtime
         .workspace_query()
         .inspect(&OperationContext::new(), request.clone())
         .await
@@ -80,11 +106,11 @@ async fn environment_executes_a_typed_unary_operation() {
 #[tokio::test]
 async fn process_attach_exposes_persisted_gateway_events_as_a_stream() {
     let (client, _) = mock_client(Mode::Stream).await;
-    let environment = client
-        .environment(&id("machine-1"))
+    let runtime = client
+        .machine_runtime(&id("machine-1"))
         .await
-        .expect("environment connects");
-    let process = environment
+        .expect("runtime connects");
+    let process = runtime
         .process_runtime()
         .expect("process capability is advertised");
     let mut stream = process
@@ -109,14 +135,14 @@ async fn process_attach_exposes_persisted_gateway_events_as_a_stream() {
 #[tokio::test]
 async fn context_cancellation_cancels_the_gateway_operation() {
     let (client, state) = mock_client(Mode::Running).await;
-    let environment = client
-        .environment(&id("machine-1"))
+    let runtime = client
+        .machine_runtime(&id("machine-1"))
         .await
-        .expect("environment connects");
+        .expect("runtime connects");
     let context = OperationContext::new();
     let task_context = context.clone();
     let task = tokio::spawn(async move {
-        environment
+        runtime
             .workspace_query()
             .inspect(&task_context, inspect_request())
             .await
@@ -133,12 +159,12 @@ async fn context_cancellation_cancels_the_gateway_operation() {
 #[tokio::test]
 async fn gateway_execution_errors_pass_through_the_runtime_interface() {
     let (client, _) = mock_client(Mode::Reject).await;
-    let environment = client
-        .environment(&id("machine-1"))
+    let runtime = client
+        .machine_runtime(&id("machine-1"))
         .await
-        .expect("environment connects");
+        .expect("runtime connects");
 
-    let error = environment
+    let error = runtime
         .workspace_query()
         .inspect(&OperationContext::new(), inspect_request())
         .await
@@ -153,15 +179,21 @@ async fn mock_client(mode: Mode) -> (ExecutionGatewayClient, MockState) {
         mode,
         descriptor: descriptor(),
         operation: Arc::new(Mutex::new(None)),
+        operation_target: Arc::new(Mutex::new(None)),
         authorization: Arc::new(Mutex::new(None)),
         polled: Arc::new(Notify::new()),
         cancellations: Arc::new(AtomicUsize::new(0)),
     };
     let app = Router::new()
         .route("/v1/machines/{machine_id}", get(get_machine))
+        .route("/v1/environments/{environment_id}", get(get_environment))
         .route(
             "/v1/machines/{machine_id}/operations",
             post(create_operation),
+        )
+        .route(
+            "/v1/environments/{environment_id}/operations",
+            post(create_environment_operation),
         )
         .route("/v1/operations/{operation_id}", get(get_operation))
         .route("/v1/operations/{operation_id}/events", get(get_events))
@@ -200,7 +232,6 @@ async fn get_machine(
     Json(
         serde_json::to_value(MachineSummary {
             machine_id: id("machine-1"),
-            environment_id: id("environment-1"),
             name: "Test machine".to_owned(),
             connector: ConnectorKind::MachineDaemon,
             online: true,
@@ -213,6 +244,17 @@ async fn get_machine(
     )
 }
 
+async fn get_environment(Path(environment_id): Path<String>) -> Json<Value> {
+    assert_eq!(environment_id, "environment-1");
+    Json(json!({
+        "environment_id": "environment-1",
+        "machine_id": "machine-1",
+        "workspace_root_id": "root",
+        "path": "project",
+        "created_at": 1
+    }))
+}
+
 async fn create_operation(
     State(state): State<MockState>,
     Path(machine_id): Path<String>,
@@ -220,6 +262,7 @@ async fn create_operation(
     Json(body): Json<Value>,
 ) -> (StatusCode, Json<Value>) {
     assert_eq!(machine_id, "machine-1");
+    *state.operation_target.lock().await = Some(machine_id);
     *state.authorization.lock().await = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
@@ -242,6 +285,25 @@ async fn create_operation(
         StatusCode::ACCEPTED,
         Json(operation_record("queued", operation, None, None)),
     )
+}
+
+async fn create_environment_operation(
+    State(state): State<MockState>,
+    Path(environment_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    assert_eq!(environment_id, "environment-1");
+    *state.operation_target.lock().await = Some(environment_id);
+    *state.authorization.lock().await = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
+    let operation = body["operation"].clone();
+    *state.operation.lock().await = Some(operation.clone());
+    let mut record = operation_record("queued", operation, None, None);
+    record["environment_id"] = json!("environment-1");
+    (StatusCode::ACCEPTED, Json(record))
 }
 
 async fn get_operation(State(state): State<MockState>) -> Json<Value> {
@@ -317,12 +379,11 @@ fn operation_record(
     value
 }
 
-fn descriptor() -> EnvironmentDescriptor {
-    EnvironmentDescriptor {
+fn descriptor() -> MachineDescriptor {
+    MachineDescriptor {
         protocol_version: ProtocolVersion::V1,
         machine_id: id("machine-1"),
-        environment_id: id("environment-1"),
-        name: "Test environment".to_owned(),
+        name: "Test machine".to_owned(),
         operating_system: OperatingSystem::Linux,
         architecture: "x86_64".to_owned(),
         path_convention: PathConvention::Posix,
