@@ -29,7 +29,6 @@ type OperatingSystem =
 
 export type MachineDaemon = {
   machine_id: string
-  environment_id: string
   name: string
   connector: 'machine_daemon'
   online: boolean

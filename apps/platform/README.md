@@ -69,11 +69,23 @@ POST   /api/machines/sandbox-accounts
 GET    /api/machines/sandbox-accounts/{account_id}
 DELETE /api/machines/sandbox-accounts/{account_id}
 PUT    /api/machines/sandbox-accounts/{account_id}/credentials
+GET    /api/machines/snapshots
+POST   /api/machines/snapshots
+GET    /api/machines/snapshots/{snapshot_id}
+DELETE /api/machines/snapshots/{snapshot_id}
+GET    /api/machines/sandbox-environment-templates
+POST   /api/machines/sandbox-environment-templates
+GET    /api/machines/sandbox-environment-templates/{template_id}
+PATCH  /api/machines/sandbox-environment-templates/{template_id}
+DELETE /api/machines/sandbox-environment-templates/{template_id}
+GET    /api/machines/sandbox-environment-templates/{template_id}/environments
+POST   /api/machines/sandbox-environment-templates/{template_id}/environments
+DELETE /api/machines/environments/{environment_id}
 ```
 
 `GET /api/machines` returns both `connector_accounts` and `machine_daemons` in
 one response for the Machines page. Connector accounts are account metadata;
-machine daemons include their environment descriptor and current online state.
+machine daemons include their machine descriptor and current online state.
 
 Create an E2B, Daytona, Blaxel, or Tensorlake account:
 
@@ -81,13 +93,21 @@ Create an E2B, Daytona, Blaxel, or Tensorlake account:
 {
   "provider": "e2b",
   "name": "main",
-  "api_key": "..."
+  "api_key": "...",
+  "config": {},
+  "enabled": true,
+  "make_default": false
 }
 ```
 
 Platform forwards the API key once over its authenticated control connection.
 `execution-gateway` encrypts and stores it; neither service exposes a secret
 read endpoint, and platform responses contain account metadata only.
+
+Snapshot creation accepts an optional `sandbox_account_id`. If it is absent,
+execution-gateway chooses the provider's default enabled account at creation
+time and stores that account on the snapshot. Sandbox environment templates
+therefore always materialize with the snapshot's fixed provider account.
 
 ## Providers API
 

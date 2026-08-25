@@ -9,8 +9,10 @@ use uuid::Uuid;
 use crate::{
     error::execution_gateway_rejected_body,
     machines::model::{
-        CreateSandboxAccountRequest, MachineInventory, RotateSandboxCredentialsRequest,
-        SandboxAccount, UpdateNameRequest,
+        CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest,
+        CreateSnapshotRequest, MachineInventory, RotateSandboxCredentialsRequest, SandboxAccount,
+        SandboxEnvironmentInstance, SandboxEnvironmentTemplate, Snapshot, SnapshotQuery,
+        UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
     },
 };
 use execution_protocol::MachineSummary;
@@ -122,6 +124,140 @@ impl ExecutionGatewayClient {
         self.send_empty(
             self.http
                 .delete(self.url(&format!("v1/control/sandbox-accounts/{account_id}"))?),
+        )
+        .await
+    }
+
+    pub(crate) async fn list_snapshots(
+        &self,
+        query: &SnapshotQuery,
+    ) -> Result<Vec<Snapshot>, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .get(self.url("v1/control/snapshots")?)
+                .query(query),
+        )
+        .await
+    }
+
+    pub(crate) async fn get_snapshot(
+        &self,
+        snapshot_id: Uuid,
+    ) -> Result<Snapshot, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .get(self.url(&format!("v1/control/snapshots/{snapshot_id}"))?),
+        )
+        .await
+    }
+
+    pub(crate) async fn create_snapshot(
+        &self,
+        request: &CreateSnapshotRequest,
+    ) -> Result<Snapshot, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .post(self.url("v1/control/snapshots")?)
+                .json(request),
+        )
+        .await
+    }
+
+    pub(crate) async fn delete_snapshot(
+        &self,
+        snapshot_id: Uuid,
+    ) -> Result<(), ExecutionGatewayError> {
+        self.send_empty(
+            self.http
+                .delete(self.url(&format!("v1/control/snapshots/{snapshot_id}"))?),
+        )
+        .await
+    }
+
+    pub(crate) async fn list_sandbox_environment_templates(
+        &self,
+    ) -> Result<Vec<SandboxEnvironmentTemplate>, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .get(self.url("v1/control/sandbox-environment-templates")?),
+        )
+        .await
+    }
+
+    pub(crate) async fn get_sandbox_environment_template(
+        &self,
+        template_id: Uuid,
+    ) -> Result<SandboxEnvironmentTemplate, ExecutionGatewayError> {
+        self.send_json(self.http.get(self.url(&format!(
+            "v1/control/sandbox-environment-templates/{template_id}"
+        ))?))
+        .await
+    }
+
+    pub(crate) async fn create_sandbox_environment_template(
+        &self,
+        request: &CreateSandboxEnvironmentTemplateRequest,
+    ) -> Result<SandboxEnvironmentTemplate, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .post(self.url("v1/control/sandbox-environment-templates")?)
+                .json(request),
+        )
+        .await
+    }
+
+    pub(crate) async fn update_sandbox_environment_template(
+        &self,
+        template_id: Uuid,
+        request: &UpdateSandboxEnvironmentTemplateRequest,
+    ) -> Result<SandboxEnvironmentTemplate, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .patch(self.url(&format!(
+                    "v1/control/sandbox-environment-templates/{template_id}"
+                ))?)
+                .json(request),
+        )
+        .await
+    }
+
+    pub(crate) async fn delete_sandbox_environment_template(
+        &self,
+        template_id: Uuid,
+    ) -> Result<(), ExecutionGatewayError> {
+        self.send_empty(self.http.delete(self.url(&format!(
+            "v1/control/sandbox-environment-templates/{template_id}"
+        ))?))
+        .await
+    }
+
+    pub(crate) async fn materialize_sandbox_environment_template(
+        &self,
+        template_id: Uuid,
+    ) -> Result<SandboxEnvironmentInstance, ExecutionGatewayError> {
+        self.send_json(self.http.post(self.url(&format!(
+            "v1/control/sandbox-environment-templates/{template_id}/environments"
+        ))?))
+        .await
+    }
+
+    pub(crate) async fn list_sandbox_environment_instances(
+        &self,
+        template_id: Uuid,
+    ) -> Result<Vec<SandboxEnvironmentInstance>, ExecutionGatewayError> {
+        self.send_json(self.http.get(self.url(&format!(
+            "v1/control/sandbox-environment-templates/{template_id}/environments"
+        ))?))
+        .await
+    }
+
+    pub(crate) async fn delete_environment(
+        &self,
+        environment_id: &str,
+    ) -> Result<(), ExecutionGatewayError> {
+        self.send_empty(
+            self.http
+                .delete(self.url(&format!("v1/control/environments/{environment_id}"))?),
         )
         .await
     }
@@ -274,6 +410,9 @@ mod tests {
                 provider: SandboxProvider::E2b,
                 name: "main".to_owned(),
                 api_key: "secret-key".to_owned(),
+                config: json!({}),
+                enabled: true,
+                make_default: false,
             })
             .await
             .unwrap();
