@@ -1,16 +1,21 @@
 use std::{fmt, str::FromStr};
 
 use chrono::{DateTime, Utc};
-use credential_vault::{CredentialVault, EncryptedSecret, VaultError};
+use credential_vault::{CredentialVault, EncryptedSecret};
 use execution_contracts::TimestampMs;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Row;
-use thiserror::Error;
 use uuid::Uuid;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::db::{Database, DbError};
+use crate::sandbox_account_validation::{
+    default_true, empty_object, is_unique_violation, secret_context, validate_api_key,
+    validate_config, validate_name,
+};
+
+pub use crate::sandbox_account_validation::SandboxAccountError;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -242,6 +247,25 @@ impl SandboxAccountService {
         Ok(Some(credentials))
     }
 
+    pub async fn resolve(
+        &self,
+        provider: SandboxProvider,
+        account_id: Option<Uuid>,
+    ) -> Result<SandboxAccount, SandboxAccountError> {
+        let account = match account_id {
+            Some(id) => self.find(id).await?,
+            None => self.database.default_sandbox_account(provider).await?,
+        }
+        .ok_or(SandboxAccountError::AccountNotFound)?;
+        if account.provider != provider {
+            return Err(SandboxAccountError::ProviderMismatch);
+        }
+        if !account.enabled {
+            return Err(SandboxAccountError::AccountDisabled);
+        }
+        Ok(account)
+    }
+
     pub async fn rotate_credentials(
         &self,
         id: Uuid,
@@ -381,6 +405,20 @@ impl Database {
             .transpose()
     }
 
+    async fn default_sandbox_account(
+        &self,
+        provider: SandboxProvider,
+    ) -> Result<Option<SandboxAccount>, DbError> {
+        sqlx::query(&format!(
+            "{SANDBOX_ACCOUNT_SELECT} and a.provider = $1 and a.enabled and a.is_default"
+        ))
+        .bind(provider.as_str())
+        .fetch_optional(self.pool())
+        .await?
+        .map(sandbox_account_from_row)
+        .transpose()
+    }
+
     async fn resolved_sandbox_account(
         &self,
         id: Uuid,
@@ -481,6 +519,17 @@ impl Database {
                 "sandbox account owns active machines".to_owned(),
             ));
         }
+        let has_snapshots: bool = sqlx::query_scalar(
+            "select exists(select 1 from snapshots where sandbox_account_id = $1)",
+        )
+        .bind(id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if has_snapshots {
+            return Err(DbError::Contract(
+                "sandbox account owns snapshots".to_owned(),
+            ));
+        }
         let provider: String = row.try_get("provider")?;
         let secret_id: Uuid = row.try_get("secret_id")?;
         let was_default: bool = row.try_get("is_default")?;
@@ -545,69 +594,6 @@ fn sandbox_account_from_row(row: sqlx::postgres::PgRow) -> Result<SandboxAccount
     })
 }
 
-fn validate_name(name: &str) -> Result<(), SandboxAccountError> {
-    if name.is_empty() || name != name.trim() || name.chars().count() > 120 {
-        return Err(SandboxAccountError::InvalidName);
-    }
-    Ok(())
-}
-
-fn validate_config(config: &Value) -> Result<(), SandboxAccountError> {
-    if !config.is_object() {
-        return Err(SandboxAccountError::ConfigMustBeObject);
-    }
-    Ok(())
-}
-
-fn validate_api_key(api_key: &str) -> Result<(), SandboxAccountError> {
-    if api_key.is_empty() || api_key != api_key.trim() || api_key.len() > 65_536 {
-        return Err(SandboxAccountError::InvalidApiKey);
-    }
-    Ok(())
-}
-
-fn secret_context(account_id: Uuid, secret_id: Uuid, provider: SandboxProvider) -> String {
-    format!("execution-gateway:v1:sandbox-account:{account_id}:{secret_id}:{provider}")
-}
-
 fn timestamp(value: DateTime<Utc>) -> TimestampMs {
     TimestampMs(u64::try_from(value.timestamp_millis()).unwrap_or(0))
-}
-
-fn empty_object() -> Value {
-    serde_json::json!({})
-}
-
-const fn default_true() -> bool {
-    true
-}
-
-fn is_unique_violation(error: &DbError) -> bool {
-    matches!(error, DbError::Sql(source) if source.as_database_error().is_some_and(|error| error.code().as_deref() == Some("23505")))
-}
-
-#[derive(Debug, Error)]
-pub enum SandboxAccountError {
-    #[error("account name must be 1-120 characters without surrounding whitespace")]
-    InvalidName,
-    #[error("account config must be a JSON object")]
-    ConfigMustBeObject,
-    #[error("API key must not be blank, have surrounding whitespace, or exceed 65536 bytes")]
-    InvalidApiKey,
-    #[error("a disabled account cannot be the default")]
-    DisabledDefault,
-    #[error("an active account with this provider and name already exists")]
-    NameConflict,
-    #[error("stored sandbox provider is unsupported: {0}")]
-    StoredProvider(String),
-    #[error("stored credential validation status is unsupported: {0}")]
-    StoredValidationStatus(String),
-    #[error("decrypted credentials do not match their account provider")]
-    CredentialProviderMismatch,
-    #[error(transparent)]
-    Database(#[from] DbError),
-    #[error(transparent)]
-    Vault(#[from] VaultError),
-    #[error(transparent)]
-    Json(#[from] serde_json::Error),
 }
