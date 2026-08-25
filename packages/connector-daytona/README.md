@@ -38,11 +38,12 @@ therefore byte-accurate and resumable across connector disconnections while
 the sandbox and its state directory remain available. Interactive controls are
 acknowledged by the wrapper before their connector calls return.
 
-The caller owns sandbox creation, suspension/resumption, timeout policy, and
-deletion. Construct `DaytonaConnectionConfig` from the sandbox's Toolbox URL
+The caller owns lifecycle orchestration. `create_from_snapshot(api_key,
+snapshot)` creates a Daytona sandbox through the control API and returns its
+sandbox ID. Construct `DaytonaConnectionConfig` from the sandbox's Toolbox URL
 and API key, then provide workspace roots and a target-side state directory
-through `DaytonaEnvironmentConfig`. `DaytonaConnectionConfig::for_sandbox`
-builds the hosted Toolbox URL from a sandbox ID.
+through `DaytonaRuntimeConfig`. `DaytonaConnectionConfig::for_sandbox` builds
+the hosted Toolbox URL from a sandbox ID.
 
 Current provider constraints:
 
