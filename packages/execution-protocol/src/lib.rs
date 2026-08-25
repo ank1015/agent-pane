@@ -22,7 +22,7 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     Ready {
         protocol: String,
-        descriptor: EnvironmentDescriptor,
+        descriptor: MachineDescriptor,
     },
     Response {
         request_id: String,
@@ -78,7 +78,7 @@ pub enum Operation {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum Response {
-    Descriptor(EnvironmentDescriptor),
+    MachineDescriptor(MachineDescriptor),
     FileMetadata(FileMetadata),
     InspectMany(InspectManyResult),
     Read(ReadResult),
@@ -108,6 +108,7 @@ pub enum StreamItem {
 #[serde(rename_all = "snake_case")]
 pub enum ConnectorKind {
     MachineDaemon,
+    Sandbox,
     E2b,
     Ssh,
 }
@@ -140,7 +141,7 @@ pub struct RegistrationCreated {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ClaimMachineRequest {
     pub registration_token: String,
-    pub descriptor: EnvironmentDescriptor,
+    pub descriptor: MachineDescriptor,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -153,15 +154,32 @@ pub struct ClaimMachineResponse {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MachineSummary {
     pub machine_id: MachineId,
-    pub environment_id: EnvironmentId,
     pub name: String,
     pub connector: ConnectorKind,
     pub online: bool,
-    pub descriptor: EnvironmentDescriptor,
+    pub descriptor: MachineDescriptor,
     pub created_at: TimestampMs,
     pub updated_at: TimestampMs,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_seen_at: Option<TimestampMs>,
+}
+
+/// A saved working location on a registered machine.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Environment {
+    pub environment_id: EnvironmentId,
+    pub machine_id: MachineId,
+    pub workspace_root_id: WorkspaceRootId,
+    pub path: String,
+    pub created_at: TimestampMs,
+}
+
+/// Creates an immutable saved working location.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CreateEnvironmentRequest {
+    pub machine_id: MachineId,
+    pub workspace_root_id: WorkspaceRootId,
+    pub path: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -173,6 +191,8 @@ pub struct CreateOperationRequest {
 pub struct OperationRecord {
     pub operation_id: String,
     pub machine_id: MachineId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<EnvironmentId>,
     pub status: OperationStatus,
     pub operation: Box<Operation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
