@@ -459,6 +459,7 @@ name = "connector-blaxel"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "base64",
  "bytes",
  "execution-contracts",
@@ -479,6 +480,7 @@ name = "connector-daytona"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "base64",
  "execution-contracts",
  "execution-runtime",
@@ -499,6 +501,7 @@ name = "connector-e2b"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "base64",
  "bytes",
  "execution-contracts",
@@ -519,6 +522,7 @@ name = "connector-tensorlake"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "base64",
  "bytes",
  "execution-contracts",
@@ -765,6 +769,10 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "connector-blaxel",
+ "connector-daytona",
+ "connector-e2b",
+ "connector-tensorlake",
  "credential-vault",
  "execution-contracts",
  "execution-local",
@@ -782,9 +790,11 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
  "tower",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "zeroize",
 ]
