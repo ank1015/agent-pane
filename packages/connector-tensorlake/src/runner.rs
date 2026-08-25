@@ -7,7 +7,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
-    RemoteProcessEvent, RemoteProcessRequest, RemoteStreamKind, TensorlakeEnvironmentConfig,
+    RemoteProcessEvent, RemoteProcessRequest, RemoteStreamKind, TensorlakeRuntimeConfig,
     TensorlakeTransport,
     error::{execution_error, transport_execution_error},
 };
@@ -27,7 +27,7 @@ impl InlineRunner {
     pub fn new(
         transport: Arc<dyn TensorlakeTransport>,
         python_command: String,
-        config: &TensorlakeEnvironmentConfig,
+        config: &TensorlakeRuntimeConfig,
     ) -> Self {
         Self {
             transport,

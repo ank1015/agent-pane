@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::{
     RemoteProcessEvent, RemoteProcessRequest, RemoteProcessStream, RemoteStreamKind,
-    TensorlakeEnvironmentConfig, TensorlakeTransport,
+    TensorlakeRuntimeConfig, TensorlakeTransport,
     error::{execution_error, invalid_request, transport_execution_error},
     runner::{InlineRunner, encode_inline_argument},
 };
@@ -65,7 +65,7 @@ impl TensorlakeProcessRuntime {
         transport: Arc<dyn TensorlakeTransport>,
         runner: Arc<InlineRunner>,
         python_command: String,
-        config: &TensorlakeEnvironmentConfig,
+        config: &TensorlakeRuntimeConfig,
     ) -> Self {
         Self {
             inner: Arc::new(ProcessInner {

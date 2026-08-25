@@ -1,32 +1,32 @@
 use std::sync::Arc;
 
 use execution_contracts::{
-    ARTIFACTS_CAPABILITY, BASIC_FILESYSTEM_CAPABILITY, Capability, EnvironmentDescriptor,
+    ARTIFACTS_CAPABILITY, BASIC_FILESYSTEM_CAPABILITY, Capability, MachineDescriptor,
     OperatingSystem, PROCESS_SESSION_CAPABILITY, PathConvention, ProtocolVersion, ShellDescriptor,
     WORKSPACE_MUTATION_CAPABILITY, WORKSPACE_QUERY_CAPABILITY,
 };
 use execution_runtime::{
-    ArtifactStore, BasicFileSystem, ExecutionEnvironment, ProcessRuntime, WorkspaceMutation,
+    ArtifactStore, BasicFileSystem, ExecutionRuntime, ProcessRuntime, WorkspaceMutation,
     WorkspaceQuery, validate_capability_consistency,
 };
 
 use crate::{
-    TensorlakeConnectionConfig, TensorlakeConnectorError, TensorlakeEnvironmentConfig,
-    TensorlakeHttpTransport, TensorlakeTransport, artifacts::TensorlakeArtifactStore,
+    TensorlakeConnectionConfig, TensorlakeConnectorError, TensorlakeHttpTransport,
+    TensorlakeRuntimeConfig, TensorlakeTransport, artifacts::TensorlakeArtifactStore,
     backend::TensorlakeBackend, process::TensorlakeProcessRuntime, runner::InlineRunner,
 };
 
-pub struct TensorlakeExecutionEnvironment {
-    descriptor: EnvironmentDescriptor,
+pub struct TensorlakeExecutionRuntime {
+    descriptor: MachineDescriptor,
     backend: TensorlakeBackend,
     process: TensorlakeProcessRuntime,
     artifacts: TensorlakeArtifactStore,
 }
 
-impl TensorlakeExecutionEnvironment {
+impl TensorlakeExecutionRuntime {
     pub fn connect(
         connection: TensorlakeConnectionConfig,
-        config: TensorlakeEnvironmentConfig,
+        config: TensorlakeRuntimeConfig,
     ) -> Result<Self, TensorlakeConnectorError> {
         let python_command = connection.python_command.clone();
         let transport =
@@ -37,7 +37,7 @@ impl TensorlakeExecutionEnvironment {
     pub fn with_transport(
         transport: Arc<dyn TensorlakeTransport>,
         python_command: String,
-        config: TensorlakeEnvironmentConfig,
+        config: TensorlakeRuntimeConfig,
     ) -> Result<Self, TensorlakeConnectorError> {
         validate_config(&config, &python_command)?;
         let runner = Arc::new(InlineRunner::new(
@@ -48,10 +48,9 @@ impl TensorlakeExecutionEnvironment {
         let backend = TensorlakeBackend::new(Arc::clone(&runner));
         let artifacts = TensorlakeArtifactStore::new(Arc::clone(&runner));
         let process = TensorlakeProcessRuntime::new(transport, runner, python_command, &config);
-        let descriptor = EnvironmentDescriptor {
+        let descriptor = MachineDescriptor {
             protocol_version: ProtocolVersion::V1,
             machine_id: config.machine_id,
-            environment_id: config.environment_id,
             name: config.name,
             operating_system: OperatingSystem::Linux,
             architecture: "x86_64".to_owned(),
@@ -76,20 +75,20 @@ impl TensorlakeExecutionEnvironment {
             .map(|id| Capability::v1(id).expect("built-in capability ID is valid"))
             .collect(),
         };
-        let environment = Self {
+        let runtime = Self {
             descriptor,
             backend,
             process,
             artifacts,
         };
-        validate_capability_consistency(&environment)
+        validate_capability_consistency(&runtime)
             .map_err(|source| TensorlakeConnectorError::InvalidConfiguration(source.to_string()))?;
-        Ok(environment)
+        Ok(runtime)
     }
 }
 
-impl ExecutionEnvironment for TensorlakeExecutionEnvironment {
-    fn descriptor(&self) -> &EnvironmentDescriptor {
+impl ExecutionRuntime for TensorlakeExecutionRuntime {
+    fn descriptor(&self) -> &MachineDescriptor {
         &self.descriptor
     }
 
@@ -115,12 +114,12 @@ impl ExecutionEnvironment for TensorlakeExecutionEnvironment {
 }
 
 fn validate_config(
-    config: &TensorlakeEnvironmentConfig,
+    config: &TensorlakeRuntimeConfig,
     python_command: &str,
 ) -> Result<(), TensorlakeConnectorError> {
     if config.name.trim().is_empty() {
         return Err(TensorlakeConnectorError::InvalidConfiguration(
-            "environment name must not be empty".to_owned(),
+            "machine name must not be empty".to_owned(),
         ));
     }
     if python_command.trim().is_empty() {

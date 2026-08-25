@@ -1,4 +1,4 @@
-use execution_contracts::{EnvironmentId, GrantId, MachineId, WorkspaceRoot, WorkspaceRootId};
+use execution_contracts::{GrantId, MachineId, WorkspaceRoot, WorkspaceRootId};
 use url::Url;
 
 #[derive(Clone)]
@@ -73,9 +73,8 @@ pub struct TensorlakeNativeGrant {
 }
 
 #[derive(Clone, Debug)]
-pub struct TensorlakeEnvironmentConfig {
+pub struct TensorlakeRuntimeConfig {
     pub machine_id: MachineId,
-    pub environment_id: EnvironmentId,
     pub name: String,
     /// Absolute target-side directory used for prepared mutations, artifacts,
     /// idempotency records, and recoverable process journals.
