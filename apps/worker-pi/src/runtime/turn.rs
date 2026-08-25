@@ -4,8 +4,7 @@ use agent_contracts::{
     NewRunMessage, RunAbortAcknowledged, RunMessagesAppended, RunTurnCompleted, RunTurnFailed,
     SessionMessage,
 };
-use execution_gateway_client::ExecutionGatewayClientError;
-use execution_runtime::{ExecutionEnvironment, OperationContext};
+use execution_runtime::{ExecutionRuntime, OperationContext};
 use futures_util::future::join_all;
 use llm_contracts::{
     AssistantContent, AssistantMessage, ContentPart, JsonObject, LlmRequest, Message, MessageId,
@@ -15,7 +14,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    clients::{ExecutionEnvironmentClient, LlmGatewayClient, LlmGatewayClientError},
+    clients::{ExecutionClient, LlmGatewayClient},
     config::WorkerConfig,
     harness::{
         compact::{
@@ -24,20 +23,18 @@ use crate::{
         },
         context_formation::{ContextFormationError, form_context_messages},
         model_catalog::MODEL_CATALOG,
-        model_resolver::{ModelResolverError, get_model_config},
+        model_resolver::get_model_config,
         system_prompt::generate_system_prompt,
-        tools::{
-            ToolExecutionContext, ToolExecutionError, WorkspaceCwd, default_tool_definitions,
-            execute_tool_call,
-        },
+        tools::{ToolExecutionContext, WorkspaceCwd, default_tool_definitions, execute_tool_call},
     },
-    worker::{ActiveRun, ActiveRunError, RunInterruption},
+    worker::{ActiveRun, RunInterruption},
 };
 
 use super::{
-    config::{PiHarnessConfig, PiHarnessConfigError},
+    config::PiHarnessConfig,
+    error::{PiRuntimeBuildError, PiRuntimeError, TurnError},
     retry::{RetryPolicy, complete_with_retry},
-    transcript::{ResumePlan, TranscriptError, plan_turn},
+    transcript::{ResumePlan, plan_turn},
 };
 
 const AGENT_MAX_RETRIES: u32 = 3;
@@ -46,7 +43,7 @@ const AGENT_RETRY_BASE: Duration = Duration::from_millis(250);
 #[derive(Clone)]
 pub struct PiRuntime {
     llm: LlmGatewayClient,
-    execution: ExecutionEnvironmentClient,
+    execution: ExecutionClient,
     retry: RetryPolicy,
 }
 
@@ -54,12 +51,12 @@ impl PiRuntime {
     pub fn from_config(config: &WorkerConfig) -> Result<Self, PiRuntimeBuildError> {
         Ok(Self::new(
             LlmGatewayClient::new(config.llm_gateway.clone())?,
-            ExecutionEnvironmentClient::new(config.execution_gateway.clone())?,
+            ExecutionClient::new(config.execution_gateway.clone())?,
         ))
     }
 
     #[must_use]
-    pub fn new(llm: LlmGatewayClient, execution: ExecutionEnvironmentClient) -> Self {
+    pub fn new(llm: LlmGatewayClient, execution: ExecutionClient) -> Self {
         Self {
             llm,
             execution,
@@ -235,16 +232,28 @@ impl PiRuntime {
                 .map(truncated_tool_result)
                 .collect::<Result<Vec<_>, _>>()?
         } else {
-            let environment = tokio::select! {
+            let machine = tokio::select! {
                 () = run.operation().cancelled() => {
                     return close_aborted_tool_calls(run, tool_calls).await;
                 }
-                environment = self.execution.environment(&config.machine_id) => environment?,
+                machine = self.execution.machine(&config.execution.machine_id) => machine?,
             };
-            let root_id = select_workspace_root(&environment, config)?;
-            let cwd = WorkspaceCwd::new(root_id, config.cwd.clone())?;
+            if !machine
+                .descriptor()
+                .workspace_roots
+                .iter()
+                .any(|root| root.id == config.execution.workspace_root_id)
+            {
+                return Err(TurnError::WorkspaceRootNotFound(
+                    config.execution.workspace_root_id.to_string(),
+                ));
+            }
+            let cwd = WorkspaceCwd::new(
+                config.execution.workspace_root_id.clone(),
+                &config.execution.cwd,
+            )?;
             let context = ToolExecutionContext {
-                environment: &environment,
+                runtime: &machine,
                 cwd: &cwd,
                 operation: run.operation(),
             };
@@ -345,25 +354,6 @@ fn main_request(
         provider_options,
         metadata: BTreeMap::new(),
     })
-}
-
-fn select_workspace_root(
-    environment: &dyn ExecutionEnvironment,
-    config: &PiHarnessConfig,
-) -> Result<execution_contracts::WorkspaceRootId, TurnError> {
-    let roots = &environment.descriptor().workspace_roots;
-    if let Some(root_id) = &config.workspace_root_id {
-        return roots
-            .iter()
-            .find(|root| &root.id == root_id)
-            .map(|root| root.id.clone())
-            .ok_or_else(|| TurnError::WorkspaceRootNotFound(root_id.to_string()));
-    }
-    match roots.as_slice() {
-        [root] => Ok(root.id.clone()),
-        [] => Err(TurnError::NoWorkspaceRoot),
-        _ => Err(TurnError::AmbiguousWorkspaceRoot),
-    }
 }
 
 async fn fetch_messages(run: &ActiveRun) -> Result<Vec<SessionMessage>, TurnError> {
@@ -555,85 +545,4 @@ pub enum RunOutcome {
     Continued(RunTurnCompleted),
     Failed(RunTurnFailed),
     Aborted(RunAbortAcknowledged),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum PiRuntimeBuildError {
-    #[error(transparent)]
-    Llm(#[from] LlmGatewayClientError),
-    #[error(transparent)]
-    Execution(#[from] ExecutionGatewayClientError),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum PiRuntimeError {
-    #[error("the worker is shutting down")]
-    Cancelled,
-    #[error("the Agent lease was lost")]
-    LeaseLost,
-    #[error("could not finalize the Agent run")]
-    Agent(#[source] ActiveRunError),
-}
-
-#[derive(Debug, thiserror::Error)]
-enum TurnError {
-    #[error(transparent)]
-    Config(#[from] PiHarnessConfigError),
-    #[error(transparent)]
-    Model(#[from] ModelResolverError),
-    #[error(transparent)]
-    Context(#[from] ContextFormationError),
-    #[error(transparent)]
-    Llm(#[from] LlmGatewayClientError),
-    #[error(transparent)]
-    Agent(#[from] ActiveRunError),
-    #[error(transparent)]
-    Execution(#[from] ExecutionGatewayClientError),
-    #[error(transparent)]
-    Tool(#[from] ToolExecutionError),
-    #[error(transparent)]
-    Transcript(#[from] TranscriptError),
-    #[error("could not serialize the compaction message")]
-    CompactionMessage(#[from] serde_json::Error),
-    #[error("compaction could not find a message boundary to retain")]
-    NoCompactionCutPoint,
-    #[error("the compaction model returned an empty summary")]
-    EmptyCompactionSummary,
-    #[error("the execution environment exposes no workspace root")]
-    NoWorkspaceRoot,
-    #[error("workspace_root_id is required when a machine exposes multiple workspace roots")]
-    AmbiguousWorkspaceRoot,
-    #[error("workspace root {0:?} is not exposed by the execution environment")]
-    WorkspaceRootNotFound(String),
-    #[error("expected an assistant tool call")]
-    ExpectedToolCall,
-    #[error("the active run was cancelled")]
-    Cancelled,
-}
-
-impl TurnError {
-    fn code(&self) -> &'static str {
-        match self {
-            Self::Config(_) => "invalid_harness_config",
-            Self::Model(_) => "unsupported_model_config",
-            Self::Context(_) => "context_formation_failed",
-            Self::Llm(_) => "llm_request_failed",
-            Self::Agent(_) => "agent_request_failed",
-            Self::Execution(_) => "execution_environment_failed",
-            Self::Tool(_) => "tool_execution_failed",
-            Self::Transcript(_) => "invalid_turn_transcript",
-            Self::CompactionMessage(_)
-            | Self::NoCompactionCutPoint
-            | Self::EmptyCompactionSummary => "compaction_failed",
-            Self::NoWorkspaceRoot
-            | Self::AmbiguousWorkspaceRoot
-            | Self::WorkspaceRootNotFound(_) => "invalid_workspace_config",
-            Self::ExpectedToolCall => "invalid_tool_call",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    fn lease_is_lost(&self) -> bool {
-        matches!(self, Self::Agent(error) if error.lease_is_lost())
-    }
 }

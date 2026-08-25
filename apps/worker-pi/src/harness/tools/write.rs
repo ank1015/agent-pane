@@ -46,7 +46,7 @@ pub async fn execute_write_tool(
     let arguments: WriteArguments = parse_arguments("write", arguments)?;
     let path = resolve_path(context, &arguments.path)?;
     let mutation = context
-        .environment
+        .runtime
         .workspace_mutation()
         .ok_or_else(|| ToolExecutionError::missing_capability("workspace mutations"))?;
     let bytes = arguments.content.len();

@@ -5,7 +5,7 @@ mod llm;
 
 pub use agent::{AgentClient, AgentClientError, ClaimResponse};
 pub use agent_contracts::AgentApiError;
-pub use execution::ExecutionEnvironmentClient;
+pub use execution::ExecutionClient;
 pub use harness_registry::{
     CreateHarnessRequest, HarnessRegistryClient, HarnessRegistryError, PI_HARNESS_ID,
     PI_HARNESS_REVISION_ID, RegisterHarnessRevisionRequest,

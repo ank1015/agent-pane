@@ -63,7 +63,7 @@ pub async fn execute_bash_tool(
     }
     let timeout = parse_timeout(arguments.timeout)?;
     let runtime = context
-        .environment
+        .runtime
         .process_runtime()
         .ok_or_else(|| ToolExecutionError::missing_capability("process sessions"))?;
     let execution_id = ExecutionId::new(format!("pi-bash-{}", Uuid::now_v7()))

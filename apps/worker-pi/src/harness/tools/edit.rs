@@ -117,7 +117,7 @@ pub async fn execute_edit_tool(
     };
 
     let mutation = context
-        .environment
+        .runtime
         .workspace_mutation()
         .ok_or_else(|| ToolExecutionError::missing_capability("workspace mutations"))?;
     let result = mutation
@@ -164,7 +164,7 @@ async fn read_complete_text(
     let mut cursor: Option<ContinuationCursor> = None;
     loop {
         let result = context
-            .environment
+            .runtime
             .workspace_query()
             .read(
                 context.operation,

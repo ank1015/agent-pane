@@ -40,8 +40,8 @@ pub struct WorkerConfig {
 impl WorkerConfig {
     /// Loads the worker's process-level configuration from environment variables.
     ///
-    /// Claim-specific values such as lease tokens, machine IDs, session IDs, and
-    /// working directories are deliberately not part of this configuration.
+    /// Claim-specific values such as lease tokens, resolved execution targets,
+    /// and session IDs are deliberately not part of this configuration.
     pub fn from_env() -> Result<Self, ConfigError> {
         Self::from_lookup(|name| env::var(name).ok())
     }
@@ -296,7 +296,7 @@ mod tests {
         let mut values = values.iter().copied().collect::<HashMap<_, _>>();
         values
             .entry(HARNESS_REVISION_IDS)
-            .or_insert("pi-2026-08-25");
+            .or_insert("pi-2026-08-26-machine-target");
         WorkerConfig::from_lookup(|name| values.get(name).map(ToString::to_string))
     }
 
@@ -309,7 +309,10 @@ mod tests {
         .expect("valid config");
 
         assert!(config.worker_instance_id.starts_with("pi-"));
-        assert_eq!(config.supported_harness_revision_ids, ["pi-2026-08-25"]);
+        assert_eq!(
+            config.supported_harness_revision_ids,
+            ["pi-2026-08-26-machine-target"]
+        );
         assert_eq!(config.max_concurrent_runs, 20);
         assert_eq!(config.agent.base_url.as_str(), "http://127.0.0.1:8780/");
         assert_eq!(config.agent.request_timeout, Duration::from_secs(30));

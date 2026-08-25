@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use execution_contracts::{EnvironmentId, MachineId, WorkspaceRootId};
-use execution_local::{LocalExecutionConfig, LocalExecutionEnvironment, LocalWorkspaceRoot};
+use execution_contracts::{MachineId, WorkspaceRootId};
+use execution_local::{LocalExecutionRuntime, LocalRuntimeConfig, LocalWorkspaceRoot};
 use execution_runtime::OperationContext;
 use llm_contracts::{
     AssistantContent, ContentPart, ImageSource, ToolArguments, ToolCallId, ToolResultMessage,
@@ -14,7 +14,7 @@ use worker_pi::harness::tools::{ToolExecutionContext, WorkspaceCwd, execute_tool
 struct Fixture {
     _directory: TempDir,
     workspace: std::path::PathBuf,
-    environment: LocalExecutionEnvironment,
+    runtime: LocalExecutionRuntime,
     root_id: WorkspaceRootId,
 }
 
@@ -29,9 +29,8 @@ impl Fixture {
             .await
             .expect("canonical workspace path");
         let root_id = id::<WorkspaceRootId>("root");
-        let environment = LocalExecutionEnvironment::new(LocalExecutionConfig {
+        let runtime = LocalExecutionRuntime::new(LocalRuntimeConfig {
             machine_id: id::<MachineId>("machine"),
-            environment_id: id::<EnvironmentId>("environment"),
             name: "Pi tool tests".to_owned(),
             state_directory: directory.path().join("state"),
             workspace_roots: vec![LocalWorkspaceRoot {
@@ -43,11 +42,11 @@ impl Fixture {
             native_grants: Vec::new(),
         })
         .await
-        .expect("local execution environment");
+        .expect("local execution runtime");
         Self {
             _directory: directory,
             workspace,
-            environment,
+            runtime,
             root_id,
         }
     }
@@ -63,7 +62,7 @@ async fn executes_write_read_edit_and_bash() {
     let cwd = fixture.cwd();
     let operation = OperationContext::new();
     let context = ToolExecutionContext {
-        environment: &fixture.environment,
+        runtime: &fixture.runtime,
         cwd: &cwd,
         operation: &operation,
     };
@@ -137,7 +136,7 @@ async fn read_returns_images_as_base64_content() {
     let cwd = fixture.cwd();
     let operation = OperationContext::new();
     let context = ToolExecutionContext {
-        environment: &fixture.environment,
+        runtime: &fixture.runtime,
         cwd: &cwd,
         operation: &operation,
     };
@@ -166,7 +165,7 @@ async fn tool_failures_are_returned_to_the_model() {
     let cwd = fixture.cwd();
     let operation = OperationContext::new();
     let context = ToolExecutionContext {
-        environment: &fixture.environment,
+        runtime: &fixture.runtime,
         cwd: &cwd,
         operation: &operation,
     };
@@ -209,7 +208,7 @@ async fn resolves_absolute_paths_only_inside_the_active_root() {
     let cwd = fixture.cwd();
     let operation = OperationContext::new();
     let context = ToolExecutionContext {
-        environment: &fixture.environment,
+        runtime: &fixture.runtime,
         cwd: &cwd,
         operation: &operation,
     };

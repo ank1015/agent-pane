@@ -75,7 +75,7 @@ pub async fn execute_read_tool(
         .unwrap_or(DEFAULT_MAX_LINES as u32)
         .min(DEFAULT_MAX_LINES as u32);
     let result = context
-        .environment
+        .runtime
         .workspace_query()
         .read(
             context.operation,
@@ -196,7 +196,7 @@ async fn read_artifact(
     artifact_id: ArtifactId,
 ) -> Result<Vec<u8>, ToolExecutionError> {
     let store = context
-        .environment
+        .runtime
         .artifact_store()
         .ok_or_else(|| ToolExecutionError::missing_capability("artifact reads"))?;
     let mut chunks = store

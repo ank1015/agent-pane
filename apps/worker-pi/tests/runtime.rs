@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 use url::Url;
 use uuid::Uuid;
 use worker_pi::{
-    clients::{AgentClient, ExecutionEnvironmentClient, LlmGatewayClient},
+    clients::{AgentClient, ExecutionClient, LlmGatewayClient},
     config::{AgentServiceConfig, LlmGatewayServiceConfig},
     runtime::{PiRuntime, RetryPolicy, RunOutcome},
     worker::WorkerService,
@@ -65,7 +65,7 @@ async fn runs_a_model_turn_with_retry_and_commits_the_final_assistant() {
         request_timeout: Duration::from_secs(2),
     })
     .expect("LLM client");
-    let execution_client = ExecutionEnvironmentClient::new(ExecutionGatewayConfig::new(
+    let execution_client = ExecutionClient::new(ExecutionGatewayConfig::new(
         "http://127.0.0.1:1".parse().expect("execution URL"),
         "execution-secret",
     ))
@@ -173,7 +173,7 @@ async fn executes_tools_commits_their_results_and_continues_the_run() {
         request_timeout: Duration::from_secs(2),
     })
     .expect("LLM client");
-    let execution_client = ExecutionEnvironmentClient::new(ExecutionGatewayConfig::new(
+    let execution_client = ExecutionClient::new(ExecutionGatewayConfig::new(
         serve(execution).await,
         "execution-secret",
     ))
@@ -213,7 +213,7 @@ async fn executes_tools_commits_their_results_and_continues_the_run() {
     assert_eq!(operation.as_ref().unwrap()["operation"], "mutation_apply");
     assert_eq!(
         operation.as_ref().unwrap()["request"]["plan"]["operations"][0]["path"]["path"],
-        "generated.txt"
+        "project/generated.txt"
     );
 }
 
@@ -253,7 +253,11 @@ impl AgentState {
                 "provider": "openai",
                 "model_id": "gpt-5.6-sol",
                 "reasoning_level": "high",
-                "machine_id": "machine-a",
+                "execution": {
+                    "machine_id": "machine-a",
+                    "workspace_root_id": "root",
+                    "cwd": "project"
+                },
                 "account_id": self.account_id,
                 "external_prompt": "Use Rust 2024 conventions.",
                 "is_replaced": false
@@ -463,15 +467,13 @@ async fn machine(Path(machine_id): Path<String>) -> Json<Value> {
     assert_eq!(machine_id, "machine-a");
     Json(json!({
         "machine_id": "machine-a",
-        "environment_id": "environment-a",
         "name": "Test machine",
         "connector": "machine_daemon",
         "online": true,
         "descriptor": {
             "protocol_version": {"major": 1, "minor": 0},
             "machine_id": "machine-a",
-            "environment_id": "environment-a",
-            "name": "Test environment",
+            "name": "Test machine",
             "operating_system": {"type": "linux"},
             "architecture": "x86_64",
             "path_convention": "posix",

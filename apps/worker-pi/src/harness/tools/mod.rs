@@ -7,9 +7,9 @@ pub mod write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use execution_contracts::{
-    EnvironmentDescriptor, OperationId, PathConvention, PathSpec, WorkspaceRootId,
+    MachineDescriptor, OperationId, PathConvention, PathSpec, WorkspaceRootId,
 };
-use execution_runtime::{ExecutionEnvironment, OperationContext};
+use execution_runtime::{ExecutionRuntime, OperationContext};
 use llm_contracts::{
     AssistantContent, ContentPart, FunctionTool, MessageId, TextContent, Timestamp, ToolArguments,
     ToolDefinition, ToolResultError, ToolResultMessage, ToolResultOutcome,
@@ -20,7 +20,7 @@ use url::Url;
 use uuid::Uuid;
 
 pub struct ToolExecutionContext<'a> {
-    pub environment: &'a dyn ExecutionEnvironment,
+    pub runtime: &'a dyn ExecutionRuntime,
     pub cwd: &'a WorkspaceCwd,
     pub operation: &'a OperationContext,
 }
@@ -52,7 +52,7 @@ impl WorkspaceCwd {
 
     fn resolve(
         &self,
-        descriptor: &EnvironmentDescriptor,
+        descriptor: &MachineDescriptor,
         input: &str,
     ) -> Result<PathSpec, ToolExecutionError> {
         let root = descriptor
@@ -61,7 +61,7 @@ impl WorkspaceCwd {
             .find(|root| root.id == self.root_id)
             .ok_or_else(|| {
                 ToolExecutionError::invalid_path(format!(
-                    "workspace root `{}` is not exposed by the execution environment",
+                    "workspace root `{}` is not exposed by the execution runtime",
                     self.root_id
                 ))
             })?;
@@ -120,7 +120,7 @@ impl ToolExecutionError {
     pub(crate) fn missing_capability(capability: &str) -> Self {
         Self::new(
             "unsupported_capability",
-            format!("Execution environment does not support {capability}"),
+            format!("Execution runtime does not support {capability}"),
         )
     }
 
@@ -274,7 +274,7 @@ pub(crate) fn resolve_path(
     context: &ToolExecutionContext<'_>,
     input: &str,
 ) -> Result<PathSpec, ToolExecutionError> {
-    context.cwd.resolve(context.environment.descriptor(), input)
+    context.cwd.resolve(context.runtime.descriptor(), input)
 }
 
 pub(crate) fn operation_id(prefix: &str) -> OperationId {

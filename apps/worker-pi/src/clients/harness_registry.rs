@@ -8,7 +8,7 @@ use url::Url;
 use crate::config::AgentControlServiceConfig;
 
 pub const PI_HARNESS_ID: &str = "pi";
-pub const PI_HARNESS_REVISION_ID: &str = "pi-2026-08-25";
+pub const PI_HARNESS_REVISION_ID: &str = "pi-2026-08-26-machine-target";
 
 #[derive(Clone)]
 pub struct HarnessRegistryClient {
@@ -165,13 +165,12 @@ fn pi_harness() -> CreateHarnessRequest {
 fn pi_revision() -> RegisterHarnessRevisionRequest {
     RegisterHarnessRevisionRequest {
         harness_revision_id: PI_HARNESS_REVISION_ID.to_owned(),
-        revision: "2026-08-25".to_owned(),
+        revision: "2026-08-26-machine-target".to_owned(),
         contract_version: 1,
         default_config: object(json!({
             "provider": "openai",
             "model_id": "gpt-5.6-sol",
             "reasoning_level": "high",
-            "cwd": ".",
             "is_replaced": false
         })),
         config_schema: Some(object(json!({
@@ -185,14 +184,21 @@ fn pi_revision() -> RegisterHarnessRevisionRequest {
                 "reasoning_level": {
                     "enum": ["low", "medium", "high", "xhigh", "max"]
                 },
-                "machine_id": {"type": "string", "minLength": 1},
+                "execution": {
+                    "type": "object",
+                    "properties": {
+                        "machine_id": {"type": "string", "minLength": 1},
+                        "workspace_root_id": {"type": "string", "minLength": 1},
+                        "cwd": {"type": "string", "minLength": 1}
+                    },
+                    "required": ["machine_id", "workspace_root_id", "cwd"],
+                    "additionalProperties": false
+                },
                 "account_id": {"type": "string", "minLength": 1},
-                "workspace_root_id": {"type": "string", "minLength": 1},
-                "cwd": {"type": "string", "minLength": 1},
                 "external_prompt": {"type": ["string", "null"]},
                 "is_replaced": {"type": "boolean"}
             },
-            "required": ["provider", "model_id", "reasoning_level", "cwd", "is_replaced"],
+            "required": ["provider", "model_id", "reasoning_level", "execution", "is_replaced"],
             "additionalProperties": false
         }))),
     }

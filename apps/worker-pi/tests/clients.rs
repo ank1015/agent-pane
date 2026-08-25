@@ -19,7 +19,7 @@ use url::Url;
 use uuid::Uuid;
 use worker_pi::{
     clients::{
-        AgentClient, ExecutionEnvironmentClient, HarnessRegistryClient, LlmGatewayClient,
+        AgentClient, ExecutionClient, HarnessRegistryClient, LlmGatewayClient,
         LlmGatewayClientError, PI_HARNESS_REVISION_ID,
     },
     config::{AgentControlServiceConfig, AgentServiceConfig, LlmGatewayServiceConfig},
@@ -105,10 +105,10 @@ async fn fetches_every_agent_message_page_through_the_worker_route() {
 }
 
 #[test]
-fn execution_environment_client_uses_the_gateway_client_validation() {
+fn execution_client_uses_the_gateway_client_validation() {
     let config = ExecutionGatewayConfig::new("http://127.0.0.1:8790".parse().expect("URL"), "");
 
-    assert!(ExecutionEnvironmentClient::new(config).is_err());
+    assert!(ExecutionClient::new(config).is_err());
 }
 
 #[tokio::test]
@@ -144,8 +144,14 @@ async fn registers_and_activates_the_packaged_pi_harness() {
     assert_eq!(calls[1].body["harness_revision_id"], PI_HARNESS_REVISION_ID);
     assert_eq!(calls[1].body["default_config"]["model_id"], "gpt-5.6-sol");
     assert_eq!(
-        calls[1].body["config_schema"]["properties"]["machine_id"]["type"],
-        "string"
+        calls[1].body["config_schema"]["properties"]["execution"]["required"],
+        json!(["machine_id", "workspace_root_id", "cwd"])
+    );
+    assert!(
+        calls[1].body["config_schema"]["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("execution"))
     );
     assert_eq!(calls[2].method, Method::PUT);
     assert_eq!(calls[2].body["harness_revision_id"], PI_HARNESS_REVISION_ID);

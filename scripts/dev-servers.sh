@@ -145,7 +145,7 @@ fi
 export PI_WORKER_AGENT_URL="http://127.0.0.1:8780"
 export PI_WORKER_AGENT_TOKEN="$AGENT_WORKER_TOKEN"
 export PI_WORKER_AGENT_CONTROL_TOKEN="$AGENT_CONTROL_TOKEN"
-export PI_WORKER_HARNESS_REVISION_IDS="pi-2026-08-25"
+export PI_WORKER_HARNESS_REVISION_IDS="pi-2026-08-26-machine-target"
 export PI_WORKER_LLM_GATEWAY_URL="http://127.0.0.1:3000"
 export PI_WORKER_EXECUTION_GATEWAY_URL="http://127.0.0.1:8790"
 export PI_WORKER_EXECUTION_GATEWAY_TOKEN="$execution_gateway_api_token"
@@ -167,7 +167,7 @@ if [[ -n "$machine_daemon_pid" ]]; then
 fi
 echo "agent:             http://127.0.0.1:8780 (pid $agent_pid)"
 echo "worker-pi:         polling Agent (pid $worker_pi_pid)"
-echo "Pi harness:        pi / pi-2026-08-25"
+echo "Pi harness:        pi / pi-2026-08-26-machine-target"
 echo "oauth callback:    http://localhost:1455/auth/callback"
 echo "Press Ctrl-C to stop all servers."
 
