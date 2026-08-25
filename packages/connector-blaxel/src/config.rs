@@ -1,4 +1,4 @@
-use execution_contracts::{EnvironmentId, GrantId, MachineId, WorkspaceRoot, WorkspaceRootId};
+use execution_contracts::{GrantId, MachineId, WorkspaceRoot, WorkspaceRootId};
 use url::Url;
 
 #[derive(Clone)]
@@ -83,9 +83,8 @@ pub struct BlaxelNativeGrant {
 }
 
 #[derive(Clone, Debug)]
-pub struct BlaxelEnvironmentConfig {
+pub struct BlaxelRuntimeConfig {
     pub machine_id: MachineId,
-    pub environment_id: EnvironmentId,
     pub name: String,
     /// Absolute target-side directory used for prepared mutations, artifacts,
     /// idempotency records, and recoverable process journals.

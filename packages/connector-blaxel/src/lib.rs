@@ -8,19 +8,21 @@
 mod artifacts;
 mod backend;
 mod config;
-mod environment;
 mod error;
 mod http;
+mod lifecycle;
 mod process;
 mod runner;
+mod runtime;
 mod transport;
 
 pub use config::{
-    BlaxelConnectionConfig, BlaxelEnvironmentConfig, BlaxelNativeGrant, BlaxelWorkspaceRoot,
+    BlaxelConnectionConfig, BlaxelNativeGrant, BlaxelRuntimeConfig, BlaxelWorkspaceRoot,
 };
-pub use environment::BlaxelExecutionEnvironment;
 pub use error::{BlaxelConnectorError, BlaxelTransportError};
 pub use http::BlaxelHttpTransport;
+pub use lifecycle::{ReadyBlaxelSandbox, create_from_snapshot, terminate, wait_until_ready};
+pub use runtime::BlaxelExecutionRuntime;
 pub use transport::{
     BlaxelTransport, RemoteProcessEvent, RemoteProcessRequest, RemoteProcessStream,
     RemoteProcessSummary, RemoteStreamKind,

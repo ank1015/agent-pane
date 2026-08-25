@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::{
-    BlaxelEnvironmentConfig, BlaxelTransport, RemoteProcessEvent, RemoteProcessRequest,
+    BlaxelRuntimeConfig, BlaxelTransport, RemoteProcessEvent, RemoteProcessRequest,
     RemoteProcessStream, RemoteStreamKind,
     error::{execution_error, invalid_request, transport_execution_error},
     runner::{InlineRunner, encode_inline_argument},
@@ -66,7 +66,7 @@ impl BlaxelProcessRuntime {
         transport: Arc<dyn BlaxelTransport>,
         runner: Arc<InlineRunner>,
         python_command: String,
-        config: &BlaxelEnvironmentConfig,
+        config: &BlaxelRuntimeConfig,
     ) -> Self {
         Self {
             inner: Arc::new(ProcessInner {

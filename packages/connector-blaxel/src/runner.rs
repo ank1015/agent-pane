@@ -7,7 +7,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
-    BlaxelEnvironmentConfig, BlaxelTransport, RemoteProcessEvent, RemoteProcessRequest,
+    BlaxelRuntimeConfig, BlaxelTransport, RemoteProcessEvent, RemoteProcessRequest,
     RemoteStreamKind,
     error::{execution_error, transport_execution_error},
 };
@@ -27,7 +27,7 @@ impl InlineRunner {
     pub fn new(
         transport: Arc<dyn BlaxelTransport>,
         python_command: String,
-        config: &BlaxelEnvironmentConfig,
+        config: &BlaxelRuntimeConfig,
     ) -> Self {
         Self {
             transport,
