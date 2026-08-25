@@ -4,6 +4,6 @@ mod unix;
 mod windows;
 
 #[cfg(unix)]
-pub(crate) use unix::{default_shell, terminate_process};
+pub(crate) use unix::{configure_process, default_shell, terminate_process};
 #[cfg(windows)]
-pub(crate) use windows::{default_shell, terminate_process};
+pub(crate) use windows::{configure_process, default_shell, terminate_process};

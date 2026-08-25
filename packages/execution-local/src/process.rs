@@ -277,6 +277,7 @@ impl ProcessRuntime for LocalProcessRuntime {
         let mut command = build_command(&request.command)?;
         command.current_dir(&cwd.path);
         configure_environment(&mut command, &request.environment);
+        platform::configure_process(&mut command);
         command.stdout(Stdio::piped()).stderr(Stdio::piped());
         match request.stdin {
             StdinMode::Pipe => {
@@ -380,7 +381,10 @@ impl ProcessRuntime for LocalProcessRuntime {
                 tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
                 let mut child = timeout_child.lock().await;
                 if child.try_wait().ok().flatten().is_none() {
-                    let _ = child.start_kill();
+                    let _ = platform::terminate_process(
+                        &mut child,
+                        execution_contracts::ProcessSignal::Kill,
+                    );
                 }
             });
         }
@@ -611,12 +615,8 @@ impl ProcessRuntime for LocalProcessRuntime {
         );
         if was_running {
             if let Some(child) = &entry.child {
-                child.lock().await.start_kill().map_err(|source| {
-                    error(
-                        ExecutionErrorCode::Internal,
-                        format!("failed to terminate process: {source}"),
-                    )
-                })?;
+                let mut child = child.lock().await;
+                platform::terminate_process(&mut child, execution_contracts::ProcessSignal::Kill)?;
             } else {
                 let controls = self.pty_controls.read().await;
                 let control = controls.get(&request.execution_id).ok_or_else(|| {

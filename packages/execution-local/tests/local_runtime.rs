@@ -7,7 +7,7 @@ use execution_contracts::{
     MachineId, MutationAtomicity, MutationOperation, MutationPlan, MutationPostActions,
     NetworkMode, OperationId, PathSpec, ProcessEventKind, ProcessOutputPolicy, ReadMode,
     ReadRequest, SandboxMode, SearchKind, SearchRequest, StartExecutionRequest, StdinMode,
-    TextPageRequest, WorkspaceRootId,
+    TerminateExecutionRequest, TextPageRequest, WorkspaceRootId,
 };
 use execution_local::{LocalExecutionConfig, LocalExecutionEnvironment, LocalWorkspaceRoot};
 use execution_runtime::{ExecutionEnvironment, OperationContext};
@@ -292,6 +292,85 @@ async fn runs_a_process_and_replays_ordered_output() {
             }
         )
     }));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn terminating_a_shell_kills_its_descendants() {
+    let (directory, environment) = environment().await;
+    let runtime = environment.process_runtime().expect("process capability");
+    let execution_id = id::<ExecutionId>("process-tree-1");
+    runtime
+        .start(
+            &OperationContext::new(),
+            StartExecutionRequest {
+                operation_id: id::<OperationId>("start-process-tree-1"),
+                execution_id: execution_id.clone(),
+                command: CommandSpec::Shell {
+                    command: "sleep 60 & child=$!; printf '%s' \"$child\" > child.pid; wait"
+                        .to_owned(),
+                    shell: Some("/bin/sh".to_owned()),
+                    login: false,
+                },
+                cwd: workspace("."),
+                environment: EnvironmentVariables::default(),
+                stdin: StdinMode::Closed,
+                timeout_ms: Some(70_000),
+                persistence: ExecutionPersistence::KeepUntilExit,
+                policy: ExecutionPolicy {
+                    sandbox: SandboxMode::Disabled,
+                    network: NetworkMode::Inherit,
+                    profile: None,
+                    resource_limits: None,
+                },
+                output: ProcessOutputPolicy {
+                    persist_full_output: false,
+                    max_inline_bytes: 1024,
+                    max_chunk_bytes: 1024,
+                },
+            },
+        )
+        .await
+        .expect("start process tree");
+
+    let pid_path = directory.path().join("workspace/child.pid");
+    for _ in 0..100 {
+        if tokio::fs::try_exists(&pid_path)
+            .await
+            .expect("check pid file")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let child_pid = tokio::fs::read_to_string(&pid_path)
+        .await
+        .expect("read child pid");
+
+    runtime
+        .terminate(
+            &OperationContext::new(),
+            TerminateExecutionRequest {
+                execution_id: execution_id.clone(),
+            },
+        )
+        .await
+        .expect("terminate process tree");
+
+    for _ in 0..100 {
+        let process_gone = !std::process::Command::new("kill")
+            .args(["-0", child_pid.trim()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("inspect child process")
+            .success();
+        if process_gone {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("child process {child_pid} survived execution termination");
 }
 
 #[tokio::test]

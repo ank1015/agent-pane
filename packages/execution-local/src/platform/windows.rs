@@ -1,5 +1,5 @@
 use execution_contracts::{ProcessSignal, ShellDescriptor};
-use tokio::process::Child;
+use tokio::process::{Child, Command};
 
 use crate::error::{io_error, unsupported};
 
@@ -10,6 +10,8 @@ pub(crate) fn default_shell() -> ShellDescriptor {
         executable,
     }
 }
+
+pub(crate) fn configure_process(_command: &mut Command) {}
 
 pub(crate) fn terminate_process(
     child: &mut Child,
