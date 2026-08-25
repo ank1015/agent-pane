@@ -2,27 +2,26 @@ use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use connector_tensorlake::{
-    TensorlakeConnectionConfig, TensorlakeEnvironmentConfig, TensorlakeExecutionEnvironment,
+    TensorlakeConnectionConfig, TensorlakeExecutionRuntime, TensorlakeRuntimeConfig,
     TensorlakeWorkspaceRoot,
 };
 use execution_contracts::{
     ApplyMutationRequest, AttachExecutionRequest, CommandSpec, CommitMutationRequest,
-    ContentSource, DiagnosticsMode, EnvironmentId, EnvironmentInheritance, EnvironmentVariables,
-    ExecutionId, ExecutionPersistence, ExecutionPolicy, ExecutionState, FormatMode,
-    GetArtifactMetadataRequest, InspectExecutionRequest, MachineId, MutationAtomicity,
-    MutationOperation, MutationPlan, MutationPostActions, NetworkMode, OccurrencePolicy,
-    OpenArtifactRequest, OperationId, PathSpec, PrepareMutationRequest, ProcessEventKind,
-    ProcessInputStatus, ProcessOutputPolicy, ReadMode, ReadRequest, RemovePathRequest,
-    ResizePtyRequest, SandboxMode, SearchKind, SearchRequest, StartExecutionRequest, StdinMode,
-    TextReplacement, WorkspaceRootId, WriteProcessInputRequest,
+    ContentSource, DiagnosticsMode, EnvironmentInheritance, EnvironmentVariables, ExecutionId,
+    ExecutionPersistence, ExecutionPolicy, ExecutionState, FormatMode, GetArtifactMetadataRequest,
+    InspectExecutionRequest, MachineId, MutationAtomicity, MutationOperation, MutationPlan,
+    MutationPostActions, NetworkMode, OccurrencePolicy, OpenArtifactRequest, OperationId, PathSpec,
+    PrepareMutationRequest, ProcessEventKind, ProcessInputStatus, ProcessOutputPolicy, ReadMode,
+    ReadRequest, RemovePathRequest, ResizePtyRequest, SandboxMode, SearchKind, SearchRequest,
+    StartExecutionRequest, StdinMode, TextReplacement, WorkspaceRootId, WriteProcessInputRequest,
 };
-use execution_runtime::{ExecutionEnvironment, OperationContext};
+use execution_runtime::{ExecutionRuntime, OperationContext};
 use futures_util::StreamExt;
 
-mod full_environment {
+mod full_runtime {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../execution-runtime/test-support/full_environment.rs"
+        "/../execution-runtime/test-support/full_runtime.rs"
     ));
 }
 
@@ -38,17 +37,16 @@ fn workspace(path: &str) -> PathSpec {
     PathSpec::workspace(id::<WorkspaceRootId>("root"), path)
 }
 
-fn make_environment() -> TensorlakeExecutionEnvironment {
+fn make_runtime() -> TensorlakeExecutionRuntime {
     let proxy_url = std::env::var("TENSORLAKE_SANDBOX_URL").expect("TENSORLAKE_SANDBOX_URL");
     let api_key = std::env::var("TENSORLAKE_API_KEY").expect("TENSORLAKE_API_KEY");
-    TensorlakeExecutionEnvironment::connect(
+    TensorlakeExecutionRuntime::connect(
         TensorlakeConnectionConfig::new(
             url::Url::parse(&proxy_url).expect("valid TENSORLAKE_SANDBOX_URL"),
             api_key,
         ),
-        TensorlakeEnvironmentConfig {
+        TensorlakeRuntimeConfig {
             machine_id: id::<MachineId>("tensorlake-live"),
-            environment_id: id::<EnvironmentId>("sandbox"),
             name: "Tensorlake live test".to_owned(),
             state_directory: "/home/tl-user/.agent-pane-live-test".to_owned(),
             workspace_roots: vec![TensorlakeWorkspaceRoot {
@@ -60,19 +58,19 @@ fn make_environment() -> TensorlakeExecutionEnvironment {
             native_grants: Vec::new(),
         },
     )
-    .expect("connect Tensorlake environment")
+    .expect("connect Tensorlake runtime")
 }
 
 #[tokio::test]
 #[ignore = "requires TENSORLAKE_SANDBOX_URL and TENSORLAKE_API_KEY"]
 async fn full_connector_smoke_test_and_process_recovery() {
-    let environment = make_environment();
+    let runtime = make_runtime();
     let context = OperationContext::new();
     let fixture = format!("agent-pane-smoke-{}", uuid::Uuid::now_v7());
     let apply_operation = id::<OperationId>(&format!("create-{}", uuid::Uuid::now_v7()));
     let fixture_path = |child: &str| workspace(&format!("{fixture}/{child}"));
 
-    let mutation = environment
+    let mutation = runtime
         .workspace_mutation()
         .expect("workspace mutation capability");
     mutation
@@ -99,7 +97,7 @@ async fn full_connector_smoke_test_and_process_recovery() {
         .await
         .expect("apply mutation");
 
-    let read = environment
+    let read = runtime
         .workspace_query()
         .read(
             &context,
@@ -116,7 +114,7 @@ async fn full_connector_smoke_test_and_process_recovery() {
     };
     assert_eq!(page.content, "alpha\nbeta\ngamma\n");
 
-    let search = environment
+    let search = runtime
         .workspace_query()
         .search(
             &context,
@@ -178,7 +176,7 @@ async fn full_connector_smoke_test_and_process_recovery() {
         .expect("commit prepared mutation");
 
     let execution_id = id::<ExecutionId>(&format!("live-{}", uuid::Uuid::now_v7()));
-    environment
+    runtime
         .process_runtime()
         .expect("process runtime")
         .start(
@@ -221,7 +219,7 @@ async fn full_connector_smoke_test_and_process_recovery() {
 
     let mut terminal_status = None;
     for _ in 0..100 {
-        let status = environment
+        let status = runtime
             .process_runtime()
             .expect("process runtime")
             .inspect(
@@ -247,7 +245,7 @@ async fn full_connector_smoke_test_and_process_recovery() {
 
     // Constructing a second connector instance simulates losing all in-memory
     // connector state. Attach must hydrate from the sandbox-side journal.
-    let recovered = make_environment();
+    let recovered = make_runtime();
     let mut stream = recovered
         .process_runtime()
         .expect("process runtime")
@@ -326,10 +324,10 @@ async fn full_connector_smoke_test_and_process_recovery() {
 #[tokio::test]
 #[ignore = "requires TENSORLAKE_SANDBOX_URL and TENSORLAKE_API_KEY"]
 async fn controls_a_pty_and_deduplicates_process_input() {
-    let environment = make_environment();
+    let runtime = make_runtime();
     let context = OperationContext::new();
     let execution_id = id::<ExecutionId>(&format!("pty-{}", uuid::Uuid::now_v7()));
-    let runtime = environment.process_runtime().expect("process runtime");
+    let runtime = runtime.process_runtime().expect("process runtime");
     runtime
         .start(
             &context,
@@ -455,5 +453,5 @@ async fn controls_a_pty_and_deduplicates_process_input() {
 #[tokio::test]
 #[ignore = "requires TENSORLAKE_SANDBOX_URL and TENSORLAKE_API_KEY"]
 async fn exercises_every_advertised_interface_method() {
-    full_environment::exercise(&make_environment()).await;
+    full_runtime::exercise(&make_runtime()).await;
 }
