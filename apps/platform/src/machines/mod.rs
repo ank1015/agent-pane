@@ -6,8 +6,10 @@ use uuid::Uuid;
 use crate::upstream::execution_gateway::{ExecutionGatewayClient, ExecutionGatewayError};
 use execution_protocol::MachineSummary;
 use model::{
-    CreateSandboxAccountRequest, MachineInventory, RotateSandboxCredentialsRequest, SandboxAccount,
-    UpdateNameRequest,
+    CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest, CreateSnapshotRequest,
+    MachineInventory, RotateSandboxCredentialsRequest, SandboxAccount, SandboxEnvironmentInstance,
+    SandboxEnvironmentTemplate, Snapshot, SnapshotQuery, UpdateNameRequest,
+    UpdateSandboxEnvironmentTemplateRequest,
 };
 
 #[derive(Clone)]
@@ -65,6 +67,93 @@ impl MachineService {
 
     async fn delete_sandbox_account(&self, account_id: Uuid) -> Result<(), ExecutionGatewayError> {
         self.gateway.delete_sandbox_account(account_id).await
+    }
+
+    async fn list_snapshots(
+        &self,
+        query: &SnapshotQuery,
+    ) -> Result<Vec<Snapshot>, ExecutionGatewayError> {
+        self.gateway.list_snapshots(query).await
+    }
+
+    async fn get_snapshot(&self, snapshot_id: Uuid) -> Result<Snapshot, ExecutionGatewayError> {
+        self.gateway.get_snapshot(snapshot_id).await
+    }
+
+    async fn create_snapshot(
+        &self,
+        request: &CreateSnapshotRequest,
+    ) -> Result<Snapshot, ExecutionGatewayError> {
+        self.gateway.create_snapshot(request).await
+    }
+
+    async fn delete_snapshot(&self, snapshot_id: Uuid) -> Result<(), ExecutionGatewayError> {
+        self.gateway.delete_snapshot(snapshot_id).await
+    }
+
+    async fn list_sandbox_environment_templates(
+        &self,
+    ) -> Result<Vec<SandboxEnvironmentTemplate>, ExecutionGatewayError> {
+        self.gateway.list_sandbox_environment_templates().await
+    }
+
+    async fn get_sandbox_environment_template(
+        &self,
+        template_id: Uuid,
+    ) -> Result<SandboxEnvironmentTemplate, ExecutionGatewayError> {
+        self.gateway
+            .get_sandbox_environment_template(template_id)
+            .await
+    }
+
+    async fn create_sandbox_environment_template(
+        &self,
+        request: &CreateSandboxEnvironmentTemplateRequest,
+    ) -> Result<SandboxEnvironmentTemplate, ExecutionGatewayError> {
+        self.gateway
+            .create_sandbox_environment_template(request)
+            .await
+    }
+
+    async fn update_sandbox_environment_template(
+        &self,
+        template_id: Uuid,
+        request: &UpdateSandboxEnvironmentTemplateRequest,
+    ) -> Result<SandboxEnvironmentTemplate, ExecutionGatewayError> {
+        self.gateway
+            .update_sandbox_environment_template(template_id, request)
+            .await
+    }
+
+    async fn delete_sandbox_environment_template(
+        &self,
+        template_id: Uuid,
+    ) -> Result<(), ExecutionGatewayError> {
+        self.gateway
+            .delete_sandbox_environment_template(template_id)
+            .await
+    }
+
+    async fn materialize_sandbox_environment_template(
+        &self,
+        template_id: Uuid,
+    ) -> Result<SandboxEnvironmentInstance, ExecutionGatewayError> {
+        self.gateway
+            .materialize_sandbox_environment_template(template_id)
+            .await
+    }
+
+    async fn list_sandbox_environment_instances(
+        &self,
+        template_id: Uuid,
+    ) -> Result<Vec<SandboxEnvironmentInstance>, ExecutionGatewayError> {
+        self.gateway
+            .list_sandbox_environment_instances(template_id)
+            .await
+    }
+
+    async fn delete_environment(&self, environment_id: &str) -> Result<(), ExecutionGatewayError> {
+        self.gateway.delete_environment(environment_id).await
     }
 
     async fn update_machine_name(
