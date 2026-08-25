@@ -2,16 +2,15 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use execution_contracts::{
-    Capability, ContinuationCursor, DirectoryEntry, EnvironmentDescriptor, EnvironmentId,
-    ExecutionError, ExecutionErrorCode, ExecutionId, FileKind, FileMetadata, InspectManyRequest,
-    InspectManyResult, InspectRequest, ListRequest, ListResult, ListSort, MachineId,
-    OperatingSystem, PathConvention, PathSpec, ProcessEvent, ProcessEventKind, ProtocolVersion,
-    ReadMode, ReadRequest, ReadResult, SearchRequest, SearchResult, TextPage, TextPageRequest,
-    TimestampMs, WORKSPACE_MUTATION_CAPABILITY, WORKSPACE_QUERY_CAPABILITY, WorkspaceRoot,
-    WorkspaceRootId,
+    Capability, ContinuationCursor, DirectoryEntry, ExecutionError, ExecutionErrorCode,
+    ExecutionId, FileKind, FileMetadata, InspectManyRequest, InspectManyResult, InspectRequest,
+    ListRequest, ListResult, ListSort, MachineDescriptor, MachineId, OperatingSystem,
+    PathConvention, PathSpec, ProcessEvent, ProcessEventKind, ProtocolVersion, ReadMode,
+    ReadRequest, ReadResult, SearchRequest, SearchResult, TextPage, TextPageRequest, TimestampMs,
+    WORKSPACE_MUTATION_CAPABILITY, WORKSPACE_QUERY_CAPABILITY, WorkspaceRoot, WorkspaceRootId,
 };
 use execution_runtime::{
-    ExecutionEnvironment, ExecutionResult, OperationContext, WorkspaceQuery,
+    ExecutionResult, ExecutionRuntime, OperationContext, WorkspaceQuery,
     conformance::{check_list_result, check_process_events, check_read_result},
     validate_capability_consistency,
 };
@@ -94,13 +93,13 @@ impl WorkspaceQuery for QueryStub {
     }
 }
 
-struct TestEnvironment {
-    descriptor: EnvironmentDescriptor,
+struct TestRuntime {
+    descriptor: MachineDescriptor,
     query: QueryStub,
 }
 
-impl ExecutionEnvironment for TestEnvironment {
-    fn descriptor(&self) -> &EnvironmentDescriptor {
+impl ExecutionRuntime for TestRuntime {
+    fn descriptor(&self) -> &MachineDescriptor {
         &self.descriptor
     }
 
@@ -109,11 +108,10 @@ impl ExecutionEnvironment for TestEnvironment {
     }
 }
 
-fn descriptor(capability_ids: &[&str]) -> EnvironmentDescriptor {
-    EnvironmentDescriptor {
+fn descriptor(capability_ids: &[&str]) -> MachineDescriptor {
+    MachineDescriptor {
         protocol_version: ProtocolVersion::V1,
         machine_id: id::<MachineId>("machine-1"),
-        environment_id: id::<EnvironmentId>("host"),
         name: "Test host".to_owned(),
         operating_system: OperatingSystem::Linux,
         architecture: "x86_64".to_owned(),
@@ -134,24 +132,24 @@ fn descriptor(capability_ids: &[&str]) -> EnvironmentDescriptor {
 
 #[test]
 fn capability_composition_accepts_matching_runtime() {
-    let environment = TestEnvironment {
+    let runtime = TestRuntime {
         descriptor: descriptor(&[WORKSPACE_QUERY_CAPABILITY]),
         query: QueryStub,
     };
 
-    validate_capability_consistency(&environment).expect("capabilities match");
-    let object: &dyn ExecutionEnvironment = &environment;
+    validate_capability_consistency(&runtime).expect("capabilities match");
+    let object: &dyn ExecutionRuntime = &runtime;
     assert_eq!(object.descriptor().name, "Test host");
 }
 
 #[test]
 fn capability_composition_rejects_advertised_missing_runtime() {
-    let environment = TestEnvironment {
+    let runtime = TestRuntime {
         descriptor: descriptor(&[WORKSPACE_QUERY_CAPABILITY, WORKSPACE_MUTATION_CAPABILITY]),
         query: QueryStub,
     };
 
-    let error = validate_capability_consistency(&environment).expect_err("mutation is missing");
+    let error = validate_capability_consistency(&runtime).expect_err("mutation is missing");
     assert!(error.issues.iter().any(|issue| {
         issue.capability == WORKSPACE_MUTATION_CAPABILITY
             && issue.message.contains("without a runtime implementation")

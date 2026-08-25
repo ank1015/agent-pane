@@ -15,7 +15,7 @@ use execution_contracts::{
     TerminateExecutionRequest, TextPageRequest, TextPatchHunk, TextReplacement, WalkRequest,
     WorkspaceRootId, WriteBytesRequest, WriteCondition,
 };
-use execution_runtime::{ExecutionEnvironment, OperationContext};
+use execution_runtime::{ExecutionRuntime, OperationContext};
 use futures_util::StreamExt;
 
 fn id<T>(value: &str) -> T
@@ -123,15 +123,15 @@ async fn wait_until_terminal(
     panic!("process did not reach a terminal state");
 }
 
-pub async fn exercise(environment: &dyn ExecutionEnvironment) {
+pub async fn exercise(runtime: &dyn ExecutionRuntime) {
     let context = OperationContext::new();
     let fixture = format!("agent-pane-interface-{}", uuid::Uuid::now_v7());
     let at = |child: &str| workspace(&format!("{fixture}/{child}"));
-    let query = environment.workspace_query();
-    let mutation = environment
+    let query = runtime.workspace_query();
+    let mutation = runtime
         .workspace_mutation()
         .expect("workspace mutation capability");
-    let filesystem = environment.filesystem().expect("filesystem capability");
+    let filesystem = runtime.filesystem().expect("filesystem capability");
 
     filesystem
         .create_directory(
@@ -575,7 +575,7 @@ pub async fn exercise(environment: &dyn ExecutionEnvironment) {
         .expect_err("aborted mutation cannot be committed");
     assert_eq!(aborted_commit.code, ExecutionErrorCode::NotFound);
 
-    let runtime = environment.process_runtime().expect("process runtime");
+    let runtime = runtime.process_runtime().expect("process runtime");
     let signal_id = id::<ExecutionId>(&format!("signal-{}", uuid::Uuid::now_v7()));
     runtime
         .start(
