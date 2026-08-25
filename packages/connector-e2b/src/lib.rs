@@ -7,17 +7,21 @@
 mod artifacts;
 mod backend;
 mod config;
-mod environment;
 mod error;
 mod http;
+mod lifecycle;
 mod process;
 mod runner;
+mod runtime;
 mod transport;
 
-pub use config::{E2bConnectionConfig, E2bEnvironmentConfig, E2bNativeGrant, E2bWorkspaceRoot};
-pub use environment::E2bExecutionEnvironment;
+pub use config::{E2bConnectionConfig, E2bNativeGrant, E2bRuntimeConfig, E2bWorkspaceRoot};
 pub use error::{E2bConnectorError, E2bTransportError};
 pub use http::E2bHttpTransport;
+pub use lifecycle::{
+    CreatedE2bSandbox, create_from_snapshot, create_from_snapshot_details, terminate,
+};
+pub use runtime::E2bExecutionRuntime;
 pub use transport::{
     E2bTransport, RemoteProcessEvent, RemoteProcessRequest, RemoteProcessStream,
     RemoteProcessSummary, RemoteStreamKind,

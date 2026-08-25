@@ -7,7 +7,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
-    E2bEnvironmentConfig, E2bTransport, RemoteProcessEvent, RemoteProcessRequest, RemoteStreamKind,
+    E2bRuntimeConfig, E2bTransport, RemoteProcessEvent, RemoteProcessRequest, RemoteStreamKind,
     error::{execution_error, transport_execution_error},
 };
 
@@ -26,7 +26,7 @@ impl InlineRunner {
     pub fn new(
         transport: Arc<dyn E2bTransport>,
         python_command: String,
-        config: &E2bEnvironmentConfig,
+        config: &E2bRuntimeConfig,
     ) -> Self {
         Self {
             transport,

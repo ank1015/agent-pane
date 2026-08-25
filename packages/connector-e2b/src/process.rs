@@ -19,8 +19,8 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::{
-    E2bEnvironmentConfig, E2bTransport, RemoteProcessEvent, RemoteProcessRequest,
-    RemoteProcessStream, RemoteStreamKind,
+    E2bRuntimeConfig, E2bTransport, RemoteProcessEvent, RemoteProcessRequest, RemoteProcessStream,
+    RemoteStreamKind,
     error::{execution_error, invalid_request, transport_execution_error},
     runner::{InlineRunner, encode_inline_argument},
 };
@@ -63,7 +63,7 @@ impl E2bProcessRuntime {
         transport: Arc<dyn E2bTransport>,
         runner: Arc<InlineRunner>,
         python_command: String,
-        config: &E2bEnvironmentConfig,
+        config: &E2bRuntimeConfig,
     ) -> Self {
         Self {
             inner: Arc::new(ProcessInner {

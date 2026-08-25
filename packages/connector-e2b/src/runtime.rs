@@ -1,32 +1,32 @@
 use std::sync::Arc;
 
 use execution_contracts::{
-    ARTIFACTS_CAPABILITY, BASIC_FILESYSTEM_CAPABILITY, Capability, EnvironmentDescriptor,
+    ARTIFACTS_CAPABILITY, BASIC_FILESYSTEM_CAPABILITY, Capability, MachineDescriptor,
     OperatingSystem, PROCESS_SESSION_CAPABILITY, PathConvention, ProtocolVersion, ShellDescriptor,
     WORKSPACE_MUTATION_CAPABILITY, WORKSPACE_QUERY_CAPABILITY,
 };
 use execution_runtime::{
-    ArtifactStore, BasicFileSystem, ExecutionEnvironment, ProcessRuntime, WorkspaceMutation,
+    ArtifactStore, BasicFileSystem, ExecutionRuntime, ProcessRuntime, WorkspaceMutation,
     WorkspaceQuery, validate_capability_consistency,
 };
 
 use crate::{
-    E2bConnectionConfig, E2bConnectorError, E2bEnvironmentConfig, E2bHttpTransport, E2bTransport,
+    E2bConnectionConfig, E2bConnectorError, E2bHttpTransport, E2bRuntimeConfig, E2bTransport,
     artifacts::E2bArtifactStore, backend::E2bBackend, process::E2bProcessRuntime,
     runner::InlineRunner,
 };
 
-pub struct E2bExecutionEnvironment {
-    descriptor: EnvironmentDescriptor,
+pub struct E2bExecutionRuntime {
+    descriptor: MachineDescriptor,
     backend: E2bBackend,
     process: E2bProcessRuntime,
     artifacts: E2bArtifactStore,
 }
 
-impl E2bExecutionEnvironment {
+impl E2bExecutionRuntime {
     pub fn connect(
         connection: E2bConnectionConfig,
-        config: E2bEnvironmentConfig,
+        config: E2bRuntimeConfig,
     ) -> Result<Self, E2bConnectorError> {
         let python_command = connection.python_command.clone();
         let transport = Arc::new(E2bHttpTransport::new(connection)?) as Arc<dyn E2bTransport>;
@@ -36,7 +36,7 @@ impl E2bExecutionEnvironment {
     pub fn with_transport(
         transport: Arc<dyn E2bTransport>,
         python_command: String,
-        config: E2bEnvironmentConfig,
+        config: E2bRuntimeConfig,
     ) -> Result<Self, E2bConnectorError> {
         validate_config(&config, &python_command)?;
         let runner = Arc::new(InlineRunner::new(
@@ -47,10 +47,9 @@ impl E2bExecutionEnvironment {
         let backend = E2bBackend::new(Arc::clone(&runner));
         let artifacts = E2bArtifactStore::new(Arc::clone(&runner));
         let process = E2bProcessRuntime::new(transport, runner, python_command, &config);
-        let descriptor = EnvironmentDescriptor {
+        let descriptor = MachineDescriptor {
             protocol_version: ProtocolVersion::V1,
             machine_id: config.machine_id,
-            environment_id: config.environment_id,
             name: config.name,
             operating_system: OperatingSystem::Linux,
             architecture: "x86_64".to_owned(),
@@ -75,20 +74,20 @@ impl E2bExecutionEnvironment {
             .map(|id| Capability::v1(id).expect("built-in capability ID is valid"))
             .collect(),
         };
-        let environment = Self {
+        let runtime = Self {
             descriptor,
             backend,
             process,
             artifacts,
         };
-        validate_capability_consistency(&environment)
+        validate_capability_consistency(&runtime)
             .map_err(|source| E2bConnectorError::InvalidConfiguration(source.to_string()))?;
-        Ok(environment)
+        Ok(runtime)
     }
 }
 
-impl ExecutionEnvironment for E2bExecutionEnvironment {
-    fn descriptor(&self) -> &EnvironmentDescriptor {
+impl ExecutionRuntime for E2bExecutionRuntime {
+    fn descriptor(&self) -> &MachineDescriptor {
         &self.descriptor
     }
 
@@ -114,12 +113,12 @@ impl ExecutionEnvironment for E2bExecutionEnvironment {
 }
 
 fn validate_config(
-    config: &E2bEnvironmentConfig,
+    config: &E2bRuntimeConfig,
     python_command: &str,
 ) -> Result<(), E2bConnectorError> {
     if config.name.trim().is_empty() {
         return Err(E2bConnectorError::InvalidConfiguration(
-            "environment name must not be empty".to_owned(),
+            "machine name must not be empty".to_owned(),
         ));
     }
     if python_command.trim().is_empty() {
