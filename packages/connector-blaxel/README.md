@@ -31,10 +31,11 @@ base64-encodes exact child byte chunks into newline-delimited JSON, keeping
 output byte-accurate and resumable. It also persists the outer PID beside the
 journal so a recreated connector can reattach while the process is running.
 
-The caller owns sandbox creation, suspension/resumption, timeout policy, and
-deletion. Construct `BlaxelConnectionConfig` from the sandbox metadata URL,
-API key, and workspace, then provide workspace roots and a target-side state
-directory through `BlaxelEnvironmentConfig`.
+The caller owns lifecycle orchestration. `create_from_snapshot` forks a source
+sandbox at a selected snapshot into a caller-provided target sandbox ID.
+Construct `BlaxelConnectionConfig` from the new sandbox metadata URL, API key,
+and workspace, then provide workspace roots and a target-side state directory
+through `BlaxelRuntimeConfig`.
 
 Current provider constraints:
 
