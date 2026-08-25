@@ -11,6 +11,7 @@ license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0"
+agent-contracts = { path = "packages/agent-contracts", version = "0.1.0" }
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
@@ -21,6 +22,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 credential-vault = { path = "packages/credential-vault", version = "0.1.0" }
 dotenvy = "0.15"
 execution-contracts = { path = "packages/execution-contracts", version = "0.1.0" }
+execution-gateway-client = { path = "packages/execution-gateway-client", version = "0.1.0" }
 execution-local = { path = "packages/execution-local", version = "0.1.0" }
 execution-protocol = { path = "packages/execution-protocol", version = "0.1.0" }
 execution-runtime = { path = "packages/execution-runtime", version = "0.1.0" }
@@ -29,6 +31,7 @@ futures-util = "0.3"
 globset = "0.4"
 httpdate = "1.0"
 ignore = "0.4"
+jsonschema = { version = "0.50", default-features = false }
 llm-contracts = { path = "packages/llm-contracts", version = "0.1.0" }
 provider-anthropic = { path = "packages/provider-anthropic", version = "0.1.0" }
 provider-chatgpt = { path = "packages/provider-chatgpt", version = "0.1.0" }
