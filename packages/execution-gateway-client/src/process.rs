@@ -7,10 +7,10 @@ use execution_contracts::{
 use execution_protocol::Operation;
 use execution_runtime::{ExecutionResult, OperationContext, ProcessEventStream, ProcessRuntime};
 
-use crate::GatewayExecutionEnvironment;
+use crate::GatewayMachineRuntime;
 
 #[async_trait]
-impl ProcessRuntime for GatewayExecutionEnvironment {
+impl ProcessRuntime for GatewayMachineRuntime {
     async fn start(
         &self,
         context: &OperationContext,

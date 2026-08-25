@@ -23,8 +23,10 @@ pub enum ExecutionGatewayClientError {
         error: Option<ExecutionError>,
         body: String,
     },
-    #[error("execution gateway returned an invalid environment descriptor: {0}")]
+    #[error("execution gateway returned an invalid machine descriptor: {0}")]
     InvalidDescriptor(String),
+    #[error("execution gateway returned an invalid environment: {0}")]
+    InvalidEnvironment(String),
 }
 
 impl ExecutionGatewayClientError {

@@ -7,10 +7,10 @@ use execution_contracts::{
 use execution_protocol::Operation;
 use execution_runtime::{ExecutionResult, OperationContext, WorkspaceMutation, WorkspaceQuery};
 
-use crate::GatewayExecutionEnvironment;
+use crate::GatewayMachineRuntime;
 
 #[async_trait]
-impl WorkspaceQuery for GatewayExecutionEnvironment {
+impl WorkspaceQuery for GatewayMachineRuntime {
     async fn inspect(
         &self,
         context: &OperationContext,
@@ -58,7 +58,7 @@ impl WorkspaceQuery for GatewayExecutionEnvironment {
 }
 
 #[async_trait]
-impl WorkspaceMutation for GatewayExecutionEnvironment {
+impl WorkspaceMutation for GatewayMachineRuntime {
     async fn prepare(
         &self,
         context: &OperationContext,

@@ -7,10 +7,10 @@ use execution_contracts::{
 use execution_protocol::Operation;
 use execution_runtime::{BasicFileSystem, ExecutionResult, OperationContext};
 
-use crate::GatewayExecutionEnvironment;
+use crate::GatewayMachineRuntime;
 
 #[async_trait]
-impl BasicFileSystem for GatewayExecutionEnvironment {
+impl BasicFileSystem for GatewayMachineRuntime {
     async fn inspect(
         &self,
         context: &OperationContext,

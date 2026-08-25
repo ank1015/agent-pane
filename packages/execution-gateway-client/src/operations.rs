@@ -12,11 +12,12 @@ use futures_core::Stream;
 use tokio::sync::mpsc;
 
 use crate::{
-    GatewayExecutionEnvironment,
+    GatewayMachineRuntime,
     error::{
         cancelled_error, deadline_error, execution_error, unexpected_response,
         unexpected_stream_item,
     },
+    machine::OperationTarget,
 };
 
 pub(crate) trait FromResponse: Sized {
@@ -90,7 +91,7 @@ impl FromStreamItem for ArtifactChunk {
     }
 }
 
-impl GatewayExecutionEnvironment {
+impl GatewayMachineRuntime {
     pub(crate) async fn execute<T>(
         &self,
         context: &OperationContext,
@@ -99,12 +100,7 @@ impl GatewayExecutionEnvironment {
     where
         T: FromResponse,
     {
-        let record = await_request(
-            context,
-            self.client
-                .create_operation(&self.descriptor.machine_id, operation),
-        )
-        .await?;
+        let record = await_request(context, self.create_operation(operation)).await?;
         let operation_id = record.operation_id.clone();
         let result = self.wait_for_response(context, record).await;
         if result.as_ref().is_err_and(is_context_stop) {
@@ -122,12 +118,7 @@ impl GatewayExecutionEnvironment {
     where
         T: FromStreamItem,
     {
-        let record = await_request(
-            context,
-            self.client
-                .create_operation(&self.descriptor.machine_id, operation),
-        )
-        .await?;
+        let record = await_request(context, self.create_operation(operation)).await?;
         let (sender, receiver) = mpsc::channel(64);
         let client = self.client.clone();
         let stream_context = context.child();
@@ -164,6 +155,22 @@ impl GatewayExecutionEnvironment {
             }
             wait_for_poll(context, self.client.poll_interval).await?;
             record = await_request(context, self.client.operation(&record.operation_id)).await?;
+        }
+    }
+
+    async fn create_operation(
+        &self,
+        operation: Operation,
+    ) -> Result<OperationRecord, crate::ExecutionGatewayClientError> {
+        match &self.target {
+            OperationTarget::Machine(machine_id) => {
+                self.client.create_operation(machine_id, operation).await
+            }
+            OperationTarget::Environment(environment_id) => {
+                self.client
+                    .create_environment_operation(environment_id, operation)
+                    .await
+            }
         }
     }
 }

@@ -3,10 +3,10 @@ use execution_contracts::{ArtifactMetadata, GetArtifactMetadataRequest, OpenArti
 use execution_protocol::Operation;
 use execution_runtime::{ArtifactChunkStream, ArtifactStore, ExecutionResult, OperationContext};
 
-use crate::GatewayExecutionEnvironment;
+use crate::GatewayMachineRuntime;
 
 #[async_trait]
-impl ArtifactStore for GatewayExecutionEnvironment {
+impl ArtifactStore for GatewayMachineRuntime {
     async fn metadata(
         &self,
         context: &OperationContext,
