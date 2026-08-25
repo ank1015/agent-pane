@@ -1,32 +1,32 @@
 use std::sync::Arc;
 
 use execution_contracts::{
-    ARTIFACTS_CAPABILITY, BASIC_FILESYSTEM_CAPABILITY, Capability, EnvironmentDescriptor,
+    ARTIFACTS_CAPABILITY, BASIC_FILESYSTEM_CAPABILITY, Capability, MachineDescriptor,
     OperatingSystem, PROCESS_SESSION_CAPABILITY, PathConvention, ProtocolVersion, ShellDescriptor,
     WORKSPACE_MUTATION_CAPABILITY, WORKSPACE_QUERY_CAPABILITY,
 };
 use execution_runtime::{
-    ArtifactStore, BasicFileSystem, ExecutionEnvironment, ProcessRuntime, WorkspaceMutation,
+    ArtifactStore, BasicFileSystem, ExecutionRuntime, ProcessRuntime, WorkspaceMutation,
     WorkspaceQuery, validate_capability_consistency,
 };
 
 use crate::{
-    DaytonaConnectionConfig, DaytonaConnectorError, DaytonaEnvironmentConfig, DaytonaHttpTransport,
+    DaytonaConnectionConfig, DaytonaConnectorError, DaytonaHttpTransport, DaytonaRuntimeConfig,
     DaytonaTransport, artifacts::DaytonaArtifactStore, backend::DaytonaBackend,
     process::DaytonaProcessRuntime, runner::InlineRunner,
 };
 
-pub struct DaytonaExecutionEnvironment {
-    descriptor: EnvironmentDescriptor,
+pub struct DaytonaExecutionRuntime {
+    descriptor: MachineDescriptor,
     backend: DaytonaBackend,
     process: DaytonaProcessRuntime,
     artifacts: DaytonaArtifactStore,
 }
 
-impl DaytonaExecutionEnvironment {
+impl DaytonaExecutionRuntime {
     pub fn connect(
         connection: DaytonaConnectionConfig,
-        config: DaytonaEnvironmentConfig,
+        config: DaytonaRuntimeConfig,
     ) -> Result<Self, DaytonaConnectorError> {
         let python_command = connection.python_command.clone();
         let network_block_all = connection.network_block_all;
@@ -39,7 +39,7 @@ impl DaytonaExecutionEnvironment {
         transport: Arc<dyn DaytonaTransport>,
         python_command: String,
         network_block_all: bool,
-        config: DaytonaEnvironmentConfig,
+        config: DaytonaRuntimeConfig,
     ) -> Result<Self, DaytonaConnectorError> {
         validate_config(&config, &python_command)?;
         let runner = Arc::new(InlineRunner::new(
@@ -56,10 +56,9 @@ impl DaytonaExecutionEnvironment {
             network_block_all,
             &config,
         );
-        let descriptor = EnvironmentDescriptor {
+        let descriptor = MachineDescriptor {
             protocol_version: ProtocolVersion::V1,
             machine_id: config.machine_id,
-            environment_id: config.environment_id,
             name: config.name,
             operating_system: OperatingSystem::Linux,
             architecture: "x86_64".to_owned(),
@@ -84,20 +83,20 @@ impl DaytonaExecutionEnvironment {
             .map(|id| Capability::v1(id).expect("built-in capability ID is valid"))
             .collect(),
         };
-        let environment = Self {
+        let runtime = Self {
             descriptor,
             backend,
             process,
             artifacts,
         };
-        validate_capability_consistency(&environment)
+        validate_capability_consistency(&runtime)
             .map_err(|source| DaytonaConnectorError::InvalidConfiguration(source.to_string()))?;
-        Ok(environment)
+        Ok(runtime)
     }
 }
 
-impl ExecutionEnvironment for DaytonaExecutionEnvironment {
-    fn descriptor(&self) -> &EnvironmentDescriptor {
+impl ExecutionRuntime for DaytonaExecutionRuntime {
+    fn descriptor(&self) -> &MachineDescriptor {
         &self.descriptor
     }
 
@@ -123,12 +122,12 @@ impl ExecutionEnvironment for DaytonaExecutionEnvironment {
 }
 
 fn validate_config(
-    config: &DaytonaEnvironmentConfig,
+    config: &DaytonaRuntimeConfig,
     python_command: &str,
 ) -> Result<(), DaytonaConnectorError> {
     if config.name.trim().is_empty() {
         return Err(DaytonaConnectorError::InvalidConfiguration(
-            "environment name must not be empty".to_owned(),
+            "machine name must not be empty".to_owned(),
         ));
     }
     if python_command.trim().is_empty() {

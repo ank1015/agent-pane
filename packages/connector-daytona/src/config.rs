@@ -1,4 +1,4 @@
-use execution_contracts::{EnvironmentId, GrantId, MachineId, WorkspaceRoot, WorkspaceRootId};
+use execution_contracts::{GrantId, MachineId, WorkspaceRoot, WorkspaceRootId};
 use url::Url;
 
 #[derive(Clone)]
@@ -80,9 +80,8 @@ pub struct DaytonaNativeGrant {
 }
 
 #[derive(Clone, Debug)]
-pub struct DaytonaEnvironmentConfig {
+pub struct DaytonaRuntimeConfig {
     pub machine_id: MachineId,
-    pub environment_id: EnvironmentId,
     pub name: String,
     /// Absolute target-side directory used for prepared mutations, artifacts,
     /// idempotency records, and recoverable process journals.

@@ -7,7 +7,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
-    DaytonaEnvironmentConfig, DaytonaTransport, RemoteProcessEvent, RemoteProcessRequest,
+    DaytonaRuntimeConfig, DaytonaTransport, RemoteProcessEvent, RemoteProcessRequest,
     RemoteStreamKind,
     error::{execution_error, transport_execution_error},
 };
@@ -27,7 +27,7 @@ impl InlineRunner {
     pub fn new(
         transport: Arc<dyn DaytonaTransport>,
         python_command: String,
-        config: &DaytonaEnvironmentConfig,
+        config: &DaytonaRuntimeConfig,
     ) -> Self {
         Self {
             transport,

@@ -8,19 +8,21 @@
 mod artifacts;
 mod backend;
 mod config;
-mod environment;
 mod error;
 mod http;
+mod lifecycle;
 mod process;
 mod runner;
+mod runtime;
 mod transport;
 
 pub use config::{
-    DaytonaConnectionConfig, DaytonaEnvironmentConfig, DaytonaNativeGrant, DaytonaWorkspaceRoot,
+    DaytonaConnectionConfig, DaytonaNativeGrant, DaytonaRuntimeConfig, DaytonaWorkspaceRoot,
 };
-pub use environment::DaytonaExecutionEnvironment;
 pub use error::{DaytonaConnectorError, DaytonaTransportError};
 pub use http::DaytonaHttpTransport;
+pub use lifecycle::{ReadyDaytonaSandbox, create_from_snapshot, terminate, wait_until_ready};
+pub use runtime::DaytonaExecutionRuntime;
 pub use transport::{
     DaytonaTransport, RemoteProcessEvent, RemoteProcessId, RemoteProcessRequest,
     RemoteProcessStream, RemoteProcessSummary, RemoteStreamKind,

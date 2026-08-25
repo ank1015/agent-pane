@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, Notify, RwLock, broadcast};
 
 use crate::{
-    DaytonaEnvironmentConfig, DaytonaTransport, RemoteProcessEvent, RemoteProcessId,
+    DaytonaRuntimeConfig, DaytonaTransport, RemoteProcessEvent, RemoteProcessId,
     RemoteProcessRequest, RemoteProcessStream, RemoteStreamKind,
     error::{execution_error, invalid_request, transport_execution_error},
     runner::{InlineRunner, encode_inline_argument},
@@ -67,7 +67,7 @@ impl DaytonaProcessRuntime {
         runner: Arc<InlineRunner>,
         python_command: String,
         network_block_all: bool,
-        config: &DaytonaEnvironmentConfig,
+        config: &DaytonaRuntimeConfig,
     ) -> Self {
         Self {
             inner: Arc::new(ProcessInner {
