@@ -1,6 +1,6 @@
 [package]
 name = "execution-runtime"
-description = "Runtime traits and capability composition for remote execution environments"
+description = "Runtime traits and capability composition for execution machines"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

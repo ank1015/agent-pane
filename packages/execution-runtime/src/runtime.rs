@@ -1,6 +1,6 @@
 use execution_contracts::{
     ARTIFACTS_CAPABILITY, BASIC_FILESYSTEM_CAPABILITY, CODE_INTELLIGENCE_CAPABILITY,
-    EnvironmentDescriptor, MEDIA_PROCESSING_CAPABILITY, PROCESS_SESSION_CAPABILITY, Validate,
+    MEDIA_PROCESSING_CAPABILITY, MachineDescriptor, PROCESS_SESSION_CAPABILITY, Validate,
     ValidationError, WORKSPACE_MUTATION_CAPABILITY, WORKSPACE_QUERY_CAPABILITY,
 };
 use thiserror::Error;
@@ -10,7 +10,7 @@ use crate::{ArtifactStore, BasicFileSystem, ProcessRuntime, WorkspaceMutation, W
 /// Optional code-intelligence capability boundary.
 ///
 /// Concrete operations will be added when their serializable contracts are
-/// defined. The marker lets an environment compose and negotiate the capability
+/// defined. The marker lets a runtime compose and negotiate the capability
 /// without coupling the core runtime to an LSP implementation.
 pub trait CodeIntelligence: Send + Sync {}
 
@@ -19,12 +19,9 @@ pub trait CodeIntelligence: Send + Sync {}
 /// Concrete operations will be added alongside their serializable contracts.
 pub trait MediaProcessing: Send + Sync {}
 
-/// Composition root for one executable target.
-///
-/// A machine may expose several environments, each with its own roots,
-/// operating system, shell, and capabilities.
-pub trait ExecutionEnvironment: Send + Sync {
-    fn descriptor(&self) -> &EnvironmentDescriptor;
+/// Composition root for the operations supported by an execution machine.
+pub trait ExecutionRuntime: Send + Sync {
+    fn descriptor(&self) -> &MachineDescriptor;
 
     fn workspace_query(&self) -> &dyn WorkspaceQuery;
 
@@ -80,47 +77,47 @@ pub struct CapabilityConsistencyError {
 /// Unknown capability IDs are allowed so extension crates can negotiate their
 /// own versioned interfaces. Built-in capabilities currently support major v1.
 pub fn validate_capability_consistency(
-    environment: &dyn ExecutionEnvironment,
+    runtime: &dyn ExecutionRuntime,
 ) -> Result<(), CapabilityConsistencyError> {
-    let descriptor_error = environment.descriptor().validate().err();
-    let advertised = &environment.descriptor().capabilities;
+    let descriptor_error = runtime.descriptor().validate().err();
+    let advertised = &runtime.descriptor().capabilities;
     let mut issues = Vec::new();
 
     check_builtin(advertised, WORKSPACE_QUERY_CAPABILITY, true, &mut issues);
     check_builtin(
         advertised,
         WORKSPACE_MUTATION_CAPABILITY,
-        environment.workspace_mutation().is_some(),
+        runtime.workspace_mutation().is_some(),
         &mut issues,
     );
     check_builtin(
         advertised,
         PROCESS_SESSION_CAPABILITY,
-        environment.process_runtime().is_some(),
+        runtime.process_runtime().is_some(),
         &mut issues,
     );
     check_builtin(
         advertised,
         ARTIFACTS_CAPABILITY,
-        environment.artifact_store().is_some(),
+        runtime.artifact_store().is_some(),
         &mut issues,
     );
     check_builtin(
         advertised,
         BASIC_FILESYSTEM_CAPABILITY,
-        environment.filesystem().is_some(),
+        runtime.filesystem().is_some(),
         &mut issues,
     );
     check_builtin(
         advertised,
         CODE_INTELLIGENCE_CAPABILITY,
-        environment.code_intelligence().is_some(),
+        runtime.code_intelligence().is_some(),
         &mut issues,
     );
     check_builtin(
         advertised,
         MEDIA_PROCESSING_CAPABILITY,
-        environment.media_processing().is_some(),
+        runtime.media_processing().is_some(),
         &mut issues,
     );
 

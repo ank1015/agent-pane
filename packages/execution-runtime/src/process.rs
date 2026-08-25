@@ -15,7 +15,7 @@ use crate::{ExecutionResult, OperationContext};
 pub type ProcessEventStream =
     Pin<Box<dyn Stream<Item = ExecutionResult<ProcessEvent>> + Send + 'static>>;
 
-/// Durable process and PTY sessions owned by the target environment.
+/// Durable process and PTY sessions owned by the target runtime.
 #[async_trait]
 pub trait ProcessRuntime: Send + Sync {
     async fn start(

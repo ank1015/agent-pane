@@ -4,7 +4,7 @@ Async Rust interfaces implemented by execution backends.
 
 This crate composes the versioned contracts from `execution-contracts` into:
 
-- `ExecutionEnvironment`
+- `ExecutionRuntime`
 - `WorkspaceQuery`
 - `WorkspaceMutation`
 - `ProcessRuntime`
