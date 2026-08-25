@@ -5,7 +5,6 @@
 //! internal modules rather than exposed as different machine providers.
 
 mod artifacts;
-mod environment;
 mod error;
 mod filesystem;
 mod mutation;
@@ -13,7 +12,8 @@ mod path_resolver;
 mod platform;
 mod process;
 mod query;
+mod runtime;
 
-pub use environment::{LocalExecutionConfig, LocalExecutionEnvironment, LocalWorkspaceRoot};
 pub use error::LocalExecutionError;
 pub use path_resolver::LocalNativeGrant;
+pub use runtime::{LocalExecutionRuntime, LocalRuntimeConfig, LocalWorkspaceRoot};

@@ -1,16 +1,16 @@
 use std::time::Duration;
 
 use execution_contracts::{
-    ApplyMutationRequest, CommandSpec, ContentSource, DiagnosticsMode, EnvironmentId,
-    EnvironmentInheritance, EnvironmentVariables, ExecutionId, ExecutionPersistence,
-    ExecutionPolicy, ExecutionState, FormatMode, InspectExecutionRequest, ListRequest, ListSort,
-    MachineId, MutationAtomicity, MutationOperation, MutationPlan, MutationPostActions,
-    NetworkMode, OperationId, PathSpec, ProcessEventKind, ProcessOutputPolicy, ReadMode,
-    ReadRequest, SandboxMode, SearchKind, SearchRequest, StartExecutionRequest, StdinMode,
-    TerminateExecutionRequest, TextPageRequest, WorkspaceRootId,
+    ApplyMutationRequest, CommandSpec, ContentSource, DiagnosticsMode, EnvironmentInheritance,
+    EnvironmentVariables, ExecutionId, ExecutionPersistence, ExecutionPolicy, ExecutionState,
+    FormatMode, InspectExecutionRequest, ListRequest, ListSort, MachineId, MutationAtomicity,
+    MutationOperation, MutationPlan, MutationPostActions, NetworkMode, OperationId, PathSpec,
+    ProcessEventKind, ProcessOutputPolicy, ReadMode, ReadRequest, SandboxMode, SearchKind,
+    SearchRequest, StartExecutionRequest, StdinMode, TerminateExecutionRequest, TextPageRequest,
+    WorkspaceRootId,
 };
-use execution_local::{LocalExecutionConfig, LocalExecutionEnvironment, LocalWorkspaceRoot};
-use execution_runtime::{ExecutionEnvironment, OperationContext};
+use execution_local::{LocalExecutionRuntime, LocalRuntimeConfig, LocalWorkspaceRoot};
+use execution_runtime::{ExecutionRuntime, OperationContext};
 use futures_util::StreamExt;
 use tempfile::TempDir;
 
@@ -26,7 +26,7 @@ fn workspace(path: &str) -> PathSpec {
     PathSpec::workspace(id::<WorkspaceRootId>("root-1"), path)
 }
 
-async fn environment() -> (TempDir, LocalExecutionEnvironment) {
+async fn runtime() -> (TempDir, LocalExecutionRuntime) {
     let directory = tempfile::tempdir().expect("temporary directory");
     tokio::fs::create_dir_all(directory.path().join("workspace/src"))
         .await
@@ -37,9 +37,8 @@ async fn environment() -> (TempDir, LocalExecutionEnvironment) {
     )
     .await
     .expect("write fixture");
-    let environment = LocalExecutionEnvironment::new(LocalExecutionConfig {
+    let runtime = LocalExecutionRuntime::new(LocalRuntimeConfig {
         machine_id: id::<MachineId>("machine-1"),
-        environment_id: id::<EnvironmentId>("host"),
         name: "Local fixture".to_owned(),
         state_directory: directory.path().join("state"),
         workspace_roots: vec![LocalWorkspaceRoot {
@@ -51,28 +50,28 @@ async fn environment() -> (TempDir, LocalExecutionEnvironment) {
         native_grants: Vec::new(),
     })
     .await
-    .expect("local environment");
-    (directory, environment)
+    .expect("local runtime");
+    (directory, runtime)
 }
 
 #[tokio::test]
 async fn advertises_a_consistent_local_capability_set() {
-    let (_directory, environment) = environment().await;
-    environment
+    let (_directory, runtime) = runtime().await;
+    runtime
         .validate_capabilities()
         .expect("capabilities are consistent");
-    assert_eq!(environment.descriptor().workspace_roots.len(), 1);
-    assert!(environment.workspace_mutation().is_some());
-    assert!(environment.process_runtime().is_some());
-    assert!(environment.artifact_store().is_some());
-    assert!(environment.filesystem().is_some());
+    assert_eq!(runtime.descriptor().workspace_roots.len(), 1);
+    assert!(runtime.workspace_mutation().is_some());
+    assert!(runtime.process_runtime().is_some());
+    assert!(runtime.artifact_store().is_some());
+    assert!(runtime.filesystem().is_some());
 }
 
 #[tokio::test]
 async fn reads_lists_and_searches_with_bounded_results() {
-    let (_directory, environment) = environment().await;
+    let (_directory, runtime) = runtime().await;
     let context = OperationContext::new();
-    let query = environment.workspace_query();
+    let query = runtime.workspace_query();
     let read = query
         .read(
             &context,
@@ -143,14 +142,14 @@ async fn reads_lists_and_searches_with_bounded_results() {
 async fn rejects_symlinks_that_escape_a_workspace_root() {
     use std::os::unix::fs::symlink;
 
-    let (directory, environment) = environment().await;
+    let (directory, runtime) = runtime().await;
     let outside = directory.path().join("outside.txt");
     tokio::fs::write(&outside, "secret")
         .await
         .expect("write outside fixture");
     symlink(&outside, directory.path().join("workspace/escape")).expect("create escaping symlink");
 
-    let error = environment
+    let error = runtime
         .workspace_query()
         .read(
             &OperationContext::new(),
@@ -170,10 +169,8 @@ async fn rejects_symlinks_that_escape_a_workspace_root() {
 
 #[tokio::test]
 async fn applies_mutations_idempotently() {
-    let (directory, environment) = environment().await;
-    let mutation = environment
-        .workspace_mutation()
-        .expect("mutation capability");
+    let (directory, runtime) = runtime().await;
+    let mutation = runtime.workspace_mutation().expect("mutation capability");
     let operation_id = id::<OperationId>("create-1");
     let request = ApplyMutationRequest {
         operation_id: operation_id.clone(),
@@ -211,8 +208,8 @@ async fn applies_mutations_idempotently() {
 
 #[tokio::test]
 async fn runs_a_process_and_replays_ordered_output() {
-    let (_directory, environment) = environment().await;
-    let runtime = environment.process_runtime().expect("process capability");
+    let (_directory, runtime) = runtime().await;
+    let runtime = runtime.process_runtime().expect("process capability");
     let execution_id = id::<ExecutionId>("exec-1");
     runtime
         .start(
@@ -297,8 +294,8 @@ async fn runs_a_process_and_replays_ordered_output() {
 #[cfg(unix)]
 #[tokio::test]
 async fn terminating_a_shell_kills_its_descendants() {
-    let (directory, environment) = environment().await;
-    let runtime = environment.process_runtime().expect("process capability");
+    let (directory, runtime) = runtime().await;
+    let runtime = runtime.process_runtime().expect("process capability");
     let execution_id = id::<ExecutionId>("process-tree-1");
     runtime
         .start(
@@ -375,8 +372,8 @@ async fn terminating_a_shell_kills_its_descendants() {
 
 #[tokio::test]
 async fn runs_a_real_pty_process() {
-    let (_directory, environment) = environment().await;
-    let runtime = environment.process_runtime().expect("process capability");
+    let (_directory, runtime) = runtime().await;
+    let runtime = runtime.process_runtime().expect("process capability");
     let execution_id = id::<ExecutionId>("pty-1");
     runtime
         .start(

@@ -25,5 +25,5 @@ Current first-pass limitations:
   than silently running without isolation.
 - Mutation preparation verifies strong file revisions but does not yet provide
   cross-file rollback, so results report `atomic: false`.
-- Artifact metadata is maintained for the lifetime of the environment instance;
+- Artifact metadata is maintained for the lifetime of the runtime instance;
   persistent indexing and cloud upload belong in the machine service layer.

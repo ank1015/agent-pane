@@ -1,12 +1,12 @@
 use std::{path::PathBuf, sync::Arc};
 
 use execution_contracts::{
-    ARTIFACTS_CAPABILITY, BASIC_FILESYSTEM_CAPABILITY, Capability, EnvironmentDescriptor,
-    EnvironmentId, MachineId, OperatingSystem, PROCESS_SESSION_CAPABILITY, PathConvention,
-    ProtocolVersion, WORKSPACE_MUTATION_CAPABILITY, WORKSPACE_QUERY_CAPABILITY, WorkspaceRootId,
+    ARTIFACTS_CAPABILITY, BASIC_FILESYSTEM_CAPABILITY, Capability, MachineDescriptor, MachineId,
+    OperatingSystem, PROCESS_SESSION_CAPABILITY, PathConvention, ProtocolVersion,
+    WORKSPACE_MUTATION_CAPABILITY, WORKSPACE_QUERY_CAPABILITY, WorkspaceRootId,
 };
 use execution_runtime::{
-    ArtifactStore, BasicFileSystem, ExecutionEnvironment, ProcessRuntime, WorkspaceMutation,
+    ArtifactStore, BasicFileSystem, ExecutionRuntime, ProcessRuntime, WorkspaceMutation,
     WorkspaceQuery, validate_capability_consistency,
 };
 
@@ -30,17 +30,16 @@ pub struct LocalWorkspaceRoot {
 }
 
 #[derive(Clone, Debug)]
-pub struct LocalExecutionConfig {
+pub struct LocalRuntimeConfig {
     pub machine_id: MachineId,
-    pub environment_id: EnvironmentId,
     pub name: String,
     pub state_directory: PathBuf,
     pub workspace_roots: Vec<LocalWorkspaceRoot>,
     pub native_grants: Vec<LocalNativeGrant>,
 }
 
-pub struct LocalExecutionEnvironment {
-    descriptor: EnvironmentDescriptor,
+pub struct LocalExecutionRuntime {
+    descriptor: MachineDescriptor,
     query: LocalWorkspaceQuery,
     mutation: LocalWorkspaceMutation,
     process: LocalProcessRuntime,
@@ -48,11 +47,11 @@ pub struct LocalExecutionEnvironment {
     filesystem: LocalFileSystem,
 }
 
-impl LocalExecutionEnvironment {
-    pub async fn new(config: LocalExecutionConfig) -> Result<Self, LocalExecutionError> {
+impl LocalExecutionRuntime {
+    pub async fn new(config: LocalRuntimeConfig) -> Result<Self, LocalExecutionError> {
         if config.name.trim().is_empty() {
             return Err(LocalExecutionError::InvalidConfiguration(
-                "environment name must not be empty".to_owned(),
+                "machine name must not be empty".to_owned(),
             ));
         }
         tokio::fs::create_dir_all(&config.state_directory).await?;
@@ -70,10 +69,9 @@ impl LocalExecutionEnvironment {
         .await?;
         let process = LocalProcessRuntime::new(Arc::clone(&resolver), Arc::clone(&artifacts));
 
-        let descriptor = EnvironmentDescriptor {
+        let descriptor = MachineDescriptor {
             protocol_version: ProtocolVersion::V1,
             machine_id: config.machine_id,
-            environment_id: config.environment_id,
             name: config.name,
             operating_system: local_operating_system(),
             architecture: std::env::consts::ARCH.to_owned(),
@@ -92,7 +90,7 @@ impl LocalExecutionEnvironment {
             .collect(),
         };
 
-        let environment = Self {
+        let runtime = Self {
             descriptor,
             query,
             mutation,
@@ -100,14 +98,14 @@ impl LocalExecutionEnvironment {
             artifacts,
             filesystem,
         };
-        validate_capability_consistency(&environment)
+        validate_capability_consistency(&runtime)
             .map_err(|source| LocalExecutionError::InvalidConfiguration(source.to_string()))?;
-        Ok(environment)
+        Ok(runtime)
     }
 }
 
-impl ExecutionEnvironment for LocalExecutionEnvironment {
-    fn descriptor(&self) -> &EnvironmentDescriptor {
+impl ExecutionRuntime for LocalExecutionRuntime {
+    fn descriptor(&self) -> &MachineDescriptor {
         &self.descriptor
     }
 

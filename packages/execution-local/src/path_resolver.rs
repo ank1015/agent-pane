@@ -9,8 +9,8 @@ use execution_contracts::{
 use url::Url;
 
 use crate::{
-    environment::LocalWorkspaceRoot,
     error::{LocalExecutionError, error, io_error},
+    runtime::LocalWorkspaceRoot,
 };
 
 /// Explicit authorization for native file URIs outside configured workspaces.
