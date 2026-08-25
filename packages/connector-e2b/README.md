@@ -20,10 +20,11 @@ Each requested user process has a Python wrapper only for that process's
 lifetime so it can own the child process, PTY, control channel, and output
 journal. There is no resident connector service in the sandbox.
 
-The caller owns E2B sandbox creation, timeout extension, pausing, and deletion.
-Construct `E2bConnectionConfig` from the sandbox ID and envd access token, then
-provide target-side workspace roots and a state directory through
-`E2bEnvironmentConfig`.
+The caller owns lifecycle orchestration. `create_from_snapshot(api_key,
+snapshot_id)` creates an E2B sandbox through the control API and returns its
+sandbox ID. Construct `E2bConnectionConfig` from that ID and the returned envd
+access token once connection metadata is resolved, then provide target-side
+workspace roots and a state directory through `E2bRuntimeConfig`.
 
 Current provider constraints are explicit:
 
