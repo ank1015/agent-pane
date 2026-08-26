@@ -4,6 +4,7 @@ import { TableActionsMenu } from '../../components/TableActionsMenu'
 import { AddSandboxEnvironmentTemplateDialog } from './AddSandboxEnvironmentTemplateDialog'
 import {
   type SandboxEnvironmentTemplate,
+  type SandboxProvider,
   useSandboxEnvironmentTemplates,
   useSandboxSnapshots,
 } from './machine-queries'
@@ -17,12 +18,14 @@ type SandboxAccountEnvironmentTemplatesProps = {
   accountId: string
   accountName: string
   isAccountPending: boolean
+  provider?: SandboxProvider
 }
 
 export function SandboxAccountEnvironmentTemplates({
   accountId,
   accountName,
   isAccountPending,
+  provider,
 }: SandboxAccountEnvironmentTemplatesProps) {
   const [isAddOpen, setIsAddOpen] = useState(false)
   const [renameTemplate, setRenameTemplate] =
@@ -57,7 +60,7 @@ export function SandboxAccountEnvironmentTemplates({
           <button
             type="button"
             className="cursor-button provider-add-button"
-            disabled={isAccountPending}
+            disabled={isAccountPending || provider === undefined}
             onClick={() => setIsAddOpen(true)}
           >
             Add
@@ -96,14 +99,17 @@ export function SandboxAccountEnvironmentTemplates({
         </div>
       </section>
 
-      <AddSandboxEnvironmentTemplateDialog
-        accountId={accountId}
-        open={isAddOpen}
-        snapshots={snapshots.data ?? []}
-        snapshotsError={snapshots.isError}
-        snapshotsPending={snapshots.isPending}
-        onClose={() => setIsAddOpen(false)}
-      />
+      {provider !== undefined ? (
+        <AddSandboxEnvironmentTemplateDialog
+          accountId={accountId}
+          open={isAddOpen}
+          provider={provider}
+          snapshots={snapshots.data ?? []}
+          snapshotsError={snapshots.isError}
+          snapshotsPending={snapshots.isPending}
+          onClose={() => setIsAddOpen(false)}
+        />
+      ) : null}
       {renameTemplate !== null ? (
         <UpdateEnvironmentTemplateNameDialog
           template={renameTemplate}

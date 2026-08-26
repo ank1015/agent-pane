@@ -1,6 +1,6 @@
 import { useCallback, useId, useState } from 'react'
 import { Dialog } from '../../components/Dialog'
-import { useCreateE2bSnapshot } from './machine-queries'
+import { useCreateSandboxSnapshot } from './machine-queries'
 
 type CreateSnapshotDialogProps = {
   accountId: string
@@ -17,7 +17,7 @@ export function CreateSnapshotDialog({
 }: CreateSnapshotDialogProps) {
   const [name, setName] = useState('')
   const nameId = useId()
-  const createSnapshot = useCreateE2bSnapshot()
+  const createSnapshot = useCreateSandboxSnapshot()
   const resetCreateSnapshot = createSnapshot.reset
 
   const closeDialog = useCallback(() => {

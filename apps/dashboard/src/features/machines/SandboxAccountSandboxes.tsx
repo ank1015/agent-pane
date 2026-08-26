@@ -5,7 +5,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { useState } from 'react'
 import { TableActionsMenu } from '../../components/TableActionsMenu'
-import { AddE2bSandboxDialog } from './AddE2bSandboxDialog'
+import { AddSandboxDialog } from './AddSandboxDialog'
 import { CreateSnapshotDialog } from './CreateSnapshotDialog'
 import type {
   SandboxConnectorAccount,
@@ -37,8 +37,12 @@ export function SandboxAccountSandboxes({
   const [renameSandbox, setRenameSandbox] = useState<SandboxMachine | null>(
     null,
   )
-  const isE2b = account?.provider === 'e2b'
-  const sandboxes = useSandboxMachines(accountId, isE2b)
+  const isManagedProvider =
+    account?.provider === 'e2b' ||
+    account?.provider === 'daytona' ||
+    account?.provider === 'blaxel' ||
+    account?.provider === 'tensorlake'
+  const sandboxes = useSandboxMachines(accountId, isManagedProvider)
 
   return (
     <div className="cursor-container">
@@ -52,7 +56,7 @@ export function SandboxAccountSandboxes({
       >
         <div className="providers-section-header">
           <h2 id="created-sandboxes-title">Created Sandboxes</h2>
-          {isE2b ? (
+          {isManagedProvider ? (
             <button
               type="button"
               className="cursor-button provider-add-button"
@@ -86,7 +90,7 @@ export function SandboxAccountSandboxes({
             <tbody>
               <SandboxRows
                 isAccountPending={isAccountPending}
-                isE2b={isE2b}
+                isManagedProvider={isManagedProvider}
                 query={sandboxes}
                 onSnapshot={setSnapshotSandbox}
                 onUpdateName={setRenameSandbox}
@@ -96,10 +100,11 @@ export function SandboxAccountSandboxes({
         </div>
       </section>
 
-      {isE2b ? (
-        <AddE2bSandboxDialog
+      {isManagedProvider && account !== undefined ? (
+        <AddSandboxDialog
           accountId={accountId}
           open={isAddOpen}
+          provider={account.provider}
           onClose={() => setIsAddOpen(false)}
         />
       ) : null}
@@ -123,13 +128,13 @@ export function SandboxAccountSandboxes({
 
 function SandboxRows({
   isAccountPending,
-  isE2b,
+  isManagedProvider,
   query,
   onSnapshot,
   onUpdateName,
 }: {
   isAccountPending: boolean
-  isE2b: boolean
+  isManagedProvider: boolean
   query: ReturnType<typeof useSandboxMachines>
   onSnapshot: (sandbox: SandboxMachine) => void
   onUpdateName: (sandbox: SandboxMachine) => void
@@ -137,7 +142,7 @@ function SandboxRows({
   if (isAccountPending) {
     return <SandboxTableMessage message="Loading sandboxes…" />
   }
-  if (!isE2b) {
+  if (!isManagedProvider) {
     return <SandboxTableMessage message="No sandboxes present" />
   }
   if (query.isPending) {

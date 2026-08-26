@@ -1,34 +1,41 @@
 import { useCallback, useId, useState } from 'react'
 import { Dialog } from '../../components/Dialog'
-import { useCreateE2bSandbox } from './machine-queries'
+import {
+  type SandboxProvider,
+  useCreateSandbox,
+} from './machine-queries'
 
 type AddSandboxStep = 'name' | 'template'
 
-type AddE2bSandboxDialogProps = {
+type AddSandboxDialogProps = {
   accountId: string
   open: boolean
+  provider: SandboxProvider
   onClose: () => void
 }
 
-export function AddE2bSandboxDialog({
+export function AddSandboxDialog({
   accountId,
   open,
+  provider,
   onClose,
-}: AddE2bSandboxDialogProps) {
+}: AddSandboxDialogProps) {
   const [step, setStep] = useState<AddSandboxStep>('name')
   const [name, setName] = useState('')
   const [templateId, setTemplateId] = useState('')
   const nameId = useId()
   const templateIdId = useId()
-  const createSandbox = useCreateE2bSandbox()
+  const createSandbox = useCreateSandbox()
+  const resetCreateSandbox = createSandbox.reset
+  const usesTemplate = provider === 'e2b'
 
   const closeDialog = useCallback(() => {
-    createSandbox.reset()
+    resetCreateSandbox()
     setStep('name')
     setName('')
     setTemplateId('')
     onClose()
-  }, [createSandbox, onClose])
+  }, [onClose, resetCreateSandbox])
 
   const finish = async () => {
     const normalizedName = name.trim()
@@ -42,26 +49,27 @@ export function AddE2bSandboxDialog({
         accountId,
         name: normalizedName,
         templateId:
-          normalizedTemplateId.length === 0
-            ? undefined
-            : normalizedTemplateId,
+          usesTemplate && normalizedTemplateId.length > 0
+            ? normalizedTemplateId
+            : undefined,
       })
       closeDialog()
     } catch {
-      // The mutation error is rendered on the template step.
+      // The mutation error is rendered on the current step.
     }
   }
 
   const runPrimaryAction = () => {
-    if (step === 'name') {
+    if (step === 'name' && usesTemplate) {
       if (name.trim().length > 0) {
         setStep('template')
       }
       return
     }
-
     void finish()
   }
+
+  const isFinishing = !usesTemplate || step === 'template'
 
   return (
     <Dialog
@@ -90,11 +98,11 @@ export function AddE2bSandboxDialog({
             disabled={createSandbox.isPending || name.trim().length === 0}
             onClick={runPrimaryAction}
           >
-            {step === 'name'
-              ? 'Next'
-              : createSandbox.isPending
+            {isFinishing
+              ? createSandbox.isPending
                 ? 'Creating...'
-                : 'Finish'}
+                : 'Finish'
+              : 'Next'}
           </button>
         </>
       }
@@ -116,10 +124,19 @@ export function AddE2bSandboxDialog({
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && name.trim().length > 0) {
                   event.preventDefault()
-                  setStep('template')
+                  if (usesTemplate) {
+                    setStep('template')
+                  } else {
+                    void finish()
+                  }
                 }
               }}
             />
+            {!usesTemplate && createSandbox.isError ? (
+              <p className="provider-create-error">
+                {createSandbox.error.message}
+              </p>
+            ) : null}
           </div>
         ) : (
           <div className="add-environment-field">

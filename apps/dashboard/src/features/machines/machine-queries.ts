@@ -112,13 +112,13 @@ export type CreateMachineEnvironmentInput = {
   path: string
 }
 
-export type CreateE2bSandboxInput = {
+export type CreateSandboxInput = {
   accountId: string
   name: string
   templateId?: string
 }
 
-export type CreateE2bSnapshotInput = {
+export type CreateSandboxSnapshotInput = {
   accountId: string
   sandboxId: string
   name: string
@@ -163,7 +163,7 @@ type MachineNameUpdatedResponse = {
   }
 }
 
-type E2bSandboxCreated = {
+type SandboxCreated = {
   machine: {
     machine_id: string
     name: string
@@ -171,7 +171,7 @@ type E2bSandboxCreated = {
   }
   sandbox_account_id: string
   sandbox_id: string
-  template_id: string
+  created_from: string | null
 }
 
 export const machineKeys = {
@@ -252,12 +252,12 @@ export function useSandboxEnvironmentTemplates(accountId: string) {
   })
 }
 
-export function useCreateE2bSandbox() {
+export function useCreateSandbox() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: ({ accountId, name, templateId }: CreateE2bSandboxInput) =>
-      postJson<E2bSandboxCreated>(
+    mutationFn: ({ accountId, name, templateId }: CreateSandboxInput) =>
+      postJson<SandboxCreated>(
         `/api/machines/sandbox-accounts/${encodeURIComponent(accountId)}/sandboxes`,
         {
           name,
@@ -270,7 +270,7 @@ export function useCreateE2bSandbox() {
         sandbox_account_id: created.sandbox_account_id,
         sandbox_id: created.sandbox_id,
         name: created.machine.name,
-        created_from: created.template_id,
+        created_from: created.created_from,
         created_at: created.machine.created_at,
       }
       const queryKey = machineKeys.sandboxes(created.sandbox_account_id)
@@ -282,7 +282,7 @@ export function useCreateE2bSandbox() {
   })
 }
 
-export function useCreateE2bSnapshot() {
+export function useCreateSandboxSnapshot() {
   const queryClient = useQueryClient()
 
   return useMutation({
@@ -290,7 +290,7 @@ export function useCreateE2bSnapshot() {
       accountId,
       sandboxId,
       name,
-    }: CreateE2bSnapshotInput) =>
+    }: CreateSandboxSnapshotInput) =>
       postJson<SandboxSnapshot>(
         `/api/machines/sandbox-accounts/${encodeURIComponent(accountId)}/sandboxes/${encodeURIComponent(sandboxId)}/snapshots`,
         { name },

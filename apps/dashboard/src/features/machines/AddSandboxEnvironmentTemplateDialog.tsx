@@ -3,15 +3,24 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useId, useMemo, useState } from 'react'
 import { Dialog } from '../../components/Dialog'
 import {
+  type SandboxProvider,
   type SandboxSnapshot,
   useCreateSandboxEnvironmentTemplate,
 } from './machine-queries'
+
+const WORKSPACE_ROOTS: Record<SandboxProvider, string> = {
+  e2b: '/home/user',
+  daytona: '/home/daytona',
+  blaxel: '/blaxel',
+  tensorlake: '/home/tl-user',
+}
 
 type AddTemplateStep = 'name' | 'snapshot' | 'path' | 'setup'
 
 type AddSandboxEnvironmentTemplateDialogProps = {
   accountId: string
   open: boolean
+  provider: SandboxProvider
   snapshots: SandboxSnapshot[]
   snapshotsError: boolean
   snapshotsPending: boolean
@@ -21,6 +30,7 @@ type AddSandboxEnvironmentTemplateDialogProps = {
 export function AddSandboxEnvironmentTemplateDialog({
   accountId,
   open,
+  provider,
   snapshots,
   snapshotsError,
   snapshotsPending,
@@ -48,7 +58,11 @@ export function AddSandboxEnvironmentTemplateDialog({
   const normalizedSnapshotId = snapshotId.trim()
   const normalizedSnapshotQuery = snapshotQuery.trim()
   const normalizedRelativePath = path.trim().replace(/^\/+/, '')
-  const normalizedPath = `/${normalizedRelativePath}`
+  const workspaceRoot = WORKSPACE_ROOTS[provider]
+  const normalizedPath =
+    normalizedRelativePath.length === 0
+      ? workspaceRoot
+      : `${workspaceRoot}/${normalizedRelativePath}`
   const filteredSnapshots = useMemo(() => {
     const query = normalizedSnapshotQuery.toLocaleLowerCase()
     if (query.length === 0) {
@@ -402,9 +416,9 @@ export function AddSandboxEnvironmentTemplateDialog({
               <span
                 id={pathPrefixId}
                 className="add-environment-path-prefix"
-                title="Sandbox root"
+                title="Sandbox workspace root"
               >
-                /
+                {workspaceRoot}/
               </span>
               <input
                 id={pathId}

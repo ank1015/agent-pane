@@ -112,6 +112,7 @@ export function SandboxAccountPage({ accountId }: { accountId: string }) {
             accountId={accountId}
             accountName={accountName}
             isAccountPending={isInventoryPending}
+            provider={account?.provider}
           />
         ) : null}
         {isSandboxesPage ? (
