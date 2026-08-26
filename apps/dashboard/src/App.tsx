@@ -64,18 +64,23 @@ function App() {
   const expandSidebar = useDashboardStore((state) => state.expandSidebar)
   const toggleSidebar = useDashboardStore((state) => state.toggleSidebar)
   const { pathname } = useLocation()
-  const sandboxAccountMatch = matchPath(
-    '/machine/accounts/:accountId',
-    pathname,
-  )
+  const sandboxAccountMatch =
+    matchPath('/machine/accounts/:accountId', pathname) ??
+    matchPath('/machine/accounts/:accountId/*', pathname)
   const machineMatch = matchPath('/machines/:machineId', pathname)
   const activeItem =
-    sandboxAccountMatch !== null
-      ? NAVIGATION.find((item) => item.id === 'machines')!
-      : NAVIGATION.find((item) => item.path === pathname) ?? NAVIGATION[0]
+    NAVIGATION.find((item) => item.path === pathname) ?? NAVIGATION[0]
 
   if (machineMatch !== null) {
     return <MachinePage machineId={machineMatch.params.machineId ?? ''} />
+  }
+
+  if (sandboxAccountMatch !== null) {
+    return (
+      <SandboxAccountPage
+        accountId={sandboxAccountMatch.params.accountId ?? ''}
+      />
+    )
   }
 
   return (
@@ -166,7 +171,6 @@ function App() {
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route path="/projects" element={null} />
           <Route path="/machines" element={null} />
-          <Route path="/machine/accounts/:accountId" element={null} />
           <Route path="/providers" element={null} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
         </Routes>
@@ -187,11 +191,7 @@ function App() {
             </header>
           ) : null}
 
-          {sandboxAccountMatch !== null ? (
-            <SandboxAccountPage
-              accountId={sandboxAccountMatch.params.accountId ?? ''}
-            />
-          ) : activeItem.id === 'providers' ? (
+          {activeItem.id === 'providers' ? (
             <ProvidersTable />
           ) : activeItem.id === 'machines' ? (
             <MachinesSection />
