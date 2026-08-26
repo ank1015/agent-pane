@@ -118,12 +118,14 @@ The control-plane API requires `EXECUTION_GATEWAY_CONTROL_TOKEN`:
 - `GET /v1/control/snapshots?provider={provider}&sandbox_account_id={account_id}&sandbox_id={sandbox_id}`
 - `POST /v1/control/snapshots`
 - `GET /v1/control/snapshots/{snapshot_id}`
+- `PATCH /v1/control/snapshots/{snapshot_id}`
 - `DELETE /v1/control/snapshots/{snapshot_id}`
 
 Create requests have this shape:
 
 ```json
 {
+  "name": "Ready workspace",
   "provider": "e2b",
   "sandbox_account_id": "optional-account-id",
   "provider_snapshot_id": "provider-snapshot-id",
@@ -135,14 +137,18 @@ If `sandbox_account_id` is omitted, the provider's default enabled account is
 chosen when the snapshot record is created. Supplying it chooses that account
 explicitly. The account must be enabled and must belong to `provider`.
 
-The API manages the gateway's snapshot records. Provider-specific creation and
-deletion calls are separate concerns and are not performed by these endpoints.
+The generic snapshot API manages the gateway's metadata records. Provider-backed
+snapshot creation is exposed through provider-specific sandbox routes. Deleting
+a snapshot currently removes only the gateway record.
 
 ## Sandbox environment templates
 
-A sandbox environment template combines a fixed snapshot with an absolute
-working directory and an optional creation script. Materializing a template
-creates a fresh provider sandbox from the snapshot, waits for it to be ready,
+A sandbox environment template combines a fixed snapshot with a working
+directory beneath the provider's writable workspace root and an optional
+creation script. The API represents that root as `/`, so `/project` resolves to
+`/home/user/project` on E2B, `/home/daytona/project` on Daytona,
+`/blaxel/project` on Blaxel, and `/home/tl-user/project` on Tensorlake.
+Materializing a template creates a fresh provider sandbox from the snapshot,
 runs the script in the requested directory, and returns a normal environment.
 Each call can run independently, allowing many environments from the same
 template in parallel.
@@ -180,6 +186,9 @@ The control-plane sandbox account API requires
 - `GET /v1/control/sandbox-accounts`
 - `POST /v1/control/sandbox-accounts`
 - `GET /v1/control/sandbox-accounts/{account_id}`
+- `GET /v1/control/sandbox-accounts/{account_id}/sandboxes`
+- `POST /v1/control/sandbox-accounts/{account_id}/sandboxes`
+- `POST /v1/control/sandbox-accounts/{account_id}/sandboxes/{sandbox_id}/snapshots`
 - `PUT /v1/control/sandbox-accounts/{account_id}/credentials`
 - `DELETE /v1/control/sandbox-accounts/{account_id}`
 
@@ -201,3 +210,33 @@ The optional `config` object holds non-secret provider settings such as the
 Blaxel workspace. `make_default` only controls which account is selected when
 a snapshot create request omits `sandbox_account_id`; materialization itself
 always uses the account fixed on the snapshot.
+
+For an E2B account, create a sandbox and register it as an execution machine
+with:
+
+```json
+{
+  "template_id": "base",
+  "name": "Optional machine name"
+}
+```
+
+If `name` is omitted, the gateway generates one. The gateway decrypts the API
+key belonging to the account in the route, creates the E2B sandbox, stores its
+secure connection token, and returns the provider sandbox ID together with the
+new machine summary.
+
+Creating an E2B snapshot uses the source provider sandbox ID in the route and
+accepts a display name:
+
+```json
+{
+  "name": "Ready workspace"
+}
+```
+
+The gateway verifies that the source sandbox belongs to the selected account,
+resumes it through E2B when needed, creates the provider snapshot with that
+account's credentials, and stores the returned E2B snapshot ID in `snapshots`.
+The supplied name is gateway display metadata; it is not used as an E2B
+template identifier.
