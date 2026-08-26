@@ -11,8 +11,8 @@ use tokio::{net::TcpListener, sync::mpsc};
 
 use super::ExecutionGatewayClient;
 use crate::machines::model::{
-    CreateE2bSandboxRequest, CreateE2bSnapshotRequest, CreateMachineEnvironmentRequest,
-    CreateSandboxAccountRequest, MachineInventory, SandboxProvider, SnapshotQuery,
+    CreateMachineEnvironmentRequest, CreateSandboxAccountRequest, CreateSandboxRequest,
+    CreateSandboxSnapshotRequest, MachineInventory, SandboxProvider, SnapshotQuery,
 };
 
 const E2B_ACCOUNT_ID: &str = "01992aa0-0000-7000-8000-000000000010";
@@ -276,12 +276,12 @@ async fn sandbox_list_uses_the_account_endpoint_and_authenticates() {
 }
 
 #[tokio::test]
-async fn e2b_sandbox_creation_forwards_the_selected_account_and_template() {
+async fn sandbox_creation_forwards_the_selected_account_and_template() {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel();
     let mock_gateway = Router::new()
         .route(
             &format!("/v1/control/sandbox-accounts/{E2B_ACCOUNT_ID}/sandboxes"),
-            post(capture_e2b_sandbox_create_request),
+            post(capture_sandbox_create_request),
         )
         .with_state(request_tx);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -297,10 +297,10 @@ async fn e2b_sandbox_creation_forwards_the_selected_account_and_template() {
     )
     .unwrap();
     let created = client
-        .create_e2b_sandbox(
+        .create_sandbox(
             E2B_ACCOUNT_ID.parse().unwrap(),
-            &CreateE2bSandboxRequest {
-                template_id: "base".to_owned(),
+            &CreateSandboxRequest {
+                template_id: Some("base".to_owned()),
                 name: Some("Development".to_owned()),
             },
         )
@@ -354,14 +354,14 @@ async fn snapshot_list_filters_by_account_and_authenticates() {
 }
 
 #[tokio::test]
-async fn e2b_snapshot_creation_forwards_the_account_sandbox_and_name() {
+async fn sandbox_snapshot_creation_forwards_the_account_sandbox_and_name() {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel();
     let mock_gateway = Router::new()
         .route(
             &format!(
                 "/v1/control/sandbox-accounts/{E2B_ACCOUNT_ID}/sandboxes/e2b-sandbox-1/snapshots"
             ),
-            post(capture_e2b_snapshot_create_request),
+            post(capture_sandbox_snapshot_create_request),
         )
         .with_state(request_tx);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -377,10 +377,10 @@ async fn e2b_snapshot_creation_forwards_the_account_sandbox_and_name() {
     )
     .unwrap();
     let created = client
-        .create_e2b_snapshot(
+        .create_sandbox_snapshot(
             E2B_ACCOUNT_ID.parse().unwrap(),
             "e2b-sandbox-1",
-            &CreateE2bSnapshotRequest {
+            &CreateSandboxSnapshotRequest {
                 name: "Ready workspace".to_owned(),
             },
         )
@@ -542,7 +542,7 @@ async fn capture_sandbox_list_request(
     }]))
 }
 
-async fn capture_e2b_sandbox_create_request(
+async fn capture_sandbox_create_request(
     State(request_tx): State<mpsc::UnboundedSender<(String, Value)>>,
     headers: HeaderMap,
     Json(body): Json<Value>,
@@ -576,7 +576,7 @@ async fn capture_e2b_sandbox_create_request(
             },
             "sandbox_account_id": E2B_ACCOUNT_ID,
             "sandbox_id": "e2b-sandbox-1",
-            "template_id": "base"
+            "created_from": "base"
         })),
     )
 }
@@ -595,7 +595,7 @@ async fn capture_snapshot_list_request(
     Json(snapshot_response())
 }
 
-async fn capture_e2b_snapshot_create_request(
+async fn capture_sandbox_snapshot_create_request(
     State(request_tx): State<mpsc::UnboundedSender<(String, Value)>>,
     headers: HeaderMap,
     Json(body): Json<Value>,

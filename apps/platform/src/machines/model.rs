@@ -86,24 +86,24 @@ pub struct SandboxMachine {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct CreateE2bSandboxRequest {
-    #[serde(default = "default_e2b_template_id")]
-    pub template_id: String,
+pub struct CreateSandboxRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct E2bSandboxCreated {
+pub struct SandboxCreated {
     pub machine: MachineSummary,
     pub sandbox_account_id: Uuid,
     pub sandbox_id: String,
-    pub template_id: String,
+    pub created_from: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct CreateE2bSnapshotRequest {
+pub struct CreateSandboxSnapshotRequest {
     pub name: String,
 }
 
@@ -207,10 +207,6 @@ fn empty_object() -> Value {
     serde_json::json!({})
 }
 
-fn default_e2b_template_id() -> String {
-    "base".to_owned()
-}
-
 fn is_empty_object(value: &Value) -> bool {
     value.as_object().is_some_and(serde_json::Map::is_empty)
 }
@@ -231,7 +227,7 @@ const fn is_false(value: &bool) -> bool {
 mod tests {
     use serde_json::json;
 
-    use super::{CreateE2bSandboxRequest, CreateSandboxAccountRequest, SandboxProvider};
+    use super::{CreateSandboxAccountRequest, CreateSandboxRequest, SandboxProvider};
 
     #[test]
     fn create_request_accepts_supported_sandbox_providers() {
@@ -269,12 +265,12 @@ mod tests {
     }
 
     #[test]
-    fn e2b_sandbox_creation_defaults_to_the_base_template() {
-        let request: CreateE2bSandboxRequest = serde_json::from_value(json!({
+    fn sandbox_creation_allows_the_provider_to_choose_its_default() {
+        let request: CreateSandboxRequest = serde_json::from_value(json!({
             "name": "Development"
         }))
         .unwrap();
 
-        assert_eq!(request.template_id, "base");
+        assert_eq!(request.template_id, None);
     }
 }

@@ -6,11 +6,11 @@ use uuid::Uuid;
 use crate::upstream::execution_gateway::{ExecutionGatewayClient, ExecutionGatewayError};
 use execution_protocol::{Environment, MachineSummary};
 use model::{
-    CreateE2bSandboxRequest, CreateE2bSnapshotRequest, CreateMachineEnvironmentRequest,
-    CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest, CreateSnapshotRequest,
-    E2bSandboxCreated, MachineInventory, RotateSandboxCredentialsRequest, SandboxAccount,
-    SandboxEnvironmentInstance, SandboxEnvironmentTemplate, SandboxMachine, Snapshot,
-    SnapshotQuery, UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
+    CreateMachineEnvironmentRequest, CreateSandboxAccountRequest,
+    CreateSandboxEnvironmentTemplateRequest, CreateSandboxRequest, CreateSandboxSnapshotRequest,
+    CreateSnapshotRequest, MachineInventory, RotateSandboxCredentialsRequest, SandboxAccount,
+    SandboxCreated, SandboxEnvironmentInstance, SandboxEnvironmentTemplate, SandboxMachine,
+    Snapshot, SnapshotQuery, UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
 };
 
 #[derive(Clone)]
@@ -92,22 +92,22 @@ impl MachineService {
         self.gateway.list_sandbox_machines(account_id).await
     }
 
-    async fn create_e2b_sandbox(
+    async fn create_sandbox(
         &self,
         account_id: Uuid,
-        request: &CreateE2bSandboxRequest,
-    ) -> Result<E2bSandboxCreated, ExecutionGatewayError> {
-        self.gateway.create_e2b_sandbox(account_id, request).await
+        request: &CreateSandboxRequest,
+    ) -> Result<SandboxCreated, ExecutionGatewayError> {
+        self.gateway.create_sandbox(account_id, request).await
     }
 
-    async fn create_e2b_snapshot(
+    async fn create_sandbox_snapshot(
         &self,
         account_id: Uuid,
         sandbox_id: &str,
-        request: &CreateE2bSnapshotRequest,
+        request: &CreateSandboxSnapshotRequest,
     ) -> Result<Snapshot, ExecutionGatewayError> {
         self.gateway
-            .create_e2b_snapshot(account_id, sandbox_id, request)
+            .create_sandbox_snapshot(account_id, sandbox_id, request)
             .await
     }
 

@@ -9,12 +9,12 @@ use uuid::Uuid;
 use crate::{
     error::execution_gateway_rejected_body,
     machines::model::{
-        CreateE2bSandboxRequest, CreateE2bSnapshotRequest, CreateMachineEnvironmentRequest,
-        CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest,
-        CreateSnapshotRequest, E2bSandboxCreated, MachineInventory,
-        RotateSandboxCredentialsRequest, SandboxAccount, SandboxEnvironmentInstance,
-        SandboxEnvironmentTemplate, SandboxMachine, Snapshot, SnapshotQuery, UpdateNameRequest,
-        UpdateSandboxEnvironmentTemplateRequest,
+        CreateMachineEnvironmentRequest, CreateSandboxAccountRequest,
+        CreateSandboxEnvironmentTemplateRequest, CreateSandboxRequest,
+        CreateSandboxSnapshotRequest, CreateSnapshotRequest, MachineInventory,
+        RotateSandboxCredentialsRequest, SandboxAccount, SandboxCreated,
+        SandboxEnvironmentInstance, SandboxEnvironmentTemplate, SandboxMachine, Snapshot,
+        SnapshotQuery, UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
     },
 };
 use execution_protocol::{Environment, MachineSummary};
@@ -168,11 +168,11 @@ impl ExecutionGatewayClient {
         .await
     }
 
-    pub(crate) async fn create_e2b_sandbox(
+    pub(crate) async fn create_sandbox(
         &self,
         account_id: Uuid,
-        request: &CreateE2bSandboxRequest,
-    ) -> Result<E2bSandboxCreated, ExecutionGatewayError> {
+        request: &CreateSandboxRequest,
+    ) -> Result<SandboxCreated, ExecutionGatewayError> {
         self.send_json(
             self.http
                 .post(self.url(&format!(
@@ -183,11 +183,11 @@ impl ExecutionGatewayClient {
         .await
     }
 
-    pub(crate) async fn create_e2b_snapshot(
+    pub(crate) async fn create_sandbox_snapshot(
         &self,
         account_id: Uuid,
         sandbox_id: &str,
-        request: &CreateE2bSnapshotRequest,
+        request: &CreateSandboxSnapshotRequest,
     ) -> Result<Snapshot, ExecutionGatewayError> {
         self.send_json(
             self.http

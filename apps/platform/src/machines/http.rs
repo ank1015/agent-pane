@@ -12,10 +12,10 @@ use uuid::Uuid;
 use super::{
     MachineService,
     model::{
-        CreateE2bSandboxRequest, CreateE2bSnapshotRequest, CreateMachineEnvironmentRequest,
-        CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest,
-        CreateSnapshotRequest, E2bSandboxCreated, MachineInventory, MachineResponse,
-        RotateSandboxCredentialsRequest, SandboxAccount, SandboxAccountResponse,
+        CreateMachineEnvironmentRequest, CreateSandboxAccountRequest,
+        CreateSandboxEnvironmentTemplateRequest, CreateSandboxRequest,
+        CreateSandboxSnapshotRequest, CreateSnapshotRequest, MachineInventory, MachineResponse,
+        RotateSandboxCredentialsRequest, SandboxAccount, SandboxAccountResponse, SandboxCreated,
         SandboxEnvironmentInstance, SandboxEnvironmentTemplate, SandboxMachine, Snapshot,
         SnapshotQuery, UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
     },
@@ -50,11 +50,11 @@ pub(super) fn router(service: MachineService) -> Router<AppState> {
         )
         .route(
             "/api/machines/sandbox-accounts/{account_id}/sandboxes",
-            get(list_sandbox_machines).post(create_e2b_sandbox),
+            get(list_sandbox_machines).post(create_sandbox),
         )
         .route(
             "/api/machines/sandbox-accounts/{account_id}/sandboxes/{sandbox_id}/snapshots",
-            axum::routing::post(create_e2b_snapshot),
+            axum::routing::post(create_sandbox_snapshot),
         )
         .route(
             "/api/machines/snapshots",
@@ -190,28 +190,25 @@ async fn list_sandbox_machines(
     Ok(Json(state.service.list_sandbox_machines(account_id).await?))
 }
 
-async fn create_e2b_sandbox(
+async fn create_sandbox(
     State(state): State<MachineState>,
     Path(account_id): Path<Uuid>,
-    payload: Result<Json<CreateE2bSandboxRequest>, JsonRejection>,
+    payload: Result<Json<CreateSandboxRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
-    let sandbox = state
-        .service
-        .create_e2b_sandbox(account_id, &request)
-        .await?;
-    Ok((StatusCode::CREATED, Json::<E2bSandboxCreated>(sandbox)).into_response())
+    let sandbox = state.service.create_sandbox(account_id, &request).await?;
+    Ok((StatusCode::CREATED, Json::<SandboxCreated>(sandbox)).into_response())
 }
 
-async fn create_e2b_snapshot(
+async fn create_sandbox_snapshot(
     State(state): State<MachineState>,
     Path((account_id, sandbox_id)): Path<(Uuid, String)>,
-    payload: Result<Json<CreateE2bSnapshotRequest>, JsonRejection>,
+    payload: Result<Json<CreateSandboxSnapshotRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
     let snapshot = state
         .service
-        .create_e2b_snapshot(account_id, &sandbox_id, &request)
+        .create_sandbox_snapshot(account_id, &sandbox_id, &request)
         .await?;
     Ok((StatusCode::CREATED, Json(snapshot)).into_response())
 }
