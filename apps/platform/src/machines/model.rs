@@ -74,6 +74,39 @@ pub struct MachineInventory {
     pub machine_daemons: Vec<MachineSummary>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct SandboxMachine {
+    pub machine_id: String,
+    pub sandbox_account_id: Uuid,
+    pub sandbox_id: String,
+    pub name: String,
+    pub created_from: Option<String>,
+    pub created_at: u64,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateE2bSandboxRequest {
+    #[serde(default = "default_e2b_template_id")]
+    pub template_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct E2bSandboxCreated {
+    pub machine: MachineSummary,
+    pub sandbox_account_id: Uuid,
+    pub sandbox_id: String,
+    pub template_id: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateE2bSnapshotRequest {
+    pub name: String,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateMachineEnvironmentRequest {
@@ -85,6 +118,7 @@ pub struct CreateMachineEnvironmentRequest {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Snapshot {
     pub id: Uuid,
+    pub name: String,
     pub sandbox_account_id: Uuid,
     pub provider: SandboxProvider,
     pub provider_snapshot_id: String,
@@ -95,6 +129,7 @@ pub struct Snapshot {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSnapshotRequest {
+    pub name: String,
     pub provider: SandboxProvider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_account_id: Option<Uuid>,
@@ -172,6 +207,10 @@ fn empty_object() -> Value {
     serde_json::json!({})
 }
 
+fn default_e2b_template_id() -> String {
+    "base".to_owned()
+}
+
 fn is_empty_object(value: &Value) -> bool {
     value.as_object().is_some_and(serde_json::Map::is_empty)
 }
@@ -192,7 +231,7 @@ const fn is_false(value: &bool) -> bool {
 mod tests {
     use serde_json::json;
 
-    use super::{CreateSandboxAccountRequest, SandboxProvider};
+    use super::{CreateE2bSandboxRequest, CreateSandboxAccountRequest, SandboxProvider};
 
     #[test]
     fn create_request_accepts_supported_sandbox_providers() {
@@ -227,5 +266,15 @@ mod tests {
             serde_json::to_value(SandboxProvider::Tensorlake).unwrap(),
             json!("tensorlake")
         );
+    }
+
+    #[test]
+    fn e2b_sandbox_creation_defaults_to_the_base_template() {
+        let request: CreateE2bSandboxRequest = serde_json::from_value(json!({
+            "name": "Development"
+        }))
+        .unwrap();
+
+        assert_eq!(request.template_id, "base");
     }
 }

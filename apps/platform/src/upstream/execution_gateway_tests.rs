@@ -11,8 +11,11 @@ use tokio::{net::TcpListener, sync::mpsc};
 
 use super::ExecutionGatewayClient;
 use crate::machines::model::{
-    CreateMachineEnvironmentRequest, CreateSandboxAccountRequest, MachineInventory, SandboxProvider,
+    CreateE2bSandboxRequest, CreateE2bSnapshotRequest, CreateMachineEnvironmentRequest,
+    CreateSandboxAccountRequest, MachineInventory, SandboxProvider, SnapshotQuery,
 };
+
+const E2B_ACCOUNT_ID: &str = "01992aa0-0000-7000-8000-000000000010";
 
 #[tokio::test]
 async fn create_sandbox_account_authenticates_and_forwards_the_secret_once() {
@@ -199,6 +202,198 @@ async fn environment_name_update_forwards_the_name() {
     assert_eq!(environment.name, "Renamed");
 }
 
+#[tokio::test]
+async fn snapshot_name_update_forwards_the_name() {
+    let snapshot_id = "01992aa0-0000-7000-8000-000000000020";
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let mock_gateway = Router::new()
+        .route(
+            &format!("/v1/control/snapshots/{snapshot_id}"),
+            axum::routing::patch(capture_snapshot_name_update_request),
+        )
+        .with_state(request_tx);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, mock_gateway).await.unwrap();
+    });
+
+    let client = ExecutionGatewayClient::new(
+        format!("http://{address}").parse().unwrap(),
+        "platform-control-token",
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let snapshot = client
+        .update_snapshot_name(
+            snapshot_id.parse().unwrap(),
+            &crate::machines::model::UpdateNameRequest {
+                name: "Renamed snapshot".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    let (authorization, body) = request_rx.recv().await.unwrap();
+
+    assert_eq!(authorization, "Bearer platform-control-token");
+    assert_eq!(body, json!({"name": "Renamed snapshot"}));
+    assert_eq!(snapshot.name, "Renamed snapshot");
+}
+
+#[tokio::test]
+async fn sandbox_list_uses_the_account_endpoint_and_authenticates() {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let mock_gateway = Router::new()
+        .route(
+            &format!("/v1/control/sandbox-accounts/{E2B_ACCOUNT_ID}/sandboxes"),
+            axum::routing::get(capture_sandbox_list_request),
+        )
+        .with_state(request_tx);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, mock_gateway).await.unwrap();
+    });
+
+    let client = ExecutionGatewayClient::new(
+        format!("http://{address}").parse().unwrap(),
+        "platform-control-token",
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let sandboxes = client
+        .list_sandbox_machines(E2B_ACCOUNT_ID.parse().unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        request_rx.recv().await.unwrap(),
+        "Bearer platform-control-token"
+    );
+    assert_eq!(sandboxes.len(), 1);
+    assert_eq!(sandboxes[0].sandbox_id, "e2b-sandbox-1");
+    assert_eq!(sandboxes[0].created_from.as_deref(), Some("base"));
+}
+
+#[tokio::test]
+async fn e2b_sandbox_creation_forwards_the_selected_account_and_template() {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let mock_gateway = Router::new()
+        .route(
+            &format!("/v1/control/sandbox-accounts/{E2B_ACCOUNT_ID}/sandboxes"),
+            post(capture_e2b_sandbox_create_request),
+        )
+        .with_state(request_tx);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, mock_gateway).await.unwrap();
+    });
+
+    let client = ExecutionGatewayClient::new(
+        format!("http://{address}").parse().unwrap(),
+        "platform-control-token",
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let created = client
+        .create_e2b_sandbox(
+            E2B_ACCOUNT_ID.parse().unwrap(),
+            &CreateE2bSandboxRequest {
+                template_id: "base".to_owned(),
+                name: Some("Development".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+    let (authorization, body) = request_rx.recv().await.unwrap();
+
+    assert_eq!(authorization, "Bearer platform-control-token");
+    assert_eq!(body, json!({"template_id": "base", "name": "Development"}));
+    assert_eq!(created.sandbox_id, "e2b-sandbox-1");
+    assert_eq!(created.machine.name, "Development");
+}
+
+#[tokio::test]
+async fn snapshot_list_filters_by_account_and_authenticates() {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let mock_gateway = Router::new()
+        .route(
+            "/v1/control/snapshots",
+            axum::routing::get(capture_snapshot_list_request),
+        )
+        .with_state(request_tx);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, mock_gateway).await.unwrap();
+    });
+
+    let client = ExecutionGatewayClient::new(
+        format!("http://{address}").parse().unwrap(),
+        "platform-control-token",
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let snapshots = client
+        .list_snapshots(&SnapshotQuery {
+            sandbox_account_id: Some(E2B_ACCOUNT_ID.parse().unwrap()),
+            ..SnapshotQuery::default()
+        })
+        .await
+        .unwrap();
+    let (authorization, query) = request_rx.recv().await.unwrap();
+
+    assert_eq!(authorization, "Bearer platform-control-token");
+    assert_eq!(
+        query.as_deref(),
+        Some("sandbox_account_id=01992aa0-0000-7000-8000-000000000010")
+    );
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].name, "Ready workspace");
+}
+
+#[tokio::test]
+async fn e2b_snapshot_creation_forwards_the_account_sandbox_and_name() {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let mock_gateway = Router::new()
+        .route(
+            &format!(
+                "/v1/control/sandbox-accounts/{E2B_ACCOUNT_ID}/sandboxes/e2b-sandbox-1/snapshots"
+            ),
+            post(capture_e2b_snapshot_create_request),
+        )
+        .with_state(request_tx);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, mock_gateway).await.unwrap();
+    });
+
+    let client = ExecutionGatewayClient::new(
+        format!("http://{address}").parse().unwrap(),
+        "platform-control-token",
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let created = client
+        .create_e2b_snapshot(
+            E2B_ACCOUNT_ID.parse().unwrap(),
+            "e2b-sandbox-1",
+            &CreateE2bSnapshotRequest {
+                name: "Ready workspace".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    let (authorization, body) = request_rx.recv().await.unwrap();
+
+    assert_eq!(authorization, "Bearer platform-control-token");
+    assert_eq!(body, json!({"name": "Ready workspace"}));
+    assert_eq!(created.name, "Ready workspace");
+    assert_eq!(created.sandbox_id, "e2b-sandbox-1");
+}
+
 async fn capture_create_request(
     State(request_tx): State<mpsc::UnboundedSender<(String, Value)>>,
     headers: HeaderMap,
@@ -305,4 +500,128 @@ async fn capture_environment_name_update_request(
         "path": "projects/example",
         "created_at": 1787443200000_u64
     }))
+}
+
+async fn capture_snapshot_name_update_request(
+    State(request_tx): State<mpsc::UnboundedSender<(String, Value)>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    request_tx.send((authorization, body)).unwrap();
+    let mut snapshot = snapshot_response()
+        .as_array()
+        .and_then(|snapshots| snapshots.first())
+        .cloned()
+        .unwrap();
+    snapshot["name"] = json!("Renamed snapshot");
+    Json(snapshot)
+}
+
+async fn capture_sandbox_list_request(
+    State(request_tx): State<mpsc::UnboundedSender<String>>,
+    headers: HeaderMap,
+) -> Json<Value> {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    request_tx.send(authorization).unwrap();
+    Json(json!([{
+        "machine_id": "machine-e2b-1",
+        "sandbox_account_id": E2B_ACCOUNT_ID,
+        "sandbox_id": "e2b-sandbox-1",
+        "name": "Development",
+        "created_from": "base",
+        "created_at": 1787443200000_u64
+    }]))
+}
+
+async fn capture_e2b_sandbox_create_request(
+    State(request_tx): State<mpsc::UnboundedSender<(String, Value)>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    request_tx.send((authorization, body)).unwrap();
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "machine": {
+                "machine_id": "machine-e2b-1",
+                "name": "Development",
+                "connector": "sandbox",
+                "online": true,
+                "descriptor": {
+                    "protocol_version": {"major": 1, "minor": 0},
+                    "machine_id": "machine-e2b-1",
+                    "name": "Development",
+                    "operating_system": {"type": "linux"},
+                    "architecture": "x86_64",
+                    "path_convention": "posix",
+                    "workspace_roots": [],
+                    "capabilities": []
+                },
+                "created_at": 1787443200000_u64,
+                "updated_at": 1787443200000_u64
+            },
+            "sandbox_account_id": E2B_ACCOUNT_ID,
+            "sandbox_id": "e2b-sandbox-1",
+            "template_id": "base"
+        })),
+    )
+}
+
+async fn capture_snapshot_list_request(
+    State(request_tx): State<mpsc::UnboundedSender<(String, Option<String>)>>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Json<Value> {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    request_tx.send((authorization, query)).unwrap();
+    Json(snapshot_response())
+}
+
+async fn capture_e2b_snapshot_create_request(
+    State(request_tx): State<mpsc::UnboundedSender<(String, Value)>>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    request_tx.send((authorization, body)).unwrap();
+    let snapshot = snapshot_response()
+        .as_array()
+        .and_then(|snapshots| snapshots.first())
+        .cloned()
+        .unwrap();
+    (StatusCode::CREATED, Json(snapshot))
+}
+
+fn snapshot_response() -> Value {
+    json!([{
+        "id": "01992aa0-0000-7000-8000-000000000020",
+        "name": "Ready workspace",
+        "sandbox_account_id": E2B_ACCOUNT_ID,
+        "provider": "e2b",
+        "provider_snapshot_id": "snapshot-1",
+        "sandbox_id": "e2b-sandbox-1",
+        "created_at": 1787443200000_u64
+    }])
 }

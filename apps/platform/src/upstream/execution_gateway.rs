@@ -9,10 +9,11 @@ use uuid::Uuid;
 use crate::{
     error::execution_gateway_rejected_body,
     machines::model::{
-        CreateMachineEnvironmentRequest, CreateSandboxAccountRequest,
-        CreateSandboxEnvironmentTemplateRequest, CreateSnapshotRequest, MachineInventory,
+        CreateE2bSandboxRequest, CreateE2bSnapshotRequest, CreateMachineEnvironmentRequest,
+        CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest,
+        CreateSnapshotRequest, E2bSandboxCreated, MachineInventory,
         RotateSandboxCredentialsRequest, SandboxAccount, SandboxEnvironmentInstance,
-        SandboxEnvironmentTemplate, Snapshot, SnapshotQuery, UpdateNameRequest,
+        SandboxEnvironmentTemplate, SandboxMachine, Snapshot, SnapshotQuery, UpdateNameRequest,
         UpdateSandboxEnvironmentTemplateRequest,
     },
 };
@@ -157,6 +158,47 @@ impl ExecutionGatewayClient {
         .await
     }
 
+    pub(crate) async fn list_sandbox_machines(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<SandboxMachine>, ExecutionGatewayError> {
+        self.send_json(self.http.get(self.url(&format!(
+            "v1/control/sandbox-accounts/{account_id}/sandboxes"
+        ))?))
+        .await
+    }
+
+    pub(crate) async fn create_e2b_sandbox(
+        &self,
+        account_id: Uuid,
+        request: &CreateE2bSandboxRequest,
+    ) -> Result<E2bSandboxCreated, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .post(self.url(&format!(
+                    "v1/control/sandbox-accounts/{account_id}/sandboxes"
+                ))?)
+                .json(request),
+        )
+        .await
+    }
+
+    pub(crate) async fn create_e2b_snapshot(
+        &self,
+        account_id: Uuid,
+        sandbox_id: &str,
+        request: &CreateE2bSnapshotRequest,
+    ) -> Result<Snapshot, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .post(self.url(&format!(
+                    "v1/control/sandbox-accounts/{account_id}/sandboxes/{sandbox_id}/snapshots"
+                ))?)
+                .json(request),
+        )
+        .await
+    }
+
     pub(crate) async fn list_snapshots(
         &self,
         query: &SnapshotQuery,
@@ -176,6 +218,19 @@ impl ExecutionGatewayClient {
         self.send_json(
             self.http
                 .get(self.url(&format!("v1/control/snapshots/{snapshot_id}"))?),
+        )
+        .await
+    }
+
+    pub(crate) async fn update_snapshot_name(
+        &self,
+        snapshot_id: Uuid,
+        request: &UpdateNameRequest,
+    ) -> Result<Snapshot, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .patch(self.url(&format!("v1/control/snapshots/{snapshot_id}"))?)
+                .json(request),
         )
         .await
     }

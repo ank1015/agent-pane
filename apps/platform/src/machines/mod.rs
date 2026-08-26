@@ -6,11 +6,11 @@ use uuid::Uuid;
 use crate::upstream::execution_gateway::{ExecutionGatewayClient, ExecutionGatewayError};
 use execution_protocol::{Environment, MachineSummary};
 use model::{
-    CreateMachineEnvironmentRequest, CreateSandboxAccountRequest,
-    CreateSandboxEnvironmentTemplateRequest, CreateSnapshotRequest, MachineInventory,
-    RotateSandboxCredentialsRequest, SandboxAccount, SandboxEnvironmentInstance,
-    SandboxEnvironmentTemplate, Snapshot, SnapshotQuery, UpdateNameRequest,
-    UpdateSandboxEnvironmentTemplateRequest,
+    CreateE2bSandboxRequest, CreateE2bSnapshotRequest, CreateMachineEnvironmentRequest,
+    CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest, CreateSnapshotRequest,
+    E2bSandboxCreated, MachineInventory, RotateSandboxCredentialsRequest, SandboxAccount,
+    SandboxEnvironmentInstance, SandboxEnvironmentTemplate, SandboxMachine, Snapshot,
+    SnapshotQuery, UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
 };
 
 #[derive(Clone)]
@@ -85,6 +85,32 @@ impl MachineService {
         self.gateway.delete_sandbox_account(account_id).await
     }
 
+    async fn list_sandbox_machines(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<SandboxMachine>, ExecutionGatewayError> {
+        self.gateway.list_sandbox_machines(account_id).await
+    }
+
+    async fn create_e2b_sandbox(
+        &self,
+        account_id: Uuid,
+        request: &CreateE2bSandboxRequest,
+    ) -> Result<E2bSandboxCreated, ExecutionGatewayError> {
+        self.gateway.create_e2b_sandbox(account_id, request).await
+    }
+
+    async fn create_e2b_snapshot(
+        &self,
+        account_id: Uuid,
+        sandbox_id: &str,
+        request: &CreateE2bSnapshotRequest,
+    ) -> Result<Snapshot, ExecutionGatewayError> {
+        self.gateway
+            .create_e2b_snapshot(account_id, sandbox_id, request)
+            .await
+    }
+
     async fn list_snapshots(
         &self,
         query: &SnapshotQuery,
@@ -94,6 +120,16 @@ impl MachineService {
 
     async fn get_snapshot(&self, snapshot_id: Uuid) -> Result<Snapshot, ExecutionGatewayError> {
         self.gateway.get_snapshot(snapshot_id).await
+    }
+
+    async fn update_snapshot_name(
+        &self,
+        snapshot_id: Uuid,
+        request: &UpdateNameRequest,
+    ) -> Result<Snapshot, ExecutionGatewayError> {
+        self.gateway
+            .update_snapshot_name(snapshot_id, request)
+            .await
     }
 
     async fn create_snapshot(

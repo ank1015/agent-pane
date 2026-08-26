@@ -12,11 +12,12 @@ use uuid::Uuid;
 use super::{
     MachineService,
     model::{
-        CreateMachineEnvironmentRequest, CreateSandboxAccountRequest,
-        CreateSandboxEnvironmentTemplateRequest, CreateSnapshotRequest, MachineInventory,
-        MachineResponse, RotateSandboxCredentialsRequest, SandboxAccount, SandboxAccountResponse,
-        SandboxEnvironmentInstance, SandboxEnvironmentTemplate, Snapshot, SnapshotQuery,
-        UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
+        CreateE2bSandboxRequest, CreateE2bSnapshotRequest, CreateMachineEnvironmentRequest,
+        CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest,
+        CreateSnapshotRequest, E2bSandboxCreated, MachineInventory, MachineResponse,
+        RotateSandboxCredentialsRequest, SandboxAccount, SandboxAccountResponse,
+        SandboxEnvironmentInstance, SandboxEnvironmentTemplate, SandboxMachine, Snapshot,
+        SnapshotQuery, UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
     },
 };
 use crate::{AppState, error::ApiError};
@@ -48,12 +49,22 @@ pub(super) fn router(service: MachineService) -> Router<AppState> {
             put(rotate_sandbox_credentials),
         )
         .route(
+            "/api/machines/sandbox-accounts/{account_id}/sandboxes",
+            get(list_sandbox_machines).post(create_e2b_sandbox),
+        )
+        .route(
+            "/api/machines/sandbox-accounts/{account_id}/sandboxes/{sandbox_id}/snapshots",
+            axum::routing::post(create_e2b_snapshot),
+        )
+        .route(
             "/api/machines/snapshots",
             get(list_snapshots).post(create_snapshot),
         )
         .route(
             "/api/machines/snapshots/{snapshot_id}",
-            get(get_snapshot).delete(delete_snapshot),
+            get(get_snapshot)
+                .patch(update_snapshot_name)
+                .delete(delete_snapshot),
         )
         .route(
             "/api/machines/sandbox-environment-templates",
@@ -72,6 +83,10 @@ pub(super) fn router(service: MachineService) -> Router<AppState> {
         .route(
             "/api/machines/environments/{environment_id}",
             axum::routing::patch(update_environment_name).delete(delete_environment),
+        )
+        .route(
+            "/api/machines/{machine_id}",
+            axum::routing::patch(update_machine_name),
         )
         .route(
             "/api/machines/tunnels/{machine_id}",
@@ -168,6 +183,39 @@ async fn delete_sandbox_account(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn list_sandbox_machines(
+    State(state): State<MachineState>,
+    Path(account_id): Path<Uuid>,
+) -> Result<Json<Vec<SandboxMachine>>, ApiError> {
+    Ok(Json(state.service.list_sandbox_machines(account_id).await?))
+}
+
+async fn create_e2b_sandbox(
+    State(state): State<MachineState>,
+    Path(account_id): Path<Uuid>,
+    payload: Result<Json<CreateE2bSandboxRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
+    let sandbox = state
+        .service
+        .create_e2b_sandbox(account_id, &request)
+        .await?;
+    Ok((StatusCode::CREATED, Json::<E2bSandboxCreated>(sandbox)).into_response())
+}
+
+async fn create_e2b_snapshot(
+    State(state): State<MachineState>,
+    Path((account_id, sandbox_id)): Path<(Uuid, String)>,
+    payload: Result<Json<CreateE2bSnapshotRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
+    let snapshot = state
+        .service
+        .create_e2b_snapshot(account_id, &sandbox_id, &request)
+        .await?;
+    Ok((StatusCode::CREATED, Json(snapshot)).into_response())
+}
+
 async fn list_snapshots(
     State(state): State<MachineState>,
     Query(query): Query<SnapshotQuery>,
@@ -180,6 +228,20 @@ async fn get_snapshot(
     Path(snapshot_id): Path<Uuid>,
 ) -> Result<Json<Snapshot>, ApiError> {
     Ok(Json(state.service.get_snapshot(snapshot_id).await?))
+}
+
+async fn update_snapshot_name(
+    State(state): State<MachineState>,
+    Path(snapshot_id): Path<Uuid>,
+    payload: Result<Json<UpdateNameRequest>, JsonRejection>,
+) -> Result<Json<Snapshot>, ApiError> {
+    let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
+    Ok(Json(
+        state
+            .service
+            .update_snapshot_name(snapshot_id, &request)
+            .await?,
+    ))
 }
 
 async fn create_snapshot(

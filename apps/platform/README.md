@@ -64,14 +64,19 @@ The default listener is `http://127.0.0.1:3100`. Liveness is available at
 
 ```text
 GET    /api/machines
+PATCH  /api/machines/{machine_id}
 GET    /api/machines/sandbox-accounts
 POST   /api/machines/sandbox-accounts
 GET    /api/machines/sandbox-accounts/{account_id}
+GET    /api/machines/sandbox-accounts/{account_id}/sandboxes
+POST   /api/machines/sandbox-accounts/{account_id}/sandboxes
+POST   /api/machines/sandbox-accounts/{account_id}/sandboxes/{sandbox_id}/snapshots
 DELETE /api/machines/sandbox-accounts/{account_id}
 PUT    /api/machines/sandbox-accounts/{account_id}/credentials
 GET    /api/machines/snapshots
 POST   /api/machines/snapshots
 GET    /api/machines/snapshots/{snapshot_id}
+PATCH  /api/machines/snapshots/{snapshot_id}
 DELETE /api/machines/snapshots/{snapshot_id}
 GET    /api/machines/sandbox-environment-templates
 POST   /api/machines/sandbox-environment-templates
@@ -108,6 +113,11 @@ Snapshot creation accepts an optional `sandbox_account_id`. If it is absent,
 execution-gateway chooses the provider's default enabled account at creation
 time and stores that account on the snapshot. Sandbox environment templates
 therefore always materialize with the snapshot's fixed provider account.
+
+For a tracked E2B sandbox, the nested snapshot endpoint accepts
+`{"name":"Ready workspace"}` and asks execution-gateway to create the provider
+snapshot before returning its stored record. Filter the snapshot list with
+`?sandbox_account_id={account_id}` to retrieve one account's snapshots.
 
 ## Providers API
 
