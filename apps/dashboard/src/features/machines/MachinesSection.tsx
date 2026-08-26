@@ -481,6 +481,7 @@ function MachineCardActionsMenu({
               role="menu"
               aria-label={`Actions for ${name}`}
               style={position}
+              onClick={(event) => event.stopPropagation()}
             >
               <MachineCardMenuItem
                 icon={AtIcon}
