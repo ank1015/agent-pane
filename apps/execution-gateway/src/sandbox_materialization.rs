@@ -129,7 +129,7 @@ impl SandboxMaterializer {
         };
         if let Err(error) = self
             .database
-            .create_provisioning_sandbox_machine(NewSandboxMachine {
+            .create_sandbox_machine(NewSandboxMachine {
                 machine_id: &machine_id,
                 name: &machine_name,
                 descriptor: runtime.descriptor(),

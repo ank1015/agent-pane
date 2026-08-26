@@ -509,7 +509,12 @@ impl Database {
             return Ok(false);
         };
         let has_active_machines: bool = sqlx::query_scalar(
-            "select exists(select 1 from sandbox_machines where sandbox_account_id = $1 and state not in ('terminated', 'failed'))",
+            "select exists(
+                 select 1
+                 from sandbox_machines sm
+                 join machines m on m.machine_id = sm.machine_id
+                 where sm.sandbox_account_id = $1 and m.deleted_at is null
+             )",
         )
         .bind(id)
         .fetch_one(&mut *transaction)

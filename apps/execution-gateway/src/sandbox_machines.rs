@@ -46,7 +46,7 @@ pub struct NewSandboxMachine<'a> {
 }
 
 impl Database {
-    pub async fn create_provisioning_sandbox_machine(
+    pub async fn create_sandbox_machine(
         &self,
         machine: NewSandboxMachine<'_>,
     ) -> Result<(), DbError> {
@@ -78,8 +78,8 @@ impl Database {
         sqlx::query(
             "insert into sandbox_machines
                  (machine_id, sandbox_account_id, provider_resource_id,
-                  connection_secret_id, state, connection_config, provider_metadata)
-             values ($1, $2, $3, $4, 'provisioning', $5, $6)",
+                  connection_secret_id, connection_config, provider_metadata)
+             values ($1, $2, $3, $4, $5, $6)",
         )
         .bind(machine.machine_id.as_str())
         .bind(machine.sandbox_account_id)
@@ -103,18 +103,6 @@ impl Database {
         template_id: Uuid,
     ) -> Result<SandboxEnvironmentInstance, DbError> {
         let mut transaction = self.pool().begin().await?;
-        let updated = sqlx::query(
-            "update sandbox_machines set state = 'running', started_at = now()
-             where machine_id = $1 and state = 'provisioning'",
-        )
-        .bind(machine_id.as_str())
-        .execute(&mut *transaction)
-        .await?;
-        if updated.rows_affected() != 1 {
-            return Err(DbError::Contract(
-                "sandbox machine is not provisioning".to_owned(),
-            ));
-        }
         sqlx::query(
             "insert into environments
                  (environment_id, machine_id, name, workspace_root_id, path)
@@ -156,8 +144,7 @@ impl Database {
         .flatten();
         sqlx::query(
             "update sandbox_machines
-             set state = 'terminated', last_error = jsonb_build_object('message', $2),
-                 connection_secret_id = null, terminated_at = now()
+             set last_error = jsonb_build_object('message', $2), connection_secret_id = null
              where machine_id = $1",
         )
         .bind(machine_id.as_str())
@@ -191,8 +178,8 @@ impl Database {
              from sandbox_machines sm
              join sandbox_accounts a on a.id = sm.sandbox_account_id
              join machines m on m.machine_id = sm.machine_id
-             where sm.machine_id = $1 and sm.state = 'running'
-               and m.deleted_at is null and a.deleted_at is null and a.enabled",
+             where sm.machine_id = $1 and m.deleted_at is null
+               and a.deleted_at is null and a.enabled",
         )
         .bind(machine_id)
         .fetch_optional(self.pool())
@@ -244,8 +231,7 @@ impl Database {
         .await?
         .flatten();
         sqlx::query(
-            "update sandbox_machines set state = 'terminated', connection_secret_id = null,
-             terminated_at = now() where machine_id = $1",
+            "update sandbox_machines set connection_secret_id = null where machine_id = $1",
         )
         .bind(resource.machine_id.as_str())
         .execute(&mut *transaction)
