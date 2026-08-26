@@ -2,11 +2,17 @@ use std::time::{Duration, Instant};
 
 use reqwest::{Client, Response, Url};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::DaytonaTransportError;
 
 const API_URL: &str = "https://app.daytona.io/api/";
+const DEFAULT_AUTO_STOP_INTERVAL_MINUTES: u64 = 15;
+
+/// Creates a Daytona container sandbox from Daytona's default snapshot.
+pub async fn create(api_key: &str, name: Option<&str>) -> Result<String, DaytonaTransportError> {
+    create_at(&Client::new(), api_url(), api_key, name).await
+}
 
 /// Creates a Daytona sandbox from a saved snapshot and returns its sandbox ID.
 pub async fn create_from_snapshot(
@@ -40,9 +46,79 @@ pub async fn wait_until_ready(
     .await
 }
 
+/// Starts a stopped, paused, or archived Daytona sandbox and waits for it to be ready.
+pub async fn ensure_started(
+    api_key: &str,
+    sandbox_id: &str,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Result<ReadyDaytonaSandbox, DaytonaTransportError> {
+    ensure_started_at(
+        &Client::new(),
+        api_url(),
+        api_key,
+        sandbox_id,
+        timeout,
+        poll_interval,
+    )
+    .await
+}
+
+/// Creates a cold filesystem snapshot and returns its Daytona snapshot name.
+pub async fn create_snapshot(
+    api_key: &str,
+    sandbox_id: &str,
+    snapshot_name: &str,
+) -> Result<String, DaytonaTransportError> {
+    create_snapshot_at(
+        &Client::new(),
+        api_url(),
+        api_key,
+        sandbox_id,
+        snapshot_name,
+        Duration::from_secs(300),
+        Duration::from_millis(500),
+    )
+    .await
+}
+
+/// Stops a Daytona sandbox while preserving its filesystem.
+pub async fn stop(api_key: &str, sandbox_id: &str) -> Result<(), DaytonaTransportError> {
+    stop_at(&Client::new(), api_url(), api_key, sandbox_id).await
+}
+
 /// Deletes a Daytona sandbox. A missing sandbox is treated as deleted.
 pub async fn terminate(api_key: &str, sandbox_id: &str) -> Result<(), DaytonaTransportError> {
     terminate_at(&Client::new(), api_url(), api_key, sandbox_id).await
+}
+
+async fn create_at(
+    client: &Client,
+    base_url: Url,
+    api_key: &str,
+    name: Option<&str>,
+) -> Result<String, DaytonaTransportError> {
+    validate(api_key, "API key")?;
+    if let Some(name) = name {
+        validate(name, "sandbox name")?;
+    }
+    let mut body = serde_json::Map::from_iter([(
+        "autoStopInterval".to_owned(),
+        Value::from(DEFAULT_AUTO_STOP_INTERVAL_MINUTES),
+    )]);
+    if let Some(name) = name {
+        body.insert("name".to_owned(), Value::from(name));
+    }
+    let response = client
+        .post(endpoint(base_url, "sandbox")?)
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(request_error)?;
+    checked_json::<CreateSandboxResponse>(response)
+        .await
+        .map(|response| response.id)
 }
 
 async fn create_from_snapshot_at(
@@ -56,7 +132,10 @@ async fn create_from_snapshot_at(
     let response = client
         .post(endpoint(base_url, "sandbox")?)
         .bearer_auth(api_key)
-        .json(&json!({ "snapshot": snapshot }))
+        .json(&json!({
+            "snapshot": snapshot,
+            "autoStopInterval": DEFAULT_AUTO_STOP_INTERVAL_MINUTES,
+        }))
         .send()
         .await
         .map_err(request_error)?;
@@ -79,6 +158,134 @@ struct SandboxResponse {
     network_block_all: bool,
 }
 
+async fn ensure_started_at(
+    client: &Client,
+    base_url: Url,
+    api_key: &str,
+    sandbox_id: &str,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Result<ReadyDaytonaSandbox, DaytonaTransportError> {
+    validate(api_key, "API key")?;
+    validate(sandbox_id, "sandbox ID")?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        let sandbox = get_sandbox(client, base_url.clone(), api_key, sandbox_id).await?;
+        match normalized_state(&sandbox).as_str() {
+            "started" | "running" => return ready_sandbox(sandbox, sandbox_id),
+            "stopped" | "paused" | "archived" => {
+                let response = client
+                    .post(endpoint(
+                        base_url.clone(),
+                        &format!("sandbox/{sandbox_id}/start"),
+                    )?)
+                    .bearer_auth(api_key)
+                    .send()
+                    .await
+                    .map_err(request_error)?;
+                if !response.status().is_success() && response.status().as_u16() != 409 {
+                    return Err(response_error(response).await);
+                }
+            }
+            "error" | "destroyed" | "deleted" | "build failed" | "build_failed" => {
+                return Err(terminal_state_error(&sandbox.state));
+            }
+            _ => {}
+        }
+        if Instant::now() >= deadline {
+            return Err(timeout_error("start"));
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_snapshot_at(
+    client: &Client,
+    base_url: Url,
+    api_key: &str,
+    sandbox_id: &str,
+    snapshot_name: &str,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Result<String, DaytonaTransportError> {
+    validate(api_key, "API key")?;
+    validate(sandbox_id, "sandbox ID")?;
+    validate(snapshot_name, "snapshot name")?;
+    ensure_started_at(
+        client,
+        base_url.clone(),
+        api_key,
+        sandbox_id,
+        timeout,
+        poll_interval,
+    )
+    .await?;
+    stop_at(client, base_url.clone(), api_key, sandbox_id).await?;
+    wait_for_state(
+        client,
+        base_url.clone(),
+        api_key,
+        sandbox_id,
+        "stopped",
+        timeout,
+        poll_interval,
+    )
+    .await?;
+    let snapshot = client
+        .post(endpoint(
+            base_url.clone(),
+            &format!("sandbox/{sandbox_id}/snapshot"),
+        )?)
+        .bearer_auth(api_key)
+        .json(&json!({
+            "name": snapshot_name,
+            "includeMemory": false,
+        }))
+        .send()
+        .await
+        .map_err(request_error)?;
+    if let Err(error) = checked(snapshot).await {
+        let _ = ensure_started_at(
+            client,
+            base_url,
+            api_key,
+            sandbox_id,
+            timeout,
+            poll_interval,
+        )
+        .await;
+        return Err(error);
+    }
+    ensure_started_at(
+        client,
+        base_url,
+        api_key,
+        sandbox_id,
+        timeout,
+        poll_interval,
+    )
+    .await?;
+    Ok(snapshot_name.to_owned())
+}
+
+async fn stop_at(
+    client: &Client,
+    base_url: Url,
+    api_key: &str,
+    sandbox_id: &str,
+) -> Result<(), DaytonaTransportError> {
+    validate(api_key, "API key")?;
+    validate(sandbox_id, "sandbox ID")?;
+    let response = client
+        .post(endpoint(base_url, &format!("sandbox/{sandbox_id}/stop"))?)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(request_error)?;
+    checked(response).await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn wait_until_ready_at(
     client: &Client,
@@ -92,42 +299,92 @@ async fn wait_until_ready_at(
     validate(sandbox_id, "sandbox ID")?;
     let deadline = Instant::now() + timeout;
     loop {
-        let response = client
-            .get(endpoint(
-                base_url.clone(),
-                &format!("sandbox/{sandbox_id}"),
-            )?)
-            .bearer_auth(api_key)
-            .send()
-            .await
-            .map_err(request_error)?;
-        let sandbox = checked_json::<SandboxResponse>(response).await?;
-        match sandbox.state.to_ascii_lowercase().as_str() {
-            "started" | "running" => {
-                let toolbox_url = sandbox
-                    .toolbox_proxy_url
-                    .map(|value| toolbox_url(&value, sandbox_id))
-                    .transpose()?;
-                return Ok(ReadyDaytonaSandbox {
-                    toolbox_url,
-                    network_block_all: sandbox.network_block_all,
-                });
-            }
-            "error" | "destroyed" => {
-                return Err(DaytonaTransportError::new(format!(
-                    "Daytona sandbox entered terminal state {}",
-                    sandbox.state
-                )));
+        let sandbox = get_sandbox(client, base_url.clone(), api_key, sandbox_id).await?;
+        match normalized_state(&sandbox).as_str() {
+            "started" | "running" => return ready_sandbox(sandbox, sandbox_id),
+            "error" | "destroyed" | "deleted" | "build failed" | "build_failed" => {
+                return Err(terminal_state_error(&sandbox.state));
             }
             _ if Instant::now() >= deadline => {
-                return Err(DaytonaTransportError {
-                    message: "timed out waiting for Daytona sandbox to start".to_owned(),
-                    retryable: true,
-                    disconnected: false,
-                });
+                return Err(timeout_error("start"));
             }
             _ => tokio::time::sleep(poll_interval).await,
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn wait_for_state(
+    client: &Client,
+    base_url: Url,
+    api_key: &str,
+    sandbox_id: &str,
+    expected: &str,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Result<(), DaytonaTransportError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let sandbox = get_sandbox(client, base_url.clone(), api_key, sandbox_id).await?;
+        let state = normalized_state(&sandbox);
+        if state == expected {
+            return Ok(());
+        }
+        if matches!(
+            state.as_str(),
+            "error" | "destroyed" | "deleted" | "build failed" | "build_failed"
+        ) {
+            return Err(terminal_state_error(&sandbox.state));
+        }
+        if Instant::now() >= deadline {
+            return Err(timeout_error(expected));
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+async fn get_sandbox(
+    client: &Client,
+    base_url: Url,
+    api_key: &str,
+    sandbox_id: &str,
+) -> Result<SandboxResponse, DaytonaTransportError> {
+    let response = client
+        .get(endpoint(base_url, &format!("sandbox/{sandbox_id}"))?)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(request_error)?;
+    checked_json(response).await
+}
+
+fn normalized_state(sandbox: &SandboxResponse) -> String {
+    sandbox.state.to_ascii_lowercase()
+}
+
+fn ready_sandbox(
+    sandbox: SandboxResponse,
+    sandbox_id: &str,
+) -> Result<ReadyDaytonaSandbox, DaytonaTransportError> {
+    let toolbox_url = sandbox
+        .toolbox_proxy_url
+        .map(|value| toolbox_url(&value, sandbox_id))
+        .transpose()?;
+    Ok(ReadyDaytonaSandbox {
+        toolbox_url,
+        network_block_all: sandbox.network_block_all,
+    })
+}
+
+fn terminal_state_error(state: &str) -> DaytonaTransportError {
+    DaytonaTransportError::new(format!("Daytona sandbox entered terminal state {state}"))
+}
+
+fn timeout_error(action: &str) -> DaytonaTransportError {
+    DaytonaTransportError {
+        message: format!("timed out waiting for Daytona sandbox to {action}"),
+        retryable: true,
+        disconnected: false,
     }
 }
 
@@ -193,6 +450,14 @@ async fn checked_json<T: serde::de::DeserializeOwned>(
     response.json().await.map_err(request_error)
 }
 
+async fn checked(response: Response) -> Result<(), DaytonaTransportError> {
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(response_error(response).await)
+    }
+}
+
 async fn response_error(response: Response) -> DaytonaTransportError {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
@@ -216,72 +481,5 @@ fn request_error_from_url(source: url::ParseError) -> DaytonaTransportError {
 }
 
 #[cfg(test)]
-mod tests {
-    use axum::{Json, Router, http::HeaderMap, http::StatusCode, routing::post};
-    use serde_json::{Value, json};
-    use tokio::net::TcpListener;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn creates_a_sandbox_from_the_snapshot_reference() {
-        async fn create(headers: HeaderMap, Json(body): Json<Value>) -> Json<Value> {
-            assert_eq!(headers["authorization"], "Bearer daytona-secret");
-            assert_eq!(body, json!({ "snapshot": "snapshot-1" }));
-            Json(json!({ "id": "sandbox-1" }))
-        }
-
-        let base = serve(Router::new().route("/api/sandbox", post(create))).await;
-        let sandbox_id =
-            create_from_snapshot_at(&Client::new(), base, "daytona-secret", "snapshot-1")
-                .await
-                .unwrap();
-        assert_eq!(sandbox_id, "sandbox-1");
-    }
-
-    #[tokio::test]
-    async fn resolves_the_ready_toolbox_and_terminates() {
-        async fn get(headers: HeaderMap) -> Json<Value> {
-            assert_eq!(headers["authorization"], "Bearer daytona-secret");
-            Json(json!({
-                "state": "started",
-                "toolboxProxyUrl": "https://toolbox.example/toolbox",
-                "networkBlockAll": true
-            }))
-        }
-        async fn delete(headers: HeaderMap) -> StatusCode {
-            assert_eq!(headers["authorization"], "Bearer daytona-secret");
-            StatusCode::NO_CONTENT
-        }
-        let base = serve(Router::new().route(
-            "/api/sandbox/sandbox-1",
-            axum::routing::get(get).delete(delete),
-        ))
-        .await;
-        let ready = wait_until_ready_at(
-            &Client::new(),
-            base.clone(),
-            "daytona-secret",
-            "sandbox-1",
-            Duration::from_secs(1),
-            Duration::from_millis(1),
-        )
-        .await
-        .unwrap();
-        assert!(ready.network_block_all);
-        assert_eq!(
-            ready.toolbox_url.unwrap().as_str(),
-            "https://toolbox.example/toolbox/sandbox-1/"
-        );
-        terminate_at(&Client::new(), base, "daytona-secret", "sandbox-1")
-            .await
-            .unwrap();
-    }
-
-    async fn serve(app: Router) -> Url {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Url::parse(&format!("http://{address}/api/")).unwrap()
-    }
-}
+#[path = "lifecycle_tests.rs"]
+mod tests;

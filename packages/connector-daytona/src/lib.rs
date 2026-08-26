@@ -21,7 +21,10 @@ pub use config::{
 };
 pub use error::{DaytonaConnectorError, DaytonaTransportError};
 pub use http::DaytonaHttpTransport;
-pub use lifecycle::{ReadyDaytonaSandbox, create_from_snapshot, terminate, wait_until_ready};
+pub use lifecycle::{
+    ReadyDaytonaSandbox, create, create_from_snapshot, create_snapshot, ensure_started, stop,
+    terminate, wait_until_ready,
+};
 pub use runtime::DaytonaExecutionRuntime;
 pub use transport::{
     DaytonaTransport, RemoteProcessEvent, RemoteProcessId, RemoteProcessRequest,
