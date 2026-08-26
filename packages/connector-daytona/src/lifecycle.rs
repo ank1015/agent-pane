@@ -106,7 +106,7 @@ async fn wait_until_ready_at(
             "started" | "running" => {
                 let toolbox_url = sandbox
                     .toolbox_proxy_url
-                    .map(|value| Url::parse(&value).map_err(request_error_from_url))
+                    .map(|value| toolbox_url(&value, sandbox_id))
                     .transpose()?;
                 return Ok(ReadyDaytonaSandbox {
                     toolbox_url,
@@ -163,6 +163,16 @@ fn endpoint(mut base_url: Url, segment: &str) -> Result<Url, DaytonaTransportErr
         .pop_if_empty()
         .extend(segment.split('/'));
     Ok(base_url)
+}
+
+fn toolbox_url(base_url: &str, sandbox_id: &str) -> Result<Url, DaytonaTransportError> {
+    let mut url = Url::parse(base_url).map_err(request_error_from_url)?;
+    url.path_segments_mut()
+        .map_err(|()| DaytonaTransportError::new("Daytona Toolbox URL cannot be a base URL"))?
+        .pop_if_empty()
+        .push(sandbox_id)
+        .push("");
+    Ok(url)
 }
 
 fn validate(value: &str, field: &str) -> Result<(), DaytonaTransportError> {
@@ -235,7 +245,7 @@ mod tests {
             assert_eq!(headers["authorization"], "Bearer daytona-secret");
             Json(json!({
                 "state": "started",
-                "toolboxProxyUrl": "https://toolbox.example/sandbox-1/",
+                "toolboxProxyUrl": "https://toolbox.example/toolbox",
                 "networkBlockAll": true
             }))
         }
@@ -261,7 +271,7 @@ mod tests {
         assert!(ready.network_block_all);
         assert_eq!(
             ready.toolbox_url.unwrap().as_str(),
-            "https://toolbox.example/sandbox-1/"
+            "https://toolbox.example/toolbox/sandbox-1/"
         );
         terminate_at(&Client::new(), base, "daytona-secret", "sandbox-1")
             .await
