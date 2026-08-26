@@ -187,6 +187,67 @@
   min-height: 100dvh;
 }
 
+.machine-detail-shell {
+  grid-template-columns: var(--cursor-sidebar-width) minmax(0, 1fr);
+  background: var(--cursor-chrome);
+}
+
+.machine-detail-sidebar {
+  display: flex;
+  flex-direction: column;
+  padding: var(--cursor-space-8);
+  overflow: hidden;
+}
+
+.machine-detail-back {
+  margin-top: var(--cursor-space-8);
+  color: var(--cursor-text-secondary);
+}
+
+.machine-detail-back:hover {
+  color: var(--cursor-text-primary);
+  background: transparent;
+}
+
+.machine-detail-back .nav-item-label {
+  font-size: var(--cursor-font-sm);
+}
+
+.machine-detail-back:focus-visible,
+.machine-detail-nav-item:focus-visible {
+  outline: 1px solid color-mix(in oklab, var(--cursor-accent) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.machine-detail-nav {
+  margin-top: 9px;
+}
+
+.machine-detail-nav-item svg {
+  color: var(--cursor-text-secondary);
+}
+
+.machine-detail-main {
+  min-width: 0;
+  min-height: 100dvh;
+}
+
+.machine-environments-table {
+  min-width: 700px;
+}
+
+.machine-environment-name-column {
+  width: 28%;
+}
+
+.machine-environment-path-column {
+  width: auto;
+}
+
+.machine-environment-created-column {
+  width: 180px;
+}
+
 .page-header {
   margin-bottom: var(--cursor-space-24);
 }
@@ -829,6 +890,82 @@
   margin-right: auto;
 }
 
+.add-environment-next-button {
+  min-width: 64px;
+}
+
+.add-environment-back-button {
+  min-width: 64px;
+  margin-right: auto;
+}
+
+.add-environment-step {
+  min-height: 112px;
+  padding-top: var(--cursor-space-4);
+}
+
+.add-environment-field {
+  display: grid;
+  gap: var(--cursor-space-8);
+  color: var(--cursor-text-secondary);
+  font-size: var(--cursor-font-sm);
+  line-height: var(--cursor-leading-sm);
+}
+
+.add-environment-field .cursor-input {
+  height: 34px;
+}
+
+.add-environment-field .cursor-input:focus-visible {
+  border-color: var(--cursor-border-strong);
+  box-shadow: none;
+}
+
+.add-environment-path-input {
+  height: 34px;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--cursor-border-control);
+  border-radius: var(--cursor-radius-base);
+  background: var(--cursor-surface-input);
+  transition: border-color var(--cursor-duration-fast);
+}
+
+.add-environment-path-input:hover,
+.add-environment-path-input:focus-within {
+  border-color: var(--cursor-border-strong);
+}
+
+.add-environment-path-prefix {
+  max-width: 64%;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--cursor-space-10);
+  overflow: hidden;
+  border-right: 1px solid var(--cursor-border-control);
+  color: var(--cursor-text-tertiary);
+  background: var(--cursor-overlay-04);
+  font-family: var(--cursor-font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add-environment-path-input .cursor-input,
+.add-environment-path-input .cursor-input:hover,
+.add-environment-path-input .cursor-input:focus-visible {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .provider-credentials-step {
   min-height: 176px;
   padding-top: var(--cursor-space-4);
@@ -1186,6 +1323,26 @@
 }
 
 @media (max-width: 960px) {
+  .machine-detail-shell {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .machine-detail-sidebar {
+    width: 56px;
+    padding-inline: var(--cursor-space-6);
+  }
+
+  .machine-detail-back,
+  .machine-detail-nav-item {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .machine-detail-back .nav-item-label,
+  .machine-detail-nav-item .nav-item-label {
+    display: none;
+  }
+
   .dashboard-shell,
   .dashboard-shell[data-sidebar-collapsed='true'] {
     grid-template-columns: 56px minmax(0, 1fr);
@@ -1213,6 +1370,36 @@
 }
 
 @media (max-width: 640px) {
+  .machine-detail-shell {
+    min-height: 100dvh;
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .machine-detail-sidebar {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: var(--cursor-space-8);
+    border-right: 0;
+    border-bottom: 1px solid var(--cursor-border-subtle);
+  }
+
+  .machine-detail-back,
+  .machine-detail-nav-item {
+    height: 32px;
+  }
+
+  .machine-detail-nav {
+    margin-top: var(--cursor-space-4);
+  }
+
+  .machine-detail-back .nav-item-label,
+  .machine-detail-nav-item .nav-item-label {
+    display: block;
+  }
+
   .dashboard-sidebar {
     width: auto;
     padding: var(--cursor-space-8);

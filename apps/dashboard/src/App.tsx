@@ -14,6 +14,7 @@ import {
   matchPath,
   useLocation,
 } from 'react-router-dom'
+import { MachinePage } from './features/machines/MachinePage'
 import { MachinesSection } from './features/machines/MachinesSection'
 import { SandboxAccountPage } from './features/machines/SandboxAccountPage'
 import { ProvidersTable } from './features/providers/ProvidersTable'
@@ -67,10 +68,15 @@ function App() {
     '/machine/accounts/:accountId',
     pathname,
   )
+  const machineMatch = matchPath('/machines/:machineId', pathname)
   const activeItem =
     sandboxAccountMatch !== null
       ? NAVIGATION.find((item) => item.id === 'machines')!
       : NAVIGATION.find((item) => item.path === pathname) ?? NAVIGATION[0]
+
+  if (machineMatch !== null) {
+    return <MachinePage machineId={machineMatch.params.machineId ?? ''} />
+  }
 
   return (
     <div

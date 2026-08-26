@@ -127,6 +127,11 @@ export function MachinesSection() {
                 <MachineDaemonCard
                   key={machine.machine_id}
                   machine={machine}
+                  onOpen={() =>
+                    navigate(
+                      `/machines/${encodeURIComponent(machine.machine_id)}`,
+                    )
+                  }
                   onUpdateName={() =>
                     setRenameTarget({ kind: 'tunnel', machine })
                   }
@@ -244,10 +249,12 @@ function ConnectorAccountCard({
 
 function MachineDaemonCard({
   machine,
+  onOpen,
   onUpdateName,
   onDelete,
 }: {
   machine: MachineDaemon
+  onOpen: () => void
   onUpdateName: () => void
   onDelete: () => void
 }) {
@@ -257,6 +264,7 @@ function MachineDaemonCard({
       isActive={machine.online}
       statusLabel={machine.online ? 'Online' : 'Offline'}
       imageSource={machineImageSource(machine)}
+      onActivate={machine.online ? onOpen : undefined}
       onUpdateName={onUpdateName}
       onDelete={onDelete}
     />
