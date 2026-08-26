@@ -31,16 +31,20 @@ base64-encodes exact child byte chunks into newline-delimited JSON, keeping
 output byte-accurate and resumable. It also persists the outer PID beside the
 journal so a recreated connector can reattach while the process is running.
 
-The caller owns lifecycle orchestration. `create_from_snapshot` forks a source
-sandbox at a selected snapshot into a caller-provided target sandbox ID.
+The caller owns lifecycle orchestration. `create` provisions the current Blaxel
+default sandbox image, `create_snapshot` creates a restorable sandbox snapshot,
+and `create_from_snapshot` forks a source sandbox at a selected snapshot into a
+caller-provided target sandbox ID. `resolve_workspace` can infer the workspace
+when an API key has access to exactly one.
 Construct `BlaxelConnectionConfig` from the new sandbox metadata URL, API key,
 and workspace, then provide workspace roots and a target-side state directory
 through `BlaxelRuntimeConfig`.
 
 Current provider constraints:
 
-- Python 3 is required in the sandbox. The connector uses `python3` by default
-  and allows the command to be configured.
+- Python 3 is required in the sandbox. Blaxel's current default sandbox includes
+  Python 3; the connector uses `python3` by default and allows the command to be
+  configured for custom images.
 - Blaxel cannot enforce denied networking for only one child process, so
   `NetworkMode::Denied` is rejected. Configure network policy on the sandbox.
 - Mutations validate every path before the first change, but Linux cannot

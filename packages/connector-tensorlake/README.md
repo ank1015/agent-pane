@@ -30,9 +30,11 @@ so agent process output remains byte-accurate and resumable. The wrapper also
 persists its Tensorlake PID beside the journal so a new connector instance can
 reattach while the process is running.
 
-The caller owns lifecycle orchestration. `create_from_snapshot(api_key,
-snapshot_id)` creates a Tensorlake sandbox through the control API and returns
-its sandbox ID. Construct `TensorlakeConnectionConfig` from the sandbox's
+The caller owns lifecycle orchestration. `create(api_key, name)` creates a
+named sandbox that suspends after ten idle minutes. `create_snapshot` creates a
+reusable filesystem snapshot, and `create_from_snapshot(api_key, snapshot_id,
+name)` restores it into another named sandbox. `ensure_started` resumes an idle
+sandbox before use. Construct `TensorlakeConnectionConfig` from the sandbox's
 ingress endpoint and API key, then provide workspace roots and a target-side
 state directory through `TensorlakeRuntimeConfig`.
 

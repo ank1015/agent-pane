@@ -114,10 +114,11 @@ execution-gateway chooses the provider's default enabled account at creation
 time and stores that account on the snapshot. Sandbox environment templates
 therefore always materialize with the snapshot's fixed provider account.
 
-For a tracked E2B sandbox, the nested snapshot endpoint accepts
-`{"name":"Ready workspace"}` and asks execution-gateway to create the provider
-snapshot before returning its stored record. Filter the snapshot list with
-`?sandbox_account_id={account_id}` to retrieve one account's snapshots.
+For a tracked E2B, Daytona, Blaxel, or Tensorlake sandbox, the nested snapshot
+endpoint accepts `{"name":"Ready workspace"}` and asks execution-gateway to
+create the provider snapshot before returning its stored record. Filter the
+snapshot list with `?sandbox_account_id={account_id}` to retrieve one account's
+snapshots.
 
 ## Providers API
 

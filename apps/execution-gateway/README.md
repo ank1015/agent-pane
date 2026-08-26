@@ -207,7 +207,9 @@ Create requests accept `e2b`, `daytona`, `blaxel`, or `tensorlake`:
 
 API keys are encrypted before storage and are never returned by the API.
 The optional `config` object holds non-secret provider settings such as the
-Blaxel workspace. `make_default` only controls which account is selected when
+Blaxel workspace. When `config.workspace` is omitted, the gateway resolves it
+automatically if the API key belongs to exactly one workspace. `make_default`
+only controls which account is selected when
 a snapshot create request omits `sandbox_account_id`; materialization itself
 always uses the account fixed on the snapshot.
 
@@ -221,13 +223,29 @@ with:
 }
 ```
 
-If `name` is omitted, the gateway generates one. The gateway decrypts the API
-key belonging to the account in the route, creates the E2B sandbox, stores its
-secure connection token, and returns the provider sandbox ID together with the
-new machine summary.
+For a Daytona account, omit `template_id` because creation uses Daytona's
+default sandbox image:
 
-Creating an E2B snapshot uses the source provider sandbox ID in the route and
-accepts a display name:
+```json
+{
+  "name": "Optional machine name"
+}
+```
+
+Blaxel and Tensorlake use the same name-only request. Blaxel creates the current
+provider default sandbox image and relies on native scale-to-zero. Tensorlake
+creates a named sandbox from its default managed image with a ten-minute idle
+suspend interval.
+
+If `name` is omitted, the gateway generates one. The gateway decrypts the API
+key belonging to the account in the route, creates the provider sandbox, and
+returns the provider sandbox ID together with the new machine summary. Daytona
+sandboxes use a 15-minute auto-stop interval. Any later execution operation
+starts a stopped Daytona sandbox or resumes a suspended Tensorlake sandbox
+before connecting to it.
+
+Creating an E2B, Daytona, Blaxel, or Tensorlake snapshot uses the source
+provider sandbox ID in the route and accepts a display name:
 
 ```json
 {
@@ -236,7 +254,9 @@ accepts a display name:
 ```
 
 The gateway verifies that the source sandbox belongs to the selected account,
-resumes it through E2B when needed, creates the provider snapshot with that
-account's credentials, and stores the returned E2B snapshot ID in `snapshots`.
-The supplied name is gateway display metadata; it is not used as an E2B
-template identifier.
+creates the provider snapshot with that account's credentials, and stores the
+returned provider snapshot ID in `snapshots`. Daytona cold snapshots stop the
+sandbox first and start it again afterward. Tensorlake creates a filesystem
+snapshot and waits until it is restorable. The supplied name remains gateway
+display metadata. Blaxel snapshot and fork APIs are currently private preview
+and require that Blaxel enable the feature for the account's workspace.
