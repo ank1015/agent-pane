@@ -322,6 +322,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .bearer_auth("test-api")
         .json(&CreateEnvironmentRequest {
             machine_id: machine_id.clone(),
+            name: "Project".to_owned(),
             workspace_root_id: workspace_root_id.clone(),
             path: "project".to_owned(),
         })
@@ -335,6 +336,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .bearer_auth("test-control")
         .json(&CreateEnvironmentRequest {
             machine_id: machine_id.clone(),
+            name: "Project".to_owned(),
             workspace_root_id: id("missing-root".to_owned()),
             path: "project".to_owned(),
         })
@@ -348,6 +350,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .bearer_auth("test-control")
         .json(&CreateEnvironmentRequest {
             machine_id: machine_id.clone(),
+            name: "  Project  ".to_owned(),
             workspace_root_id: workspace_root_id.clone(),
             path: "project/./".to_owned(),
         })
@@ -355,11 +358,12 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .await
         .expect("create environment");
     assert_eq!(create_environment.status(), StatusCode::CREATED);
-    let environment: Environment = create_environment
+    let mut environment: Environment = create_environment
         .json()
         .await
         .expect("environment response");
     assert_eq!(environment.machine_id, machine_id);
+    assert_eq!(environment.name, "Project");
     assert_eq!(environment.workspace_root_id, workspace_root_id);
     assert_eq!(environment.path, "project");
 
@@ -368,6 +372,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .bearer_auth("test-control")
         .json(&CreateEnvironmentRequest {
             machine_id: machine_id.clone(),
+            name: "Duplicate location".to_owned(),
             workspace_root_id: workspace_root_id.clone(),
             path: "project".to_owned(),
         })
@@ -390,6 +395,22 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .expect("environment list");
     assert_eq!(environments.len(), 1);
     assert_eq!(&environments[0], &environment);
+
+    let renamed: Environment = client
+        .patch(format!(
+            "{base}/v1/control/environments/{}",
+            environment.environment_id.as_str()
+        ))
+        .bearer_auth("test-control")
+        .json(&serde_json::json!({"name": "Renamed project"}))
+        .send()
+        .await
+        .expect("rename environment")
+        .json()
+        .await
+        .expect("renamed environment response");
+    assert_eq!(renamed.name, "Renamed project");
+    environment = renamed;
 
     let fetched: Environment = client
         .get(format!(
@@ -446,6 +467,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .bearer_auth("test-control")
         .json(&CreateEnvironmentRequest {
             machine_id: machine_id.clone(),
+            name: "Replacement".to_owned(),
             workspace_root_id: workspace_root_id.clone(),
             path: "project".to_owned(),
         })

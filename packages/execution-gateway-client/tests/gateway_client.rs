@@ -249,6 +249,7 @@ async fn get_environment(Path(environment_id): Path<String>) -> Json<Value> {
     Json(json!({
         "environment_id": "environment-1",
         "machine_id": "machine-1",
+        "name": "Project",
         "workspace_root_id": "root",
         "path": "project",
         "created_at": 1
