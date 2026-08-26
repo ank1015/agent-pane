@@ -4,6 +4,7 @@ pub mod config;
 pub mod connection_registry;
 pub mod connectors;
 pub mod db;
+pub mod e2b_sandboxes;
 pub mod environments;
 pub mod http;
 pub mod routing;

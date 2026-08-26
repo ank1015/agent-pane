@@ -19,6 +19,18 @@ pub struct ProvisionedSandbox {
 
 #[async_trait]
 pub trait SandboxProviderClient: Send + Sync {
+    async fn create_e2b(
+        &self,
+        template_id: &str,
+        credentials: &SandboxCredentials,
+    ) -> Result<ProvisionedSandbox, SandboxProviderError>;
+
+    async fn create_e2b_snapshot(
+        &self,
+        sandbox_id: &str,
+        credentials: &SandboxCredentials,
+    ) -> Result<String, SandboxProviderError>;
+
     async fn create(
         &self,
         snapshot: &Snapshot,
@@ -41,6 +53,33 @@ pub struct HttpSandboxProviderClient;
 
 #[async_trait]
 impl SandboxProviderClient for HttpSandboxProviderClient {
+    async fn create_e2b(
+        &self,
+        template_id: &str,
+        credentials: &SandboxCredentials,
+    ) -> Result<ProvisionedSandbox, SandboxProviderError> {
+        let sandbox = connector_e2b::create_details(credentials.api_key(), template_id).await?;
+        Ok(ProvisionedSandbox {
+            provider_resource_id: sandbox.sandbox_id,
+            connection_config: json!({"sandbox_url": "https://sandbox.e2b.app/"}),
+            connection_secret: Some(sandbox.envd_access_token),
+            provider_metadata: json!({
+                "sandbox_domain": sandbox.sandbox_domain,
+                "template_id": template_id,
+            }),
+        })
+    }
+
+    async fn create_e2b_snapshot(
+        &self,
+        sandbox_id: &str,
+        credentials: &SandboxCredentials,
+    ) -> Result<String, SandboxProviderError> {
+        connector_e2b::create_snapshot(credentials.api_key(), sandbox_id)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn create(
         &self,
         snapshot: &Snapshot,
@@ -61,7 +100,10 @@ impl SandboxProviderClient for HttpSandboxProviderClient {
                     provider_resource_id: sandbox.sandbox_id,
                     connection_config: json!({"sandbox_url": "https://sandbox.e2b.app/"}),
                     connection_secret: Some(sandbox.envd_access_token),
-                    provider_metadata: json!({"sandbox_domain": sandbox.sandbox_domain}),
+                    provider_metadata: json!({
+                        "sandbox_domain": sandbox.sandbox_domain,
+                        "template_id": snapshot.provider_snapshot_id,
+                    }),
                 })
             }
             SandboxProvider::Daytona => {

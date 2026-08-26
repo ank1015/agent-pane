@@ -1,5 +1,9 @@
+use chrono::{DateTime, Utc};
 use credential_vault::{CredentialVault, EncryptedSecret, VaultError};
-use execution_contracts::{EnvironmentId, MachineDescriptor, MachineId, WorkspaceRootId};
+use execution_contracts::{
+    EnvironmentId, MachineDescriptor, MachineId, TimestampMs, WorkspaceRootId,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::Row;
 use thiserror::Error;
@@ -32,6 +36,16 @@ pub struct SandboxEnvironmentResource {
     pub provider: SandboxProvider,
     pub provider_resource_id: String,
     pub account_config: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SandboxMachineSummary {
+    pub machine_id: MachineId,
+    pub sandbox_account_id: Uuid,
+    pub sandbox_id: String,
+    pub name: String,
+    pub created_from: Option<String>,
+    pub created_at: TimestampMs,
 }
 
 pub struct NewSandboxMachine<'a> {
@@ -186,6 +200,50 @@ impl Database {
         .await?
         .map(sandbox_machine_from_row)
         .transpose()
+    }
+
+    pub async fn sandbox_machines_for_account(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<SandboxMachineSummary>, DbError> {
+        sqlx::query(
+            "select m.machine_id, sm.sandbox_account_id,
+                    sm.provider_resource_id as sandbox_id, m.name,
+                    nullif(sm.provider_metadata ->> 'template_id', '') as created_from,
+                    m.created_at
+             from sandbox_machines sm
+             join machines m on m.machine_id = sm.machine_id
+             where sm.sandbox_account_id = $1 and m.deleted_at is null
+             order by m.created_at desc, m.machine_id",
+        )
+        .bind(account_id)
+        .fetch_all(self.pool())
+        .await?
+        .into_iter()
+        .map(sandbox_machine_summary_from_row)
+        .collect()
+    }
+
+    pub async fn has_sandbox_machine(
+        &self,
+        account_id: Uuid,
+        provider_resource_id: &str,
+    ) -> Result<bool, DbError> {
+        sqlx::query_scalar(
+            "select exists(
+                 select 1
+                 from sandbox_machines sm
+                 join machines m on m.machine_id = sm.machine_id
+                 where sm.sandbox_account_id = $1
+                   and sm.provider_resource_id = $2
+                   and m.deleted_at is null
+             )",
+        )
+        .bind(account_id)
+        .bind(provider_resource_id)
+        .fetch_one(self.pool())
+        .await
+        .map_err(Into::into)
     }
 
     pub async fn sandbox_environment_resource(
@@ -403,8 +461,26 @@ fn sandbox_resource_from_row(
     })
 }
 
+fn sandbox_machine_summary_from_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<SandboxMachineSummary, DbError> {
+    Ok(SandboxMachineSummary {
+        machine_id: MachineId::new(row.try_get::<String, _>("machine_id")?)
+            .map_err(|error| DbError::Contract(error.to_string()))?,
+        sandbox_account_id: row.try_get("sandbox_account_id")?,
+        sandbox_id: row.try_get("sandbox_id")?,
+        name: row.try_get("name")?,
+        created_from: row.try_get("created_from")?,
+        created_at: timestamp(row.try_get("created_at")?),
+    })
+}
+
 fn provider_from_row(row: &sqlx::postgres::PgRow) -> Result<SandboxProvider, DbError> {
     row.try_get::<String, _>("provider")?.parse().map_err(
         |error: crate::sandbox_accounts::SandboxAccountError| DbError::Contract(error.to_string()),
     )
+}
+
+fn timestamp(value: DateTime<Utc>) -> TimestampMs {
+    TimestampMs(u64::try_from(value.timestamp_millis()).unwrap_or(0))
 }

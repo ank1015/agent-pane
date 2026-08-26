@@ -110,6 +110,7 @@ pub fn router(
         )
         .route("/v1/operations/{operation_id}/events", get(get_events))
         .merge(crate::environments::routes())
+        .merge(crate::e2b_sandboxes::routes())
         .merge(crate::snapshot_http::routes())
         .merge(crate::sandbox_template_http::routes())
         .layer(DefaultBodyLimit::max(config.max_request_bytes))
@@ -535,7 +536,7 @@ pub(crate) fn require(headers: &HeaderMap, token: &str) -> Result<(), ApiError> 
         .ok_or_else(|| ApiError::new(StatusCode::UNAUTHORIZED, "invalid bearer token"))
 }
 
-fn validate_machine_name(name: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_machine_name(name: &str) -> Result<(), ApiError> {
     if name.is_empty() || name != name.trim() || name.chars().count() > 120 {
         return Err(ApiError::bad(
             "machine name must be 1-120 characters without surrounding whitespace",

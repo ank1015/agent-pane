@@ -92,7 +92,8 @@ impl ApiError {
     pub(crate) fn sandbox_materialization(error: SandboxMaterializationError) -> Self {
         match error {
             SandboxMaterializationError::TemplateNotFound
-            | SandboxMaterializationError::SnapshotNotFound => Self::not_found(),
+            | SandboxMaterializationError::SnapshotNotFound
+            | SandboxMaterializationError::SandboxNotFound => Self::not_found(),
             SandboxMaterializationError::Account(account) => Self::sandbox_account(account),
             SandboxMaterializationError::Provider(provider) => {
                 tracing::warn!(error=%provider, "sandbox provider operation failed");
