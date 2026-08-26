@@ -6,16 +6,17 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, put},
 };
+use execution_protocol::Environment;
 use uuid::Uuid;
 
 use super::{
     MachineService,
     model::{
-        CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest,
-        CreateSnapshotRequest, MachineInventory, MachineResponse, RotateSandboxCredentialsRequest,
-        SandboxAccount, SandboxAccountResponse, SandboxEnvironmentInstance,
-        SandboxEnvironmentTemplate, Snapshot, SnapshotQuery, UpdateNameRequest,
-        UpdateSandboxEnvironmentTemplateRequest,
+        CreateMachineEnvironmentRequest, CreateSandboxAccountRequest,
+        CreateSandboxEnvironmentTemplateRequest, CreateSnapshotRequest, MachineInventory,
+        MachineResponse, RotateSandboxCredentialsRequest, SandboxAccount, SandboxAccountResponse,
+        SandboxEnvironmentInstance, SandboxEnvironmentTemplate, Snapshot, SnapshotQuery,
+        UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
     },
 };
 use crate::{AppState, error::ApiError};
@@ -28,6 +29,10 @@ struct MachineState {
 pub(super) fn router(service: MachineService) -> Router<AppState> {
     Router::new()
         .route("/api/machines", get(machine_inventory))
+        .route(
+            "/api/machines/{machine_id}/environments",
+            get(list_machine_environments).post(create_machine_environment),
+        )
         .route(
             "/api/machines/sandbox-accounts",
             get(list_sandbox_accounts).post(create_sandbox_account),
@@ -66,7 +71,7 @@ pub(super) fn router(service: MachineService) -> Router<AppState> {
         )
         .route(
             "/api/machines/environments/{environment_id}",
-            axum::routing::delete(delete_environment),
+            axum::routing::patch(update_environment_name).delete(delete_environment),
         )
         .route(
             "/api/machines/tunnels/{machine_id}",
@@ -80,6 +85,26 @@ async fn machine_inventory(
     State(state): State<MachineState>,
 ) -> Result<Json<MachineInventory>, ApiError> {
     Ok(Json(state.service.machine_inventory().await?))
+}
+
+async fn list_machine_environments(
+    State(state): State<MachineState>,
+    Path(machine_id): Path<String>,
+) -> Result<Json<Vec<Environment>>, ApiError> {
+    Ok(Json(state.service.list_environments(&machine_id).await?))
+}
+
+async fn create_machine_environment(
+    State(state): State<MachineState>,
+    Path(machine_id): Path<String>,
+    payload: Result<Json<CreateMachineEnvironmentRequest>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
+    let environment = state
+        .service
+        .create_environment(&machine_id, &request)
+        .await?;
+    Ok((StatusCode::CREATED, Json(environment)).into_response())
 }
 
 async fn list_sandbox_accounts(
@@ -260,6 +285,20 @@ async fn delete_environment(
 ) -> Result<StatusCode, ApiError> {
     state.service.delete_environment(&environment_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_environment_name(
+    State(state): State<MachineState>,
+    Path(environment_id): Path<String>,
+    payload: Result<Json<UpdateNameRequest>, JsonRejection>,
+) -> Result<Json<Environment>, ApiError> {
+    let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
+    Ok(Json(
+        state
+            .service
+            .update_environment_name(&environment_id, &request)
+            .await?,
+    ))
 }
 
 async fn update_machine_name(

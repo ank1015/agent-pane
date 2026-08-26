@@ -4,10 +4,11 @@ pub mod model;
 use uuid::Uuid;
 
 use crate::upstream::execution_gateway::{ExecutionGatewayClient, ExecutionGatewayError};
-use execution_protocol::MachineSummary;
+use execution_protocol::{Environment, MachineSummary};
 use model::{
-    CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest, CreateSnapshotRequest,
-    MachineInventory, RotateSandboxCredentialsRequest, SandboxAccount, SandboxEnvironmentInstance,
+    CreateMachineEnvironmentRequest, CreateSandboxAccountRequest,
+    CreateSandboxEnvironmentTemplateRequest, CreateSnapshotRequest, MachineInventory,
+    RotateSandboxCredentialsRequest, SandboxAccount, SandboxEnvironmentInstance,
     SandboxEnvironmentTemplate, Snapshot, SnapshotQuery, UpdateNameRequest,
     UpdateSandboxEnvironmentTemplateRequest,
 };
@@ -25,6 +26,21 @@ impl MachineService {
 
     async fn machine_inventory(&self) -> Result<MachineInventory, ExecutionGatewayError> {
         self.gateway.machine_inventory().await
+    }
+
+    async fn list_environments(
+        &self,
+        machine_id: &str,
+    ) -> Result<Vec<Environment>, ExecutionGatewayError> {
+        self.gateway.list_environments(machine_id).await
+    }
+
+    async fn create_environment(
+        &self,
+        machine_id: &str,
+        request: &CreateMachineEnvironmentRequest,
+    ) -> Result<Environment, ExecutionGatewayError> {
+        self.gateway.create_environment(machine_id, request).await
     }
 
     async fn list_sandbox_accounts(&self) -> Result<Vec<SandboxAccount>, ExecutionGatewayError> {
@@ -154,6 +170,16 @@ impl MachineService {
 
     async fn delete_environment(&self, environment_id: &str) -> Result<(), ExecutionGatewayError> {
         self.gateway.delete_environment(environment_id).await
+    }
+
+    async fn update_environment_name(
+        &self,
+        environment_id: &str,
+        request: &UpdateNameRequest,
+    ) -> Result<Environment, ExecutionGatewayError> {
+        self.gateway
+            .update_environment_name(environment_id, request)
+            .await
     }
 
     async fn update_machine_name(

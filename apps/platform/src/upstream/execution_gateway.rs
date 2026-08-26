@@ -9,13 +9,14 @@ use uuid::Uuid;
 use crate::{
     error::execution_gateway_rejected_body,
     machines::model::{
-        CreateSandboxAccountRequest, CreateSandboxEnvironmentTemplateRequest,
-        CreateSnapshotRequest, MachineInventory, RotateSandboxCredentialsRequest, SandboxAccount,
-        SandboxEnvironmentInstance, SandboxEnvironmentTemplate, Snapshot, SnapshotQuery,
-        UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
+        CreateMachineEnvironmentRequest, CreateSandboxAccountRequest,
+        CreateSandboxEnvironmentTemplateRequest, CreateSnapshotRequest, MachineInventory,
+        RotateSandboxCredentialsRequest, SandboxAccount, SandboxEnvironmentInstance,
+        SandboxEnvironmentTemplate, Snapshot, SnapshotQuery, UpdateNameRequest,
+        UpdateSandboxEnvironmentTemplateRequest,
     },
 };
-use execution_protocol::MachineSummary;
+use execution_protocol::{Environment, MachineSummary};
 
 #[derive(Clone)]
 pub struct ExecutionGatewayClient {
@@ -64,6 +65,34 @@ impl ExecutionGatewayClient {
     ) -> Result<MachineInventory, ExecutionGatewayError> {
         self.send_json(self.http.get(self.url("v1/control/machines")?))
             .await
+    }
+
+    pub(crate) async fn list_environments(
+        &self,
+        machine_id: &str,
+    ) -> Result<Vec<Environment>, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .get(self.url("v1/control/environments")?)
+                .query(&[("machine_id", machine_id)]),
+        )
+        .await
+    }
+
+    pub(crate) async fn create_environment(
+        &self,
+        machine_id: &str,
+        request: &CreateMachineEnvironmentRequest,
+    ) -> Result<Environment, ExecutionGatewayError> {
+        self.send_json(self.http.post(self.url("v1/control/environments")?).json(
+            &serde_json::json!({
+                "machine_id": machine_id,
+                "name": request.name.as_str(),
+                "workspace_root_id": request.workspace_root_id.as_str(),
+                "path": request.path.as_str(),
+            }),
+        ))
+        .await
     }
 
     pub(crate) async fn get_sandbox_account(
@@ -262,6 +291,19 @@ impl ExecutionGatewayClient {
         .await
     }
 
+    pub(crate) async fn update_environment_name(
+        &self,
+        environment_id: &str,
+        request: &UpdateNameRequest,
+    ) -> Result<Environment, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .patch(self.url(&format!("v1/control/environments/{environment_id}"))?)
+                .json(request),
+        )
+        .await
+    }
+
     pub(crate) async fn update_machine_name(
         &self,
         machine_id: &str,
@@ -372,130 +414,5 @@ pub enum ExecutionGatewayError {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use axum::{
-        Json, Router,
-        extract::State,
-        http::{HeaderMap, StatusCode},
-        routing::post,
-    };
-    use serde_json::{Value, json};
-    use tokio::{net::TcpListener, sync::mpsc};
-
-    use super::ExecutionGatewayClient;
-    use crate::machines::model::{CreateSandboxAccountRequest, MachineInventory, SandboxProvider};
-
-    #[tokio::test]
-    async fn create_sandbox_account_authenticates_and_forwards_the_secret_once() {
-        let (request_tx, mut request_rx) = mpsc::unbounded_channel();
-        let mock_gateway = Router::new()
-            .route("/v1/control/sandbox-accounts", post(capture_create_request))
-            .with_state(request_tx);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, mock_gateway).await.unwrap();
-        });
-
-        let client = ExecutionGatewayClient::new(
-            format!("http://{address}").parse().unwrap(),
-            "platform-control-token",
-            Duration::from_secs(1),
-        )
-        .unwrap();
-        let response = client
-            .create_sandbox_account(&CreateSandboxAccountRequest {
-                provider: SandboxProvider::E2b,
-                name: "main".to_owned(),
-                api_key: "secret-key".to_owned(),
-                config: json!({}),
-                enabled: true,
-                make_default: false,
-            })
-            .await
-            .unwrap();
-        let (authorization, body) = request_rx.recv().await.unwrap();
-
-        assert_eq!(authorization, "Bearer platform-control-token");
-        assert_eq!(
-            body,
-            json!({"provider": "e2b", "name": "main", "api_key": "secret-key"})
-        );
-        assert_eq!(response.name, "main");
-    }
-
-    #[tokio::test]
-    async fn machine_inventory_uses_the_control_endpoint() {
-        let (request_tx, mut request_rx) = mpsc::unbounded_channel();
-        let mock_gateway = Router::new()
-            .route(
-                "/v1/control/machines",
-                axum::routing::get(capture_inventory_request),
-            )
-            .with_state(request_tx);
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, mock_gateway).await.unwrap();
-        });
-
-        let client = ExecutionGatewayClient::new(
-            format!("http://{address}").parse().unwrap(),
-            "platform-control-token",
-            Duration::from_secs(1),
-        )
-        .unwrap();
-        let inventory: MachineInventory = client.machine_inventory().await.unwrap();
-
-        assert_eq!(
-            request_rx.recv().await.unwrap(),
-            "Bearer platform-control-token"
-        );
-        assert!(inventory.connector_accounts.is_empty());
-        assert!(inventory.machine_daemons.is_empty());
-    }
-
-    async fn capture_create_request(
-        State(request_tx): State<mpsc::UnboundedSender<(String, Value)>>,
-        headers: HeaderMap,
-        Json(body): Json<Value>,
-    ) -> (StatusCode, Json<Value>) {
-        let authorization = headers
-            .get("authorization")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_owned();
-        request_tx.send((authorization, body)).unwrap();
-        (
-            StatusCode::CREATED,
-            Json(json!({
-                "id": "01992aa0-0000-7000-8000-000000000001",
-                "provider": "e2b",
-                "name": "main",
-                "config": {},
-                "enabled": true,
-                "is_default": true,
-                "validation_status": "unchecked",
-                "credential_version": 1,
-                "credentials_updated_at": 1787443200000_u64,
-                "created_at": 1787443200000_u64,
-                "updated_at": 1787443200000_u64
-            })),
-        )
-    }
-
-    async fn capture_inventory_request(
-        State(request_tx): State<mpsc::UnboundedSender<String>>,
-        headers: HeaderMap,
-    ) -> Json<Value> {
-        let authorization = headers
-            .get("authorization")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_owned();
-        request_tx.send(authorization).unwrap();
-        Json(json!({"connector_accounts": [], "machine_daemons": []}))
-    }
-}
+#[path = "execution_gateway_tests.rs"]
+mod tests;

@@ -74,6 +74,14 @@ pub struct MachineInventory {
     pub machine_daemons: Vec<MachineSummary>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateMachineEnvironmentRequest {
+    pub name: String,
+    pub workspace_root_id: String,
+    pub path: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Snapshot {
     pub id: Uuid,
