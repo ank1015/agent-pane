@@ -27,6 +27,13 @@ type OperatingSystem =
   | { type: 'linux' | 'macos' | 'windows' | 'free_bsd' }
   | { type: 'other'; name: string }
 
+type WorkspaceRoot = {
+  id: string
+  name: string
+  uri: string
+  read_only: boolean
+}
+
 export type MachineDaemon = {
   machine_id: string
   name: string
@@ -35,6 +42,8 @@ export type MachineDaemon = {
   descriptor: {
     operating_system: OperatingSystem
     architecture: string
+    path_convention: 'posix' | 'windows'
+    workspace_roots: WorkspaceRoot[]
   }
   created_at: number
   updated_at: number
@@ -44,6 +53,15 @@ export type MachineDaemon = {
 export type MachineInventory = {
   connector_accounts: SandboxConnectorAccount[]
   machine_daemons: MachineDaemon[]
+}
+
+export type MachineEnvironment = {
+  environment_id: string
+  machine_id: string
+  name: string
+  workspace_root_id: string
+  path: string
+  created_at: number
 }
 
 export type MachineTarget =
@@ -56,6 +74,18 @@ export type CreateSandboxAccountInput = {
   apiKey: string
 }
 
+export type CreateMachineEnvironmentInput = {
+  machineId: string
+  name: string
+  workspaceRootId: string
+  path: string
+}
+
+export type UpdateMachineEnvironmentNameInput = {
+  environment: MachineEnvironment
+  name: string
+}
+
 type CreateSandboxAccountResponse = {
   account: SandboxConnectorAccount
 }
@@ -63,6 +93,8 @@ type CreateSandboxAccountResponse = {
 export const machineKeys = {
   all: ['machines'] as const,
   inventory: () => [...machineKeys.all, 'inventory'] as const,
+  environments: (machineId: string) =>
+    [...machineKeys.all, machineId, 'environments'] as const,
 }
 
 export function useMachineInventory() {
@@ -70,6 +102,124 @@ export function useMachineInventory() {
     queryKey: machineKeys.inventory(),
     queryFn: ({ signal }) => getJson<MachineInventory>('/api/machines', signal),
     refetchInterval: 15_000,
+  })
+}
+
+export function useMachineEnvironments(machineId: string) {
+  return useQuery({
+    queryKey: machineKeys.environments(machineId),
+    queryFn: ({ signal }) =>
+      getJson<MachineEnvironment[]>(
+        `/api/machines/${encodeURIComponent(machineId)}/environments`,
+        signal,
+      ),
+    enabled: machineId.length > 0,
+  })
+}
+
+export function useCreateMachineEnvironment() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({
+      machineId,
+      name,
+      workspaceRootId,
+      path,
+    }: CreateMachineEnvironmentInput) =>
+      postJson<MachineEnvironment>(
+        `/api/machines/${encodeURIComponent(machineId)}/environments`,
+        {
+          name,
+          workspace_root_id: workspaceRootId,
+          path,
+        },
+      ),
+    onSuccess: (environment) => {
+      queryClient.setQueryData<MachineEnvironment[]>(
+        machineKeys.environments(environment.machine_id),
+        (environments) =>
+          environments === undefined
+            ? [environment]
+            : [...environments, environment],
+      )
+      return queryClient.invalidateQueries({
+        queryKey: machineKeys.environments(environment.machine_id),
+      })
+    },
+  })
+}
+
+export function useUpdateMachineEnvironmentName() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({
+      environment,
+      name,
+    }: UpdateMachineEnvironmentNameInput) =>
+      patchJson<MachineEnvironment>(
+        `/api/machines/environments/${encodeURIComponent(environment.environment_id)}`,
+        { name },
+      ),
+    onMutate: async ({ environment, name }) => {
+      const queryKey = machineKeys.environments(environment.machine_id)
+      await queryClient.cancelQueries({ queryKey })
+      const previousEnvironments =
+        queryClient.getQueryData<MachineEnvironment[]>(queryKey)
+      queryClient.setQueryData<MachineEnvironment[]>(queryKey, (environments) =>
+        environments?.map((candidate) =>
+          candidate.environment_id === environment.environment_id
+            ? { ...candidate, name }
+            : candidate,
+        ),
+      )
+      return { previousEnvironments, queryKey }
+    },
+    onError: (_error, { environment }, context) => {
+      queryClient.setQueryData(
+        machineKeys.environments(environment.machine_id),
+        context?.previousEnvironments,
+      )
+    },
+    onSettled: (_data, _error, { environment }) =>
+      queryClient.invalidateQueries({
+        queryKey: machineKeys.environments(environment.machine_id),
+      }),
+  })
+}
+
+export function useDeleteMachineEnvironment() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (environment: MachineEnvironment) =>
+      deleteRequest(
+        `/api/machines/environments/${encodeURIComponent(environment.environment_id)}`,
+      ),
+    onMutate: async (environment) => {
+      const queryKey = machineKeys.environments(environment.machine_id)
+      await queryClient.cancelQueries({ queryKey })
+      const previousEnvironments =
+        queryClient.getQueryData<MachineEnvironment[]>(queryKey)
+      queryClient.setQueryData<MachineEnvironment[]>(queryKey, (environments) =>
+        environments?.filter(
+          (candidate) =>
+            candidate.environment_id !== environment.environment_id,
+        ),
+      )
+      return { previousEnvironments, queryKey }
+    },
+    onError: (_error, environment, context) => {
+      queryClient.setQueryData(
+        machineKeys.environments(environment.machine_id),
+        context?.previousEnvironments,
+      )
+    },
+    onSettled: (_data, _error, environment) =>
+      queryClient.invalidateQueries({
+        queryKey: machineKeys.environments(environment.machine_id),
+      }),
   })
 }
 
