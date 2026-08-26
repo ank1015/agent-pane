@@ -24,7 +24,9 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route(
             "/v1/control/environments/{environment_id}",
-            get(get_control_environment).delete(delete_environment),
+            get(get_control_environment)
+                .patch(update_environment_name)
+                .delete(delete_environment),
         )
         .route("/v1/environments/{environment_id}", get(get_environment))
         .route(
@@ -39,6 +41,10 @@ async fn create_environment(
     Json(request): Json<CreateEnvironmentRequest>,
 ) -> Result<(StatusCode, Json<Environment>), ApiError> {
     require(&headers, &state.control_token)?;
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad("environment name must not be empty"));
+    }
     let machine = state
         .database
         .machine(request.machine_id.as_str())
@@ -66,6 +72,7 @@ async fn create_environment(
         .create_environment(
             &environment_id,
             &request.machine_id,
+            name,
             &request.workspace_root_id,
             &path,
         )
@@ -118,6 +125,32 @@ async fn get_environment(
 ) -> Result<Json<Environment>, ApiError> {
     require(&headers, &state.api_token)?;
     find_environment(&state, &environment_id).await.map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateEnvironmentNameRequest {
+    name: String,
+}
+
+async fn update_environment_name(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(environment_id): Path<String>,
+    Json(request): Json<UpdateEnvironmentNameRequest>,
+) -> Result<Json<Environment>, ApiError> {
+    require(&headers, &state.control_token)?;
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(ApiError::bad("environment name must not be empty"));
+    }
+    state
+        .database
+        .update_environment_name(&environment_id, name)
+        .await
+        .map_err(ApiError::database)?
+        .map(Json)
+        .ok_or_else(ApiError::not_found)
 }
 
 async fn delete_environment(

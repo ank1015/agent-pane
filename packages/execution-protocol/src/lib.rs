@@ -169,6 +169,7 @@ pub struct MachineSummary {
 pub struct Environment {
     pub environment_id: EnvironmentId,
     pub machine_id: MachineId,
+    pub name: String,
     pub workspace_root_id: WorkspaceRootId,
     pub path: String,
     pub created_at: TimestampMs,
@@ -178,6 +179,7 @@ pub struct Environment {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CreateEnvironmentRequest {
     pub machine_id: MachineId,
+    pub name: String,
     pub workspace_root_id: WorkspaceRootId,
     pub path: String,
 }

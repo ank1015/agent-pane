@@ -159,6 +159,7 @@ impl SandboxMaterializer {
             .complete_sandbox_materialization(
                 &machine_id,
                 &environment_id,
+                &template.name,
                 &root_id,
                 &environment_path(&template.cwd),
                 template.id,

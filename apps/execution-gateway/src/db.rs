@@ -176,19 +176,21 @@ impl Database {
         &self,
         environment_id: &EnvironmentId,
         machine_id: &MachineId,
+        name: &str,
         workspace_root_id: &WorkspaceRootId,
         path: &str,
     ) -> Result<Option<Environment>, DbError> {
         let row = sqlx::query(
             "insert into environments
-                 (environment_id, machine_id, workspace_root_id, path)
-             select $1, machine_id, $3, $4
+                 (environment_id, machine_id, name, workspace_root_id, path)
+             select $1, machine_id, $3, $4, $5
              from machines
              where machine_id = $2 and deleted_at is null
              returning *",
         )
         .bind(environment_id.as_str())
         .bind(machine_id.as_str())
+        .bind(name)
         .bind(workspace_root_id.as_str())
         .bind(path)
         .fetch_optional(&self.pool)
@@ -223,6 +225,24 @@ impl Database {
         .into_iter()
         .map(environment_from_row)
         .collect()
+    }
+
+    pub async fn update_environment_name(
+        &self,
+        environment_id: &str,
+        name: &str,
+    ) -> Result<Option<Environment>, DbError> {
+        sqlx::query(
+            "update environments set name = $2
+             where environment_id = $1 and deleted_at is null
+             returning *",
+        )
+        .bind(environment_id)
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(environment_from_row)
+        .transpose()
     }
 
     pub async fn delete_environment(&self, environment_id: &str) -> Result<bool, DbError> {
@@ -366,6 +386,7 @@ fn environment_from_row(row: sqlx::postgres::PgRow) -> Result<Environment, DbErr
     Ok(Environment {
         environment_id,
         machine_id,
+        name: row.try_get("name")?,
         workspace_root_id,
         path: row.try_get("path")?,
         created_at: timestamp(created),

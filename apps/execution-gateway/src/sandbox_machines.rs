@@ -97,6 +97,7 @@ impl Database {
         &self,
         machine_id: &MachineId,
         environment_id: &EnvironmentId,
+        environment_name: &str,
         workspace_root_id: &WorkspaceRootId,
         path: &str,
         template_id: Uuid,
@@ -116,11 +117,12 @@ impl Database {
         }
         sqlx::query(
             "insert into environments
-                 (environment_id, machine_id, workspace_root_id, path)
-             values ($1, $2, $3, $4)",
+                 (environment_id, machine_id, name, workspace_root_id, path)
+             values ($1, $2, $3, $4, $5)",
         )
         .bind(environment_id.as_str())
         .bind(machine_id.as_str())
+        .bind(environment_name)
         .bind(workspace_root_id.as_str())
         .bind(path)
         .execute(&mut *transaction)

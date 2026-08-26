@@ -154,7 +154,8 @@ impl Database {
     ) -> Result<Vec<SandboxEnvironmentInstance>, DbError> {
         sqlx::query(
             "select i.template_id, a.provider, sm.provider_resource_id,
-                    e.environment_id, e.machine_id, e.workspace_root_id, e.path,
+                    e.environment_id, e.machine_id, e.name as environment_name,
+                    e.workspace_root_id, e.path,
                     e.created_at as environment_created_at, i.created_at
              from sandbox_environment_instances i
              join environments e on e.environment_id = i.environment_id
@@ -259,6 +260,7 @@ fn instance_from_row(row: sqlx::postgres::PgRow) -> Result<SandboxEnvironmentIns
             .map_err(|error| DbError::Contract(error.to_string()))?,
         machine_id: MachineId::new(row.try_get::<String, _>("machine_id")?)
             .map_err(|error| DbError::Contract(error.to_string()))?,
+        name: row.try_get("environment_name")?,
         workspace_root_id: WorkspaceRootId::new(row.try_get::<String, _>("workspace_root_id")?)
             .map_err(|error| DbError::Contract(error.to_string()))?,
         path: row.try_get("path")?,
