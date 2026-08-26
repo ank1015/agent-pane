@@ -22,7 +22,10 @@ pub use config::{
 };
 pub use error::{TensorlakeConnectorError, TensorlakeTransportError};
 pub use http::TensorlakeHttpTransport;
-pub use lifecycle::{ReadyTensorlakeSandbox, create_from_snapshot, terminate, wait_until_ready};
+pub use lifecycle::{
+    ReadyTensorlakeSandbox, create, create_from_snapshot, create_snapshot, ensure_started,
+    terminate, wait_until_ready,
+};
 pub use runtime::TensorlakeExecutionRuntime;
 pub use transport::{
     RemoteProcessEvent, RemoteProcessRequest, RemoteProcessStream, RemoteProcessSummary,
