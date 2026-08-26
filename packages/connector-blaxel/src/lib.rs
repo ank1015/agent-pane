@@ -21,7 +21,10 @@ pub use config::{
 };
 pub use error::{BlaxelConnectorError, BlaxelTransportError};
 pub use http::BlaxelHttpTransport;
-pub use lifecycle::{ReadyBlaxelSandbox, create_from_snapshot, terminate, wait_until_ready};
+pub use lifecycle::{
+    ReadyBlaxelSandbox, create, create_from_snapshot, create_snapshot, resolve_workspace,
+    terminate, wait_until_ready,
+};
 pub use runtime::BlaxelExecutionRuntime;
 pub use transport::{
     BlaxelTransport, RemoteProcessEvent, RemoteProcessRequest, RemoteProcessStream,
