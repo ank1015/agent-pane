@@ -198,7 +198,7 @@ fn pi_revision() -> RegisterHarnessRevisionRequest {
                 "external_prompt": {"type": ["string", "null"]},
                 "is_replaced": {"type": "boolean"}
             },
-            "required": ["provider", "model_id", "reasoning_level", "execution", "is_replaced"],
+            "required": ["provider", "model_id", "reasoning_level", "is_replaced"],
             "additionalProperties": false
         }))),
     }

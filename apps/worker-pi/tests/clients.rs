@@ -148,7 +148,7 @@ async fn registers_and_activates_the_packaged_pi_harness() {
         json!(["machine_id", "workspace_root_id", "cwd"])
     );
     assert!(
-        calls[1].body["config_schema"]["required"]
+        !calls[1].body["config_schema"]["required"]
             .as_array()
             .unwrap()
             .contains(&json!("execution"))
