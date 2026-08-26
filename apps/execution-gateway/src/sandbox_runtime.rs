@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use connector_blaxel::{
     BlaxelConnectionConfig, BlaxelExecutionRuntime, BlaxelRuntimeConfig, BlaxelWorkspaceRoot,
@@ -52,6 +52,10 @@ const fn filesystem_layout(provider: SandboxProvider) -> SandboxFilesystemLayout
     }
 }
 
+pub(crate) const fn sandbox_workspace_root(provider: SandboxProvider) -> &'static str {
+    filesystem_layout(provider).workspace_root
+}
+
 #[derive(Clone)]
 pub struct SandboxRuntimeFactory {
     database: Database,
@@ -77,7 +81,7 @@ impl SandboxRuntimeFactory {
         machine_id: &MachineId,
         machine_name: &str,
     ) -> Result<Arc<dyn ExecutionRuntime>, SandboxRuntimeError> {
-        let machine = self
+        let mut machine = self
             .database
             .sandbox_machine(machine_id.as_str())
             .await?
@@ -89,6 +93,56 @@ impl SandboxRuntimeFactory {
             .ok_or(SandboxRuntimeError::AccountCredentialsMissing)?;
         if credentials.provider() != machine.provider {
             return Err(SandboxRuntimeError::ProviderMismatch);
+        }
+        if machine.provider == SandboxProvider::Daytona {
+            let ready = connector_daytona::ensure_started(
+                credentials.api_key(),
+                &machine.provider_resource_id,
+                sandbox_start_timeout(&machine.account_config),
+                sandbox_poll_interval(&machine.account_config),
+            )
+            .await?;
+            let toolbox_url = match ready.toolbox_url {
+                Some(url) => url,
+                None => {
+                    connector_daytona::DaytonaConnectionConfig::for_sandbox(
+                        &machine.provider_resource_id,
+                        credentials.api_key(),
+                    )
+                    .map_err(|error| SandboxRuntimeError::Configuration(error.to_string()))?
+                    .toolbox_url
+                }
+            };
+            let config = machine.connection_config.as_object_mut().ok_or_else(|| {
+                SandboxRuntimeError::Configuration(
+                    "Daytona connection config must be an object".to_owned(),
+                )
+            })?;
+            config.insert(
+                "toolbox_url".to_owned(),
+                Value::String(toolbox_url.to_string()),
+            );
+            config.insert(
+                "network_block_all".to_owned(),
+                Value::Bool(ready.network_block_all),
+            );
+        } else if machine.provider == SandboxProvider::Tensorlake {
+            let ready = connector_tensorlake::ensure_started(
+                credentials.api_key(),
+                &machine.provider_resource_id,
+                sandbox_start_timeout(&machine.account_config),
+                sandbox_poll_interval(&machine.account_config),
+            )
+            .await?;
+            let config = machine.connection_config.as_object_mut().ok_or_else(|| {
+                SandboxRuntimeError::Configuration(
+                    "Tensorlake connection config must be an object".to_owned(),
+                )
+            })?;
+            config.insert(
+                "proxy_url".to_owned(),
+                Value::String(ready.sandbox_url.to_string()),
+            );
         }
         let connection_secret = self
             .secrets
@@ -262,6 +316,24 @@ fn apply_common_connection(config: &Value, python_command: &mut String) {
     }
 }
 
+fn sandbox_start_timeout(config: &Value) -> Duration {
+    Duration::from_secs(
+        config
+            .get("provision_timeout_seconds")
+            .and_then(Value::as_u64)
+            .unwrap_or(120),
+    )
+}
+
+fn sandbox_poll_interval(config: &Value) -> Duration {
+    Duration::from_millis(
+        config
+            .get("poll_interval_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(500),
+    )
+}
+
 #[derive(Debug, Error)]
 pub enum SandboxRuntimeError {
     #[error("sandbox machine was not found or is not running")]
@@ -287,9 +359,13 @@ pub enum SandboxRuntimeError {
     #[error(transparent)]
     Daytona(#[from] connector_daytona::DaytonaConnectorError),
     #[error(transparent)]
+    DaytonaLifecycle(#[from] connector_daytona::DaytonaTransportError),
+    #[error(transparent)]
     Blaxel(#[from] connector_blaxel::BlaxelConnectorError),
     #[error(transparent)]
     Tensorlake(#[from] connector_tensorlake::TensorlakeConnectorError),
+    #[error(transparent)]
+    TensorlakeLifecycle(#[from] connector_tensorlake::TensorlakeTransportError),
 }
 
 #[cfg(test)]
