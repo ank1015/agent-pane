@@ -11,7 +11,10 @@ use crate::{
     db::DbError,
     http::{ApiError, AppState, require},
     sandbox_accounts::SandboxProvider,
-    snapshots::{CreateSnapshotRequest, Snapshot, validate_request},
+    snapshots::{
+        CreateSnapshotRequest, Snapshot, UpdateSnapshotRequest, validate_request,
+        validate_update_request,
+    },
 };
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -22,7 +25,9 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route(
             "/v1/control/snapshots/{snapshot_id}",
-            get(get_snapshot).delete(delete_snapshot),
+            get(get_snapshot)
+                .patch(update_snapshot_name)
+                .delete(delete_snapshot),
         )
 }
 
@@ -89,6 +94,27 @@ async fn get_snapshot(
     state
         .database
         .snapshot(snapshot_id)
+        .await
+        .map_err(ApiError::database)?
+        .map(Json)
+        .ok_or_else(ApiError::not_found)
+}
+
+async fn update_snapshot_name(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(snapshot_id): Path<Uuid>,
+    Json(request): Json<UpdateSnapshotRequest>,
+) -> Result<Json<Snapshot>, ApiError> {
+    require(&headers, &state.control_token)?;
+    validate_update_request(&request).map_err(|field| {
+        ApiError::bad(format!(
+            "{field} must not be blank or have surrounding whitespace"
+        ))
+    })?;
+    state
+        .database
+        .update_snapshot_name(snapshot_id, &request.name)
         .await
         .map_err(ApiError::database)?
         .map(Json)

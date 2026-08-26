@@ -12,6 +12,7 @@ use crate::{
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Snapshot {
     pub id: Uuid,
+    pub name: String,
     pub sandbox_account_id: Uuid,
     pub provider: SandboxProvider,
     pub provider_snapshot_id: String,
@@ -21,12 +22,19 @@ pub struct Snapshot {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CreateSnapshotRequest {
+    pub name: String,
     pub provider: SandboxProvider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_account_id: Option<Uuid>,
     #[serde(alias = "snapshot_sandbox_id")]
     pub provider_snapshot_id: String,
     pub sandbox_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateSnapshotRequest {
+    pub name: String,
 }
 
 impl Database {
@@ -37,10 +45,12 @@ impl Database {
         request: &CreateSnapshotRequest,
     ) -> Result<Snapshot, DbError> {
         sqlx::query(
-            "insert into snapshots (id, sandbox_account_id, provider_snapshot_id, sandbox_id)
-             values ($1, $2, $3, $4)",
+            "insert into snapshots
+                 (id, name, sandbox_account_id, provider_snapshot_id, sandbox_id)
+             values ($1, $2, $3, $4, $5)",
         )
         .bind(id)
+        .bind(&request.name)
         .bind(sandbox_account_id)
         .bind(&request.provider_snapshot_id)
         .bind(&request.sandbox_id)
@@ -83,6 +93,22 @@ impl Database {
         .collect()
     }
 
+    pub async fn update_snapshot_name(
+        &self,
+        id: Uuid,
+        name: &str,
+    ) -> Result<Option<Snapshot>, DbError> {
+        let updated = sqlx::query("update snapshots set name = $2 where id = $1 returning id")
+            .bind(id)
+            .bind(name)
+            .fetch_optional(self.pool())
+            .await?;
+        if updated.is_none() {
+            return Ok(None);
+        }
+        self.snapshot(id).await
+    }
+
     pub async fn delete_snapshot(&self, id: Uuid) -> Result<bool, DbError> {
         sqlx::query("delete from snapshots where id = $1")
             .bind(id)
@@ -94,14 +120,19 @@ impl Database {
 }
 
 const SNAPSHOT_SELECT: &str =
-    "select s.id, s.sandbox_account_id, a.provider, s.provider_snapshot_id,
+    "select s.id, s.name, s.sandbox_account_id, a.provider, s.provider_snapshot_id,
             s.sandbox_id, s.created_at
      from snapshots s
      join sandbox_accounts a on a.id = s.sandbox_account_id";
 
 pub(crate) fn validate_request(request: &CreateSnapshotRequest) -> Result<(), &'static str> {
+    validate_external_id(&request.name, "name")?;
     validate_external_id(&request.provider_snapshot_id, "provider_snapshot_id")?;
     validate_external_id(&request.sandbox_id, "sandbox_id")
+}
+
+pub(crate) fn validate_update_request(request: &UpdateSnapshotRequest) -> Result<(), &'static str> {
+    validate_external_id(&request.name, "name")
 }
 
 fn validate_external_id(value: &str, field: &'static str) -> Result<(), &'static str> {
@@ -119,6 +150,7 @@ fn snapshot_from_row(row: sqlx::postgres::PgRow) -> Result<Snapshot, DbError> {
     let created_at: DateTime<Utc> = row.try_get("created_at")?;
     Ok(Snapshot {
         id: row.try_get("id")?,
+        name: row.try_get("name")?,
         sandbox_account_id: row.try_get("sandbox_account_id")?,
         provider,
         provider_snapshot_id: row.try_get("provider_snapshot_id")?,
@@ -129,12 +161,15 @@ fn snapshot_from_row(row: sqlx::postgres::PgRow) -> Result<Snapshot, DbError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateSnapshotRequest, validate_request};
+    use super::{
+        CreateSnapshotRequest, UpdateSnapshotRequest, validate_request, validate_update_request,
+    };
     use crate::sandbox_accounts::SandboxProvider;
 
     #[test]
     fn validates_external_snapshot_identifiers() {
         let mut request = CreateSnapshotRequest {
+            name: "Snapshot 1".to_owned(),
             provider: SandboxProvider::E2b,
             sandbox_account_id: None,
             provider_snapshot_id: "snapshot-1".to_owned(),
@@ -147,5 +182,18 @@ mod tests {
         request.provider_snapshot_id = "snapshot-1".to_owned();
         request.sandbox_id.clear();
         assert_eq!(validate_request(&request), Err("sandbox_id"));
+
+        assert!(
+            validate_update_request(&UpdateSnapshotRequest {
+                name: "Renamed snapshot".to_owned(),
+            })
+            .is_ok()
+        );
+        assert_eq!(
+            validate_update_request(&UpdateSnapshotRequest {
+                name: " Renamed snapshot".to_owned(),
+            }),
+            Err("name")
+        );
     }
 }
