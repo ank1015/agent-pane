@@ -19,7 +19,8 @@ pub use config::{E2bConnectionConfig, E2bNativeGrant, E2bRuntimeConfig, E2bWorks
 pub use error::{E2bConnectorError, E2bTransportError};
 pub use http::E2bHttpTransport;
 pub use lifecycle::{
-    CreatedE2bSandbox, create_from_snapshot, create_from_snapshot_details, terminate,
+    CreatedE2bSandbox, create, create_details, create_from_snapshot, create_from_snapshot_details,
+    create_snapshot, terminate,
 };
 pub use runtime::E2bExecutionRuntime;
 pub use transport::{

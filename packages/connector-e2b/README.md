@@ -20,11 +20,17 @@ Each requested user process has a Python wrapper only for that process's
 lifetime so it can own the child process, PTY, control channel, and output
 journal. There is no resident connector service in the sandbox.
 
-The caller owns lifecycle orchestration. `create_from_snapshot(api_key,
-snapshot_id)` creates an E2B sandbox through the control API and returns its
-sandbox ID. Construct `E2bConnectionConfig` from that ID and the returned envd
-access token once connection metadata is resolved, then provide target-side
-workspace roots and a state directory through `E2bRuntimeConfig`.
+The caller owns lifecycle orchestration. `create(api_key, template_id)` creates
+an E2B sandbox through the control API and returns its sandbox ID. Snapshot IDs
+can be supplied as template IDs, and the compatibility `create_from_snapshot`
+helper delegates to the same operation.
+`create_snapshot(api_key, sandbox_id)` resumes the source sandbox when needed,
+then lets E2B pause it while capturing its state and returns the persistent
+snapshot ID. Human-readable snapshot names belong to the caller rather than
+E2B's template identifier. Use `create_details` when connection metadata is needed, then construct
+`E2bConnectionConfig` from the created sandbox ID and envd access token and
+provide target-side workspace roots and a state directory through
+`E2bRuntimeConfig`.
 
 Current provider constraints are explicit:
 
