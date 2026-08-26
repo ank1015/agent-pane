@@ -209,7 +209,10 @@ impl Database {
         sqlx::query(
             "select m.machine_id, sm.sandbox_account_id,
                     sm.provider_resource_id as sandbox_id, m.name,
-                    nullif(sm.provider_metadata ->> 'template_id', '') as created_from,
+                    coalesce(
+                        nullif(sm.provider_metadata ->> 'created_from', ''),
+                        nullif(sm.provider_metadata ->> 'template_id', '')
+                    ) as created_from,
                     m.created_at
              from sandbox_machines sm
              join machines m on m.machine_id = sm.machine_id

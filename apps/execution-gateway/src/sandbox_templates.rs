@@ -233,11 +233,19 @@ pub(crate) fn normalize_cwd(cwd: &str) -> Result<String, &'static str> {
     })
 }
 
-pub(crate) fn environment_path(cwd: &str) -> String {
-    cwd.strip_prefix('/')
+pub(crate) fn environment_path(cwd: &str, workspace_root: &str) -> Result<String, &'static str> {
+    if cwd == workspace_root {
+        return Ok(".".to_owned());
+    }
+    let prefix = if workspace_root == "/" {
+        "/".to_owned()
+    } else {
+        format!("{workspace_root}/")
+    };
+    cwd.strip_prefix(&prefix)
         .filter(|path| !path.is_empty())
-        .unwrap_or(".")
-        .to_owned()
+        .map(str::to_owned)
+        .ok_or("cwd must be inside the provider workspace root")
 }
 
 fn template_from_row(row: sqlx::postgres::PgRow) -> Result<SandboxEnvironmentTemplate, DbError> {
@@ -295,8 +303,19 @@ mod tests {
             normalize_cwd("/workspace/./app/"),
             Ok("/workspace/app".to_owned())
         );
-        assert_eq!(environment_path("/workspace/app"), "workspace/app");
-        assert_eq!(environment_path("/"), ".");
+        assert_eq!(
+            environment_path("/workspace/app", "/workspace"),
+            Ok("app".to_owned())
+        );
+        assert_eq!(
+            environment_path("/workspace", "/workspace"),
+            Ok(".".to_owned())
+        );
+        assert_eq!(
+            environment_path("/workspace/app", "/"),
+            Ok("workspace/app".to_owned())
+        );
+        assert!(environment_path("/tmp/app", "/workspace").is_err());
         assert!(normalize_cwd("workspace").is_err());
         assert!(normalize_cwd("/workspace/../secret").is_err());
     }

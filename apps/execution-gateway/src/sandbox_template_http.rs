@@ -9,10 +9,11 @@ use uuid::Uuid;
 use crate::{
     db::DbError,
     http::{ApiError, AppState, require},
+    sandbox_runtime::sandbox_workspace_root,
     sandbox_templates::{
         CreateSandboxEnvironmentTemplateRequest, SandboxEnvironmentInstance,
-        SandboxEnvironmentTemplate, UpdateSandboxEnvironmentTemplateRequest, validate_create,
-        validate_update,
+        SandboxEnvironmentTemplate, UpdateSandboxEnvironmentTemplateRequest, environment_path,
+        validate_create, validate_update,
     },
 };
 
@@ -41,6 +42,7 @@ async fn create_template(
 ) -> Result<(StatusCode, Json<SandboxEnvironmentTemplate>), ApiError> {
     require(&headers, &state.control_token)?;
     validate_create(&mut request).map_err(ApiError::bad)?;
+    validate_template_location(&state, request.snapshot_id, &request.cwd).await?;
     match state
         .database
         .create_sandbox_environment_template(Uuid::now_v7(), &request)
@@ -85,16 +87,13 @@ async fn update_template(
 ) -> Result<Json<SandboxEnvironmentTemplate>, ApiError> {
     require(&headers, &state.control_token)?;
     validate_update(&mut request).map_err(ApiError::bad)?;
-    if let Some(snapshot_id) = request.snapshot_id
-        && state
-            .database
-            .snapshot(snapshot_id)
-            .await
-            .map_err(ApiError::database)?
-            .is_none()
-    {
-        return Err(ApiError::not_found());
-    }
+    let current = find_template(&state, template_id).await?;
+    validate_template_location(
+        &state,
+        request.snapshot_id.unwrap_or(current.snapshot_id),
+        request.cwd.as_deref().unwrap_or(&current.cwd),
+    )
+    .await?;
     match state
         .database
         .update_sandbox_environment_template(template_id, &request)
@@ -163,6 +162,22 @@ async fn find_template(
         .await
         .map_err(ApiError::database)?
         .ok_or_else(ApiError::not_found)
+}
+
+async fn validate_template_location(
+    state: &AppState,
+    snapshot_id: Uuid,
+    cwd: &str,
+) -> Result<(), ApiError> {
+    let snapshot = state
+        .database
+        .snapshot(snapshot_id)
+        .await
+        .map_err(ApiError::database)?
+        .ok_or_else(ApiError::not_found)?;
+    environment_path(cwd, sandbox_workspace_root(snapshot.provider))
+        .map(drop)
+        .map_err(ApiError::bad)
 }
 
 fn is_unique_violation(error: &DbError) -> bool {

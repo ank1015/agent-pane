@@ -5,7 +5,6 @@ use execution_contracts::{
     ExecutionPolicy, ExecutionState, MachineId, NetworkMode, OperationId, PathSpec,
     ProcessOutputPolicy, SandboxMode, StartExecutionRequest, StdinMode, WorkspaceRootId,
 };
-use execution_protocol::MachineSummary;
 use execution_runtime::{ExecutionRuntime, OperationContext};
 use thiserror::Error;
 use uuid::Uuid;
@@ -14,7 +13,6 @@ use crate::{
     db::{Database, DbError},
     sandbox_accounts::{
         SandboxAccount, SandboxAccountError, SandboxAccountService, SandboxCredentials,
-        SandboxProvider,
     },
     sandbox_machines::{
         NewSandboxMachine, SandboxEnvironmentResource, SandboxSecretError, SandboxSecretStore,
@@ -24,25 +22,17 @@ use crate::{
     },
     sandbox_runtime::{
         SANDBOX_ROOT_ID, SandboxRuntimeError, build_runtime, sandbox_machine_record,
+        sandbox_workspace_root,
     },
     sandbox_templates::{SandboxEnvironmentInstance, environment_path},
-    snapshots::{CreateSnapshotRequest, Snapshot},
 };
-
-#[derive(Clone, Debug)]
-pub struct CreatedE2bSandboxMachine {
-    pub machine: MachineSummary,
-    pub sandbox_account_id: Uuid,
-    pub sandbox_id: String,
-    pub template_id: String,
-}
 
 #[derive(Clone)]
 pub struct SandboxMaterializer {
-    database: Database,
-    accounts: SandboxAccountService,
-    secrets: SandboxSecretStore,
-    provider: Arc<dyn SandboxProviderClient>,
+    pub(crate) database: Database,
+    pub(crate) accounts: SandboxAccountService,
+    pub(crate) secrets: SandboxSecretStore,
+    pub(crate) provider: Arc<dyn SandboxProviderClient>,
 }
 
 impl SandboxMaterializer {
@@ -87,6 +77,9 @@ impl SandboxMaterializer {
             .snapshot(template.snapshot_id)
             .await?
             .ok_or(SandboxMaterializationError::SnapshotNotFound)?;
+        let environment_path =
+            environment_path(&template.cwd, sandbox_workspace_root(snapshot.provider))
+                .map_err(SandboxMaterializationError::InvalidTemplateCwd)?;
         let account = self
             .accounts
             .resolve(snapshot.provider, Some(snapshot.sandbox_account_id))
@@ -100,7 +93,7 @@ impl SandboxMaterializer {
         let target_name = format!("agent-pane-{}", Uuid::now_v7().simple());
         let provisioned = self
             .provider
-            .create(&snapshot, &account, &credentials, &target_name)
+            .create_from_snapshot(&snapshot, &account, &credentials, &target_name)
             .await?;
         let machine_name =
             materialized_machine_name(&template.name, &provisioned.provider_resource_id);
@@ -157,8 +150,12 @@ impl SandboxMaterializer {
                 .await;
             return Err(error.into());
         }
-        if let Err(error) =
-            prepare_environment(runtime.as_ref(), &template.cwd, &template.creation_script).await
+        if let Err(error) = prepare_environment(
+            runtime.as_ref(),
+            &environment_path,
+            &template.creation_script,
+        )
+        .await
         {
             self.cleanup_recorded(&machine_id, &account, &credentials, &provisioned, &error)
                 .await;
@@ -173,7 +170,7 @@ impl SandboxMaterializer {
                 &environment_id,
                 &template.name,
                 &root_id,
-                &environment_path(&template.cwd),
+                &environment_path,
                 template.id,
             )
             .await
@@ -186,149 +183,6 @@ impl SandboxMaterializer {
                 Err(error.into())
             }
         }
-    }
-
-    pub async fn create_e2b_sandbox(
-        &self,
-        account_id: Uuid,
-        template_id: &str,
-        name: Option<&str>,
-    ) -> Result<CreatedE2bSandboxMachine, SandboxMaterializationError> {
-        let account = self
-            .accounts
-            .resolve(SandboxProvider::E2b, Some(account_id))
-            .await?;
-        let credentials = self
-            .accounts
-            .credentials(account.id)
-            .await?
-            .ok_or(SandboxMaterializationError::AccountCredentialsMissing)?;
-        let machine_id = id::<MachineId>(Uuid::now_v7().to_string())?;
-        let machine_name = name.map(str::to_owned).unwrap_or_else(|| {
-            format!(
-                "E2B sandbox {}",
-                machine_id.as_str().split('-').next().unwrap_or("new")
-            )
-        });
-        let provisioned = self.provider.create_e2b(template_id, &credentials).await?;
-        let record = sandbox_machine_record(
-            machine_id.clone(),
-            account.id,
-            SandboxProvider::E2b,
-            provisioned.provider_resource_id.clone(),
-            provisioned.connection_config.clone(),
-            provisioned.provider_metadata.clone(),
-            account.config.clone(),
-        );
-        let runtime = match build_runtime(
-            &record,
-            &machine_name,
-            credentials.api_key(),
-            provisioned.connection_secret.as_deref(),
-        ) {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                self.cleanup_unrecorded(&account, &credentials, &provisioned)
-                    .await;
-                return Err(error.into());
-            }
-        };
-        let encrypted_secret = match provisioned
-            .connection_secret
-            .as_deref()
-            .map(|secret| self.secrets.encrypt(&machine_id, secret))
-            .transpose()
-        {
-            Ok(secret) => secret,
-            Err(error) => {
-                self.cleanup_unrecorded(&account, &credentials, &provisioned)
-                    .await;
-                return Err(error.into());
-            }
-        };
-        if let Err(error) = self
-            .database
-            .create_sandbox_machine(NewSandboxMachine {
-                machine_id: &machine_id,
-                name: &machine_name,
-                descriptor: runtime.descriptor(),
-                sandbox_account_id: account.id,
-                provider_resource_id: &provisioned.provider_resource_id,
-                connection_config: &provisioned.connection_config,
-                provider_metadata: &provisioned.provider_metadata,
-                connection_secret: encrypted_secret,
-            })
-            .await
-        {
-            self.cleanup_unrecorded(&account, &credentials, &provisioned)
-                .await;
-            return Err(error.into());
-        }
-        let mut machine = match self.database.machine(machine_id.as_str()).await {
-            Ok(Some(machine)) => machine.summary,
-            Ok(None) => {
-                let error = DbError::Contract("created sandbox machine disappeared".to_owned());
-                let message = error.to_string();
-                self.cleanup_recorded(&machine_id, &account, &credentials, &provisioned, &message)
-                    .await;
-                return Err(error.into());
-            }
-            Err(error) => {
-                let message = error.to_string();
-                self.cleanup_recorded(&machine_id, &account, &credentials, &provisioned, &message)
-                    .await;
-                return Err(error.into());
-            }
-        };
-        machine.online = true;
-        Ok(CreatedE2bSandboxMachine {
-            machine,
-            sandbox_account_id: account.id,
-            sandbox_id: provisioned.provider_resource_id,
-            template_id: template_id.to_owned(),
-        })
-    }
-
-    pub async fn create_e2b_snapshot(
-        &self,
-        account_id: Uuid,
-        sandbox_id: &str,
-        name: &str,
-    ) -> Result<Snapshot, SandboxMaterializationError> {
-        let account = self
-            .accounts
-            .resolve(SandboxProvider::E2b, Some(account_id))
-            .await?;
-        if !self
-            .database
-            .has_sandbox_machine(account.id, sandbox_id)
-            .await?
-        {
-            return Err(SandboxMaterializationError::SandboxNotFound);
-        }
-        let credentials = self
-            .accounts
-            .credentials(account.id)
-            .await?
-            .ok_or(SandboxMaterializationError::AccountCredentialsMissing)?;
-        let provider_snapshot_id = self
-            .provider
-            .create_e2b_snapshot(sandbox_id, &credentials)
-            .await?;
-        self.database
-            .create_snapshot(
-                Uuid::now_v7(),
-                account.id,
-                &CreateSnapshotRequest {
-                    name: name.to_owned(),
-                    provider: SandboxProvider::E2b,
-                    sandbox_account_id: Some(account.id),
-                    provider_snapshot_id,
-                    sandbox_id: sandbox_id.to_owned(),
-                },
-            )
-            .await
-            .map_err(Into::into)
     }
 
     pub async fn delete_environment(
@@ -373,7 +227,7 @@ impl SandboxMaterializer {
         Ok(())
     }
 
-    async fn cleanup_unrecorded(
+    pub(crate) async fn cleanup_unrecorded(
         &self,
         account: &SandboxAccount,
         credentials: &SandboxCredentials,
@@ -393,7 +247,7 @@ impl SandboxMaterializer {
         }
     }
 
-    async fn cleanup_recorded(
+    pub(crate) async fn cleanup_recorded(
         &self,
         machine_id: &MachineId,
         account: &SandboxAccount,
@@ -420,12 +274,12 @@ fn materialized_machine_name(template_name: &str, provider_resource_id: &str) ->
 
 async fn prepare_environment(
     runtime: &dyn ExecutionRuntime,
-    cwd: &str,
+    environment_path: &str,
     creation_script: &str,
 ) -> Result<(), String> {
     let root_id =
         id::<WorkspaceRootId>(SANDBOX_ROOT_ID.to_owned()).map_err(|error| error.to_string())?;
-    let cwd = PathSpec::workspace(root_id, environment_path(cwd));
+    let cwd = PathSpec::workspace(root_id, environment_path.to_owned());
     let context = OperationContext::with_timeout(Duration::from_secs(600));
     let filesystem = runtime
         .filesystem()
@@ -522,6 +376,8 @@ pub enum SandboxMaterializationError {
     TemplateNotFound,
     #[error("template snapshot was not found")]
     SnapshotNotFound,
+    #[error("template cwd is invalid: {0}")]
+    InvalidTemplateCwd(&'static str),
     #[error("sandbox was not found")]
     SandboxNotFound,
     #[error("sandbox account credentials are missing")]
