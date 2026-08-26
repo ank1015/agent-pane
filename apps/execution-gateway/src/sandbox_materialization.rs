@@ -102,7 +102,8 @@ impl SandboxMaterializer {
             .provider
             .create(&snapshot, &account, &credentials, &target_name)
             .await?;
-        let machine_name = format!("{} sandbox", template.name);
+        let machine_name =
+            materialized_machine_name(&template.name, &provisioned.provider_resource_id);
         let record = sandbox_machine_record(
             machine_id.clone(),
             account.id,
@@ -412,6 +413,11 @@ impl SandboxMaterializer {
     }
 }
 
+fn materialized_machine_name(template_name: &str, provider_resource_id: &str) -> String {
+    let suffix = provider_resource_id.chars().take(6).collect::<String>();
+    format!("{template_name} {suffix}")
+}
+
 async fn prepare_environment(
     runtime: &dyn ExecutionRuntime,
     cwd: &str,
@@ -536,4 +542,17 @@ pub enum SandboxMaterializationError {
     Provider(#[from] SandboxProviderError),
     #[error(transparent)]
     Runtime(#[from] SandboxRuntimeError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::materialized_machine_name;
+
+    #[test]
+    fn materialized_machine_names_include_a_stable_resource_suffix() {
+        assert_eq!(
+            materialized_machine_name("first", "i7xmksh4p0urbaafupl5q"),
+            "first i7xmks"
+        );
+    }
 }
