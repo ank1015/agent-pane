@@ -110,7 +110,7 @@ pub fn router(
         )
         .route("/v1/operations/{operation_id}/events", get(get_events))
         .merge(crate::environments::routes())
-        .merge(crate::e2b_sandboxes::routes())
+        .merge(crate::sandbox_control::routes())
         .merge(crate::snapshot_http::routes())
         .merge(crate::sandbox_template_http::routes())
         .layer(DefaultBodyLimit::max(config.max_request_bytes))
