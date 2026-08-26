@@ -24,7 +24,33 @@ use crate::{
 };
 
 pub const SANDBOX_ROOT_ID: &str = "root";
-const SANDBOX_STATE_DIRECTORY: &str = "/.agent-pane";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SandboxFilesystemLayout {
+    workspace_root: &'static str,
+    state_directory: &'static str,
+}
+
+const fn filesystem_layout(provider: SandboxProvider) -> SandboxFilesystemLayout {
+    match provider {
+        SandboxProvider::E2b => SandboxFilesystemLayout {
+            workspace_root: "/home/user",
+            state_directory: "/home/user/.agent-pane",
+        },
+        SandboxProvider::Daytona => SandboxFilesystemLayout {
+            workspace_root: "/home/daytona",
+            state_directory: "/home/daytona/.agent-pane",
+        },
+        SandboxProvider::Blaxel => SandboxFilesystemLayout {
+            workspace_root: "/blaxel",
+            state_directory: "/blaxel/.agent-pane",
+        },
+        SandboxProvider::Tensorlake => SandboxFilesystemLayout {
+            workspace_root: "/home/tl-user",
+            state_directory: "/home/tl-user/.agent-pane",
+        },
+    }
+}
 
 #[derive(Clone)]
 pub struct SandboxRuntimeFactory {
@@ -85,6 +111,7 @@ pub fn build_runtime(
 ) -> Result<Arc<dyn ExecutionRuntime>, SandboxRuntimeError> {
     let root_id = WorkspaceRootId::new(SANDBOX_ROOT_ID)
         .map_err(|error| SandboxRuntimeError::Configuration(error.to_string()))?;
+    let layout = filesystem_layout(machine.provider);
     match machine.provider {
         SandboxProvider::E2b => {
             let token = connection_secret.ok_or(SandboxRuntimeError::ConnectionSecretMissing)?;
@@ -101,11 +128,11 @@ pub fn build_runtime(
                 E2bRuntimeConfig {
                     machine_id: machine.machine_id.clone(),
                     name: machine_name.to_owned(),
-                    state_directory: SANDBOX_STATE_DIRECTORY.to_owned(),
+                    state_directory: layout.state_directory.to_owned(),
                     workspace_roots: vec![E2bWorkspaceRoot {
                         id: root_id,
-                        name: "Sandbox root".to_owned(),
-                        path: "/".to_owned(),
+                        name: "Sandbox workspace".to_owned(),
+                        path: layout.workspace_root.to_owned(),
                         read_only: false,
                     }],
                     native_grants: Vec::new(),
@@ -127,11 +154,11 @@ pub fn build_runtime(
                 DaytonaRuntimeConfig {
                     machine_id: machine.machine_id.clone(),
                     name: machine_name.to_owned(),
-                    state_directory: SANDBOX_STATE_DIRECTORY.to_owned(),
+                    state_directory: layout.state_directory.to_owned(),
                     workspace_roots: vec![DaytonaWorkspaceRoot {
                         id: root_id,
-                        name: "Sandbox root".to_owned(),
-                        path: "/".to_owned(),
+                        name: "Sandbox workspace".to_owned(),
+                        path: layout.workspace_root.to_owned(),
                         read_only: false,
                     }],
                     native_grants: Vec::new(),
@@ -151,11 +178,11 @@ pub fn build_runtime(
                 BlaxelRuntimeConfig {
                     machine_id: machine.machine_id.clone(),
                     name: machine_name.to_owned(),
-                    state_directory: SANDBOX_STATE_DIRECTORY.to_owned(),
+                    state_directory: layout.state_directory.to_owned(),
                     workspace_roots: vec![BlaxelWorkspaceRoot {
                         id: root_id,
-                        name: "Sandbox root".to_owned(),
-                        path: "/".to_owned(),
+                        name: "Sandbox workspace".to_owned(),
+                        path: layout.workspace_root.to_owned(),
                         read_only: false,
                     }],
                     native_grants: Vec::new(),
@@ -175,11 +202,11 @@ pub fn build_runtime(
                 TensorlakeRuntimeConfig {
                     machine_id: machine.machine_id.clone(),
                     name: machine_name.to_owned(),
-                    state_directory: SANDBOX_STATE_DIRECTORY.to_owned(),
+                    state_directory: layout.state_directory.to_owned(),
                     workspace_roots: vec![TensorlakeWorkspaceRoot {
                         id: root_id,
-                        name: "Sandbox root".to_owned(),
-                        path: "/".to_owned(),
+                        name: "Sandbox workspace".to_owned(),
+                        path: layout.workspace_root.to_owned(),
                         read_only: false,
                     }],
                     native_grants: Vec::new(),
@@ -263,4 +290,41 @@ pub enum SandboxRuntimeError {
     Blaxel(#[from] connector_blaxel::BlaxelConnectorError),
     #[error(transparent)]
     Tensorlake(#[from] connector_tensorlake::TensorlakeConnectorError),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SandboxFilesystemLayout, SandboxProvider, filesystem_layout};
+
+    #[test]
+    fn uses_each_providers_writable_workspace() {
+        assert_eq!(
+            filesystem_layout(SandboxProvider::E2b),
+            SandboxFilesystemLayout {
+                workspace_root: "/home/user",
+                state_directory: "/home/user/.agent-pane",
+            }
+        );
+        assert_eq!(
+            filesystem_layout(SandboxProvider::Daytona),
+            SandboxFilesystemLayout {
+                workspace_root: "/home/daytona",
+                state_directory: "/home/daytona/.agent-pane",
+            }
+        );
+        assert_eq!(
+            filesystem_layout(SandboxProvider::Blaxel),
+            SandboxFilesystemLayout {
+                workspace_root: "/blaxel",
+                state_directory: "/blaxel/.agent-pane",
+            }
+        );
+        assert_eq!(
+            filesystem_layout(SandboxProvider::Tensorlake),
+            SandboxFilesystemLayout {
+                workspace_root: "/home/tl-user",
+                state_directory: "/home/tl-user/.agent-pane",
+            }
+        );
+    }
 }
