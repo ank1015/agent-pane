@@ -66,10 +66,8 @@ pub struct SessionMessagePage {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
-    Queued,
-    Running,
+    Active,
     Waiting,
-    Aborting,
     Aborted,
     Completed,
     Failed,
@@ -79,10 +77,8 @@ impl RunStatus {
     #[must_use]
     pub const fn as_db(self) -> &'static str {
         match self {
-            Self::Queued => "queued",
-            Self::Running => "running",
+            Self::Active => "active",
             Self::Waiting => "waiting",
-            Self::Aborting => "aborting",
             Self::Aborted => "aborted",
             Self::Completed => "completed",
             Self::Failed => "failed",
@@ -92,10 +88,8 @@ impl RunStatus {
     #[must_use]
     pub fn from_db(value: &str) -> Option<Self> {
         match value {
-            "queued" => Some(Self::Queued),
-            "running" => Some(Self::Running),
+            "active" => Some(Self::Active),
             "waiting" => Some(Self::Waiting),
-            "aborting" => Some(Self::Aborting),
             "aborted" => Some(Self::Aborted),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),
