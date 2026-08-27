@@ -119,7 +119,7 @@ mod tests {
     use super::{ResumePlan, plan_turn};
 
     #[test]
-    fn calls_the_model_without_messages_from_the_claimed_turn() {
+    fn calls_the_model_without_messages_from_the_requested_turn() {
         let run_id = Uuid::now_v7();
         let messages = vec![session_message(run_id, None, user("trigger"))];
 

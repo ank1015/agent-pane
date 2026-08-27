@@ -6,7 +6,7 @@ use crate::{
         context_formation::ContextFormationError, model_resolver::ModelResolverError,
         tools::ToolExecutionError,
     },
-    worker::ActiveRunError,
+    server::ActiveTurnError,
 };
 
 use super::{config::PiHarnessConfigError, transcript::TranscriptError};
@@ -21,12 +21,8 @@ pub enum PiRuntimeBuildError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PiRuntimeError {
-    #[error("the worker is shutting down")]
-    Cancelled,
-    #[error("the Agent lease was lost")]
-    LeaseLost,
-    #[error("could not finalize the Agent run")]
-    Agent(#[source] ActiveRunError),
+    #[error("Agent transcript access remained unavailable after retries")]
+    Agent(#[source] ActiveTurnError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -40,7 +36,7 @@ pub(super) enum TurnError {
     #[error(transparent)]
     Llm(#[from] LlmGatewayClientError),
     #[error(transparent)]
-    Agent(#[from] ActiveRunError),
+    Agent(#[from] ActiveTurnError),
     #[error(transparent)]
     Execution(#[from] ExecutionGatewayClientError),
     #[error(transparent)]
@@ -81,7 +77,11 @@ impl TurnError {
         }
     }
 
-    pub(super) fn lease_is_lost(&self) -> bool {
-        matches!(self, Self::Agent(error) if error.lease_is_lost())
+    pub(super) fn agent_retryable(&self) -> bool {
+        matches!(self, Self::Agent(error) if error.retryable())
+    }
+
+    pub(super) fn agent_stale(&self) -> bool {
+        matches!(self, Self::Agent(error) if error.stale())
     }
 }

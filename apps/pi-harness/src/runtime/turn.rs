@@ -1,9 +1,9 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use agent_contracts::{
-    NewRunMessage, RunAbortAcknowledged, RunMessagesAppended, RunTurnCompleted, RunTurnFailed,
-    SessionMessage,
+    HarnessOperation, NewRunMessage, SessionMessage, SessionMessagesAppended, WaitRequest,
 };
+use chrono::Utc;
 use execution_runtime::{ExecutionRuntime, OperationContext};
 use futures_util::future::join_all;
 use llm_contracts::{
@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     clients::{ExecutionClient, LlmGatewayClient},
-    config::WorkerConfig,
+    config::HarnessConfig,
     harness::{
         compact::{
             PiCompactionMessageContent, create_pi_compaction_message, form_compaction_request,
@@ -27,7 +27,7 @@ use crate::{
         system_prompt::generate_system_prompt,
         tools::{ToolExecutionContext, WorkspaceCwd, default_tool_definitions, execute_tool_call},
     },
-    worker::{ActiveRun, RunInterruption},
+    server::ActiveTurn,
 };
 
 use super::{
@@ -48,7 +48,7 @@ pub struct PiRuntime {
 }
 
 impl PiRuntime {
-    pub fn from_config(config: &WorkerConfig) -> Result<Self, PiRuntimeBuildError> {
+    pub fn from_config(config: &HarnessConfig) -> Result<Self, PiRuntimeBuildError> {
         Ok(Self::new(
             LlmGatewayClient::new(config.llm_gateway.clone())?,
             ExecutionClient::new(config.execution_gateway.clone())?,
@@ -70,21 +70,21 @@ impl PiRuntime {
         self
     }
 
-    pub async fn execute(&self, run: ActiveRun) -> Result<RunOutcome, PiRuntimeError> {
-        let result = self.execute_turn(&run).await;
+    pub async fn execute(&self, run: &ActiveTurn) -> Result<TurnOutcome, PiRuntimeError> {
+        let result = self.execute_turn(run).await;
         match result {
-            Ok(decision) => self.finish(run, decision).await,
-            Err(error) => self.handle_error(run, error).await,
+            Ok(decision) => Ok(self.finish(decision)),
+            Err(error) => self.handle_error(run, error),
         }
     }
 
-    async fn execute_turn(&self, run: &ActiveRun) -> Result<TurnDecision, TurnError> {
+    async fn execute_turn(&self, run: &ActiveTurn) -> Result<TurnDecision, TurnError> {
         ensure_active(run)?;
         let messages = fetch_messages(run).await?;
-        let turn = run.claimed().run.current_turn;
+        let turn = run.turn_number();
         match plan_turn(&messages, run.run_id(), turn)? {
             ResumePlan::CallModel => {
-                let config = PiHarnessConfig::from_resolved(&run.claimed().run.resolved_config)?;
+                let config = PiHarnessConfig::from_resolved(&run.request().resolved_config)?;
                 self.call_model(run, &config, messages).await
             }
             ResumePlan::Complete { final_message_id } => {
@@ -94,7 +94,7 @@ impl PiRuntime {
                 assistant,
                 missing_tool_calls,
             } => {
-                let config = PiHarnessConfig::from_resolved(&run.claimed().run.resolved_config)?;
+                let config = PiHarnessConfig::from_resolved(&run.request().resolved_config)?;
                 self.run_tools(run, &config, &assistant, &missing_tool_calls)
                     .await?;
                 Ok(TurnDecision::Continue)
@@ -105,7 +105,7 @@ impl PiRuntime {
 
     async fn call_model(
         &self,
-        run: &ActiveRun,
+        run: &ActiveTurn,
         config: &PiHarnessConfig,
         session_messages: Vec<SessionMessage>,
     ) -> Result<TurnDecision, TurnError> {
@@ -169,7 +169,7 @@ impl PiRuntime {
 
     async fn compact(
         &self,
-        run: &ActiveRun,
+        run: &ActiveTurn,
         config: &PiHarnessConfig,
         messages: &mut Vec<Message>,
     ) -> Result<(), TurnError> {
@@ -218,13 +218,13 @@ impl PiRuntime {
 
     async fn run_tools(
         &self,
-        run: &ActiveRun,
+        run: &ActiveTurn,
         config: &PiHarnessConfig,
         assistant: &AssistantMessage,
         tool_calls: &[AssistantContent],
     ) -> Result<(), TurnError> {
         if run.operation().is_cancelled() {
-            return close_aborted_tool_calls(run, tool_calls).await;
+            return Err(TurnError::Cancelled);
         }
         let results = if assistant.stop_reason == StopReason::Length {
             tool_calls
@@ -234,7 +234,7 @@ impl PiRuntime {
         } else {
             let machine = tokio::select! {
                 () = run.operation().cancelled() => {
-                    return close_aborted_tool_calls(run, tool_calls).await;
+                    return Err(TurnError::Cancelled);
                 }
                 machine = self.execution.machine(&config.execution.machine_id) => machine?,
             };
@@ -278,55 +278,66 @@ impl PiRuntime {
         Ok(())
     }
 
-    async fn finish(
-        &self,
-        run: ActiveRun,
-        decision: TurnDecision,
-    ) -> Result<RunOutcome, PiRuntimeError> {
-        if let Some(interruption) = run.interruption() {
-            return finish_interruption(run, interruption).await;
-        }
+    fn finish(&self, decision: TurnDecision) -> TurnOutcome {
         match decision {
-            TurnDecision::Complete(final_message_id) => run
-                .complete(final_message_id)
-                .await
-                .map(RunOutcome::Completed)
-                .map_err(PiRuntimeError::Agent),
-            TurnDecision::Continue => run
-                .continue_turn()
-                .await
-                .map(RunOutcome::Continued)
-                .map_err(PiRuntimeError::Agent),
+            TurnDecision::Complete(final_message_id) => {
+                TurnOutcome::Command(HarnessOperation::Complete { final_message_id })
+            }
+            TurnDecision::Continue => TurnOutcome::Command(HarnessOperation::Continue),
         }
     }
 
-    async fn handle_error(
+    fn handle_error(
         &self,
-        run: ActiveRun,
+        run: &ActiveTurn,
         error: TurnError,
-    ) -> Result<RunOutcome, PiRuntimeError> {
-        if let Some(interruption) = run.interruption() {
-            return finish_interruption(run, interruption).await;
-        }
+    ) -> Result<TurnOutcome, PiRuntimeError> {
         if run.operation().is_cancelled() {
-            return Err(PiRuntimeError::Cancelled);
+            return Ok(TurnOutcome::Cancelled);
         }
-        if error.lease_is_lost() {
-            return Err(PiRuntimeError::LeaseLost);
+        if error.agent_stale() {
+            return Ok(TurnOutcome::Stale);
+        }
+        if error.agent_retryable() {
+            let TurnError::Agent(source) = error else {
+                unreachable!("agent_retryable only matches Agent")
+            };
+            return Err(PiRuntimeError::Agent(source));
+        }
+        if let TurnError::Llm(llm) = &error
+            && llm.retryable()
+        {
+            let delay = self
+                .retry
+                .delay(self.retry.max_retries.saturating_add(1), llm.retry_after());
+            let expires_at = chrono::Duration::from_std(delay)
+                .ok()
+                .map(|delay| Utc::now() + delay);
+            return Ok(TurnOutcome::Command(HarnessOperation::Wait(WaitRequest {
+                wait_id: run.request().event_id,
+                harness_wait_id: format!("llm-backoff-{}", run.request().event_id),
+                kind: "llm_retry".to_owned(),
+                public_request: JsonObject::from_iter([
+                    ("code".to_owned(), json!(error.code())),
+                    ("message".to_owned(), json!(error.to_string())),
+                ]),
+                resume_metadata: JsonObject::from_iter([(
+                    "retry_after_ms".to_owned(),
+                    json!(delay.as_millis()),
+                )]),
+                expires_at,
+            })));
         }
         let failure = JsonObject::from_iter([
             ("code".to_owned(), json!(error.code())),
             ("message".to_owned(), json!(error.to_string())),
         ]);
-        run.fail(failure)
-            .await
-            .map(RunOutcome::Failed)
-            .map_err(PiRuntimeError::Agent)
+        Ok(TurnOutcome::Command(HarnessOperation::Fail { failure }))
     }
 }
 
 fn main_request(
-    run: &ActiveRun,
+    run: &ActiveTurn,
     config: &PiHarnessConfig,
     messages: Vec<Message>,
 ) -> Result<LlmRequest, TurnError> {
@@ -334,7 +345,7 @@ fn main_request(
         &config.provider,
         &config.model_id,
         &config.reasoning_level,
-        &run.claimed().run.session_id.to_string(),
+        &run.request().session_id.to_string(),
     )?;
     let mut provider_options = model.provider_options;
     let max_tokens = MODEL_CATALOG
@@ -356,7 +367,7 @@ fn main_request(
     })
 }
 
-async fn fetch_messages(run: &ActiveRun) -> Result<Vec<SessionMessage>, TurnError> {
+async fn fetch_messages(run: &ActiveTurn) -> Result<Vec<SessionMessage>, TurnError> {
     let mut retries = 0;
     loop {
         let result = tokio::select! {
@@ -375,9 +386,9 @@ async fn fetch_messages(run: &ActiveRun) -> Result<Vec<SessionMessage>, TurnErro
 }
 
 async fn append_messages(
-    run: &ActiveRun,
+    run: &ActiveTurn,
     messages: &[NewRunMessage],
-) -> Result<RunMessagesAppended, TurnError> {
+) -> Result<SessionMessagesAppended, TurnError> {
     let mut retries = 0;
     loop {
         let result = run.append_messages(messages).await;
@@ -385,7 +396,7 @@ async fn append_messages(
             Ok(appended) => return Ok(appended),
             Err(error) if retries < AGENT_MAX_RETRIES && error.retryable() => {
                 retries += 1;
-                tokio::time::sleep(agent_retry_delay(retries)).await;
+                agent_retry_sleep(run.operation(), retries).await?;
             }
             Err(error) => return Err(error.into()),
         }
@@ -405,59 +416,6 @@ fn agent_retry_delay(retry: u32) -> Duration {
         .checked_shl(retry.saturating_sub(1))
         .unwrap_or(u32::MAX);
     AGENT_RETRY_BASE.saturating_mul(multiplier)
-}
-
-async fn close_aborted_tool_calls(
-    run: &ActiveRun,
-    tool_calls: &[AssistantContent],
-) -> Result<(), TurnError> {
-    if !matches!(run.interruption(), Some(RunInterruption::Abort(_))) {
-        return Err(TurnError::Cancelled);
-    }
-    let messages = tool_calls
-        .iter()
-        .map(aborted_tool_result)
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(|result| NewRunMessage {
-            session_message_id: Uuid::now_v7(),
-            message: Message::ToolResult(result),
-        })
-        .collect::<Vec<_>>();
-    append_messages(run, &messages).await?;
-    Err(TurnError::Cancelled)
-}
-
-fn aborted_tool_result(content: &AssistantContent) -> Result<ToolResultMessage, TurnError> {
-    let AssistantContent::ToolCall {
-        name, tool_call_id, ..
-    } = content
-    else {
-        return Err(TurnError::ExpectedToolCall);
-    };
-    let message = if name == "bash" {
-        "Command aborted"
-    } else {
-        "Operation aborted"
-    };
-    Ok(ToolResultMessage {
-        id: MessageId::new(format!("tool-result-{}", Uuid::now_v7()))
-            .expect("UUID tool result ID is valid"),
-        tool_name: name.clone(),
-        tool_call_id: tool_call_id.clone(),
-        content: vec![ContentPart::Text(TextContent {
-            content: message.to_owned(),
-            metadata: None,
-        })],
-        details: None,
-        timestamp: Timestamp(now_ms()),
-        outcome: ToolResultOutcome::Error {
-            error: ToolResultError {
-                message: message.to_owned(),
-                name: Some("cancelled".to_owned()),
-            },
-        },
-    })
 }
 
 fn truncated_tool_result(content: &AssistantContent) -> Result<ToolResultMessage, TurnError> {
@@ -504,25 +462,11 @@ fn assistant_text(message: &AssistantMessage) -> String {
         .to_owned()
 }
 
-fn ensure_active(run: &ActiveRun) -> Result<(), TurnError> {
+fn ensure_active(run: &ActiveTurn) -> Result<(), TurnError> {
     if run.operation().is_cancelled() {
         Err(TurnError::Cancelled)
     } else {
         Ok(())
-    }
-}
-
-async fn finish_interruption(
-    run: ActiveRun,
-    interruption: RunInterruption,
-) -> Result<RunOutcome, PiRuntimeError> {
-    match interruption {
-        RunInterruption::Abort(_) => run
-            .acknowledge_abort(JsonObject::new())
-            .await
-            .map(RunOutcome::Aborted)
-            .map_err(PiRuntimeError::Agent),
-        RunInterruption::LeaseLost => Err(PiRuntimeError::LeaseLost),
     }
 }
 
@@ -540,9 +484,8 @@ enum TurnDecision {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum RunOutcome {
-    Completed(RunTurnCompleted),
-    Continued(RunTurnCompleted),
-    Failed(RunTurnFailed),
-    Aborted(RunAbortAcknowledged),
+pub enum TurnOutcome {
+    Command(HarnessOperation),
+    Cancelled,
+    Stale,
 }
