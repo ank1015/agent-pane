@@ -8,15 +8,18 @@ A Cargo workspace for applications and shared Rust packages.
 agent-pane/
 ├── apps/
 │   ├── dashboard/            # React + Vite web client
+│   ├── agent/                # Durable Agent control plane and NATS coordinator
 │   ├── execution-gateway/    # Durable cloud router for machine execution
 │   ├── llm-gateway/          # Stateless LLM gateway service
 │   ├── machine-daemon/       # Deployable local machine execution process
+│   ├── pi-harness/           # NATS-native concurrent Pi harness server
 │   └── platform/             # Dashboard backend and service orchestrator
 ├── packages/
 │   ├── connector-e2b/        # Direct E2B execution-runtime adapter
 │   ├── connector-tensorlake/ # Direct Tensorlake execution-runtime adapter
 │   ├── connector-blaxel/     # Direct Blaxel execution-runtime adapter
 │   ├── connector-daytona/    # Direct Daytona execution-runtime adapter
+│   ├── agent-contracts/      # Agent ↔ harness broker and transcript contracts
 │   ├── execution-contracts/  # Serializable machine execution protocol
 │   ├── execution-local/      # Local reference execution backend
 │   ├── execution-protocol/   # Gateway/daemon transport envelopes
@@ -56,9 +59,21 @@ pnpm dev
 # Run the dashboard backend (llm-gateway must also be running)
 cargo run -p platform
 
-# Build and run llm-gateway, platform, and execution-gateway together
+# Run the Pi harness server (Agent, NATS, and both gateways must be running)
+cargo run -p pi-harness
+
+# Run the complete local stack, including Docker infrastructure and dashboard
 ./scripts/dev-servers.sh
 ```
+
+The script starts PostgreSQL, NATS, all Rust services, `pi-harness`, and the
+dashboard. When its local config exists, the machine daemon is automatically
+registered with the execution gateway and connected. Set
+`DEV_SERVERS_KEEP_INFRASTRUCTURE=1` to leave PostgreSQL and NATS running after
+the script exits, or
+`DEV_SERVERS_USE_DOCKER_INFRASTRUCTURE=0` to use externally managed services.
+The isolated development PostgreSQL port defaults to `55432`; it can be changed
+with `DEV_SERVERS_POSTGRES_PORT`.
 
 ## Add a member
 
