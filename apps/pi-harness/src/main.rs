@@ -1,20 +1,20 @@
 use std::error::Error;
 
 use execution_runtime::OperationContext;
+use pi_harness::{
+    clients::{HarnessRegistryClient, PI_HARNESS_REVISION_ID},
+    config::HarnessConfig,
+    server::HarnessServer,
+};
 use tokio::signal;
 use tracing_subscriber::EnvFilter;
-use worker_pi::{
-    clients::{HarnessRegistryClient, PI_HARNESS_REVISION_ID},
-    config::WorkerConfig,
-    runtime::WorkerRuntime,
-};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
     init_tracing();
 
-    let config = WorkerConfig::from_env()?;
+    let config = HarnessConfig::from_env()?;
     if let Some(registration) = config.harness_registration.clone() {
         HarnessRegistryClient::new(registration)?
             .ensure_pi_harness()
@@ -24,12 +24,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             "Pi harness registered with Agent"
         );
     }
-    let runtime = WorkerRuntime::from_config(&config)?;
-    tracing::info!(
-        worker_instance_id = %config.worker_instance_id,
-        max_concurrent_runs = config.max_concurrent_runs,
-        "Pi worker started"
-    );
+    let server = HarnessServer::connect(&config).await?;
+    tracing::info!(instance_id = %config.instance_id, max_concurrent_turns = config.max_concurrent_turns, "Pi harness server started");
 
     let shutdown = OperationContext::new();
     let signal_shutdown = shutdown.clone();
@@ -40,8 +36,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         signal_shutdown.cancel();
     });
-
-    let result = runtime.run(&shutdown).await;
+    let result = server.run(&shutdown).await;
     signal_task.abort();
     result?;
     Ok(())
@@ -49,6 +44,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 fn init_tracing() {
     let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("worker_pi=info"));
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("pi_harness=info"));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 }
