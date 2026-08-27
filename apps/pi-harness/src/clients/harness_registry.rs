@@ -8,7 +8,7 @@ use url::Url;
 use crate::config::AgentControlServiceConfig;
 
 pub const PI_HARNESS_ID: &str = "pi";
-pub const PI_HARNESS_REVISION_ID: &str = "pi-2026-08-26-machine-target";
+pub const PI_HARNESS_REVISION_ID: &str = "pi-2026-08-27-nats-server";
 
 #[derive(Clone)]
 pub struct HarnessRegistryClient {
@@ -165,7 +165,7 @@ fn pi_harness() -> CreateHarnessRequest {
 fn pi_revision() -> RegisterHarnessRevisionRequest {
     RegisterHarnessRevisionRequest {
         harness_revision_id: PI_HARNESS_REVISION_ID.to_owned(),
-        revision: "2026-08-26-machine-target".to_owned(),
+        revision: "2026-08-27-nats-server".to_owned(),
         contract_version: 1,
         default_config: object(json!({
             "provider": "openai",

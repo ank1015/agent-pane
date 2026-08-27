@@ -3,7 +3,7 @@ mod execution;
 mod harness_registry;
 mod llm;
 
-pub use agent::{AgentClient, AgentClientError, ClaimResponse};
+pub use agent::{AgentClient, AgentClientError};
 pub use agent_contracts::AgentApiError;
 pub use execution::ExecutionClient;
 pub use harness_registry::{
