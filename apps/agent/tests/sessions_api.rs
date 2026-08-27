@@ -126,8 +126,8 @@ async fn session_transcript_and_run_history_are_paginated() {
     sqlx::query(
         "INSERT INTO runs \
          (run_id, session_id, trigger_message_id, harness_revision_id, status, max_turns, \
-          max_failures_per_turn, queued_at, final_message_id, finished_at) \
-         VALUES ($1, $2, $3, $4, 'completed', 5, 2, NULL, $3, now())",
+          final_message_id, finished_at) \
+         VALUES ($1, $2, $3, $4, 'completed', 5, $3, now())",
     )
     .bind(completed_run)
     .bind(session_id)
@@ -137,13 +137,13 @@ async fn session_transcript_and_run_history_are_paginated() {
     .await
     .expect("completed run fixture");
 
-    let queued_run = Uuid::now_v7();
+    let active_run = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO runs \
-         (run_id, session_id, trigger_message_id, harness_revision_id, max_turns, max_failures_per_turn) \
-         VALUES ($1, $2, $3, $4, 5, 2)",
+         (run_id, session_id, trigger_message_id, harness_revision_id, max_turns) \
+         VALUES ($1, $2, $3, $4, 5)",
     )
-    .bind(queued_run)
+    .bind(active_run)
     .bind(session_id)
     .bind(message_ids[1])
     .bind(&revision_id)
@@ -161,7 +161,7 @@ async fn session_transcript_and_run_history_are_paginated() {
     .bind(pending_id)
     .bind(session_id)
     .bind(user_message(pending_id, "pending steer"))
-    .bind(queued_run)
+    .bind(active_run)
     .execute(&app.pool)
     .await
     .expect("pending message fixture");
@@ -197,13 +197,13 @@ async fn session_transcript_and_run_history_are_paginated() {
     assert_eq!(second_runs["items"].as_array().expect("items").len(), 1);
     assert!(second_runs["next_cursor"].is_null());
 
-    let queued = get_json(
+    let active = get_json(
         &app,
-        &format!("/v1/sessions/{session_id}/runs?status=queued"),
+        &format!("/v1/sessions/{session_id}/runs?status=active"),
     )
     .await;
-    assert_eq!(queued["items"].as_array().expect("items").len(), 1);
-    assert_eq!(queued["items"][0]["run_id"], queued_run.to_string());
+    assert_eq!(active["items"].as_array().expect("items").len(), 1);
+    assert_eq!(active["items"][0]["run_id"], active_run.to_string());
 
     let invalid_limit = app
         .control(

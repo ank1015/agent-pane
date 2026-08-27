@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use agent::{
     AppState, Database,
-    auth::{ControlToken, WorkerToken},
+    auth::{ControlToken, HarnessToken},
     execution::ExecutionPolicy,
     router,
 };
@@ -12,7 +12,7 @@ use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
 
 const CONTROL_TOKEN: &str = "agent-control-token-that-is-long-enough";
-const WORKER_TOKEN: &str = "agent-worker-token-that-is-long-enough";
+const HARNESS_TOKEN: &str = "agent-harness-token-that-is-long-enough";
 
 #[tokio::test]
 async fn exposes_public_probes_and_json_routing_errors() {
@@ -23,7 +23,7 @@ async fn exposes_public_probes_and_json_routing_errors() {
     let state = AppState::new(
         Database::from_pool(pool),
         ControlToken::new(CONTROL_TOKEN).expect("control token"),
-        WorkerToken::new(WORKER_TOKEN).expect("worker token"),
+        HarnessToken::new(HARNESS_TOKEN).expect("harness token"),
         ExecutionPolicy::default(),
     );
     let listener = TcpListener::bind("127.0.0.1:0")

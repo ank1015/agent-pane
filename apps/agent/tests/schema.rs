@@ -3,11 +3,12 @@ use std::collections::BTreeSet;
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
-const TABLES: [&str; 8] = [
+const TABLES: [&str; 9] = [
+    "broker_inbox",
+    "broker_outbox",
     "harness_revisions",
     "harnesses",
     "run_aborts",
-    "run_leases",
     "run_waits",
     "runs",
     "session_messages",
@@ -135,8 +136,8 @@ async fn migration_builds_the_schema_and_enforces_aggregate_boundaries() {
     sqlx::query(
         "insert into runs
              (run_id, session_id, trigger_message_id, harness_revision_id,
-              max_turns, max_failures_per_turn)
-         values ($1, $2, $3, $4, 10, 3)",
+              max_turns)
+         values ($1, $2, $3, $4, 10)",
     )
     .bind(run_id)
     .bind(session_a)
@@ -193,8 +194,8 @@ async fn migration_builds_the_schema_and_enforces_aggregate_boundaries() {
     let second_active_run = sqlx::query(
         "insert into runs
              (run_id, session_id, trigger_message_id, harness_revision_id,
-              max_turns, max_failures_per_turn)
-         values ($1, $2, $3, $4, 10, 3)",
+              max_turns)
+         values ($1, $2, $3, $4, 10)",
     )
     .bind(Uuid::now_v7())
     .bind(session_a)
@@ -213,41 +214,6 @@ async fn migration_builds_the_schema_and_enforces_aggregate_boundaries() {
         .execute(&mut *transaction)
         .await
         .expect("restore after active run failure");
-
-    sqlx::query(
-        "insert into run_leases
-             (lease_id, run_id, lease_version, worker_instance_id, token_hash, expires_at)
-         values ($1, $2, 2, 'worker-a', decode(repeat('00', 32), 'hex'), now() + interval '30 seconds')",
-    )
-    .bind(Uuid::now_v7())
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await
-    .expect("current lease fixture");
-    sqlx::query("savepoint second_lease")
-        .execute(&mut *transaction)
-        .await
-        .expect("lease savepoint");
-    let second_lease = sqlx::query(
-        "insert into run_leases
-             (lease_id, run_id, lease_version, worker_instance_id, token_hash, expires_at)
-         values ($1, $2, 3, 'worker-b', decode(repeat('11', 32), 'hex'), now() + interval '30 seconds')",
-    )
-    .bind(Uuid::now_v7())
-    .bind(run_id)
-    .execute(&mut *transaction)
-    .await
-    .expect_err("a run cannot have two current leases");
-    assert_eq!(
-        second_lease
-            .as_database_error()
-            .and_then(|error| error.code()),
-        Some(std::borrow::Cow::Borrowed("23505"))
-    );
-    sqlx::query("rollback to savepoint second_lease")
-        .execute(&mut *transaction)
-        .await
-        .expect("restore after lease failure");
 
     let steer_id = Uuid::now_v7();
     sqlx::query(
