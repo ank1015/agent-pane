@@ -36,14 +36,11 @@ pub struct SessionRunSummary {
     pub status: RunStatus,
     pub current_turn: u32,
     pub max_turns: u32,
-    pub failures_in_current_turn: u32,
-    pub max_failures_per_turn: u32,
     pub state_version: u64,
     pub final_message_id: Option<Uuid>,
     pub failure: Option<Value>,
-    pub queued_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
-    pub started_at: Option<DateTime<Utc>>,
+    pub activated_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
 }
 

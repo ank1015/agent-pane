@@ -15,9 +15,8 @@ pub(super) const MESSAGE_COLUMNS: &str = "session_message_id, session_id, revisi
     origin, delivery, run_id, turn_number, created_at, committed_at";
 
 pub(super) const RUN_SUMMARY_COLUMNS: &str = "run_id, session_id, trigger_message_id, \
-    harness_revision_id, status, current_turn, max_turns, failures_in_current_turn, \
-    max_failures_per_turn, state_version, final_message_id, failure, queued_at, created_at, \
-    started_at, finished_at";
+    harness_revision_id, status, current_turn, max_turns, state_version, final_message_id, \
+    failure, created_at, activated_at, finished_at";
 
 #[derive(FromRow)]
 pub(super) struct SessionRow {
@@ -93,14 +92,11 @@ pub(super) struct SessionRunSummaryRow {
     status: String,
     current_turn: i32,
     max_turns: i32,
-    failures_in_current_turn: i32,
-    max_failures_per_turn: i32,
     state_version: i64,
     final_message_id: Option<Uuid>,
     failure: Option<Json<Value>>,
-    queued_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
-    started_at: Option<DateTime<Utc>>,
+    activated_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
 }
 
@@ -117,20 +113,11 @@ impl TryFrom<SessionRunSummaryRow> for SessionRunSummary {
                 .ok_or_else(|| invalid("runs.status", &row.status))?,
             current_turn: positive_u32("runs.current_turn", row.current_turn)?,
             max_turns: positive_u32("runs.max_turns", row.max_turns)?,
-            failures_in_current_turn: non_negative_u32(
-                "runs.failures_in_current_turn",
-                row.failures_in_current_turn,
-            )?,
-            max_failures_per_turn: positive_u32(
-                "runs.max_failures_per_turn",
-                row.max_failures_per_turn,
-            )?,
             state_version: positive_u64("runs.state_version", row.state_version)?,
             final_message_id: row.final_message_id,
             failure: row.failure.map(|value| value.0),
-            queued_at: row.queued_at,
             created_at: row.created_at,
-            started_at: row.started_at,
+            activated_at: row.activated_at,
             finished_at: row.finished_at,
         })
     }
@@ -146,10 +133,6 @@ fn positive_u32(field: &str, value: i32) -> Result<u32, SessionError> {
         return Err(invalid(field, "must be positive"));
     }
     Ok(value)
-}
-
-fn non_negative_u32(field: &str, value: i32) -> Result<u32, SessionError> {
-    u32::try_from(value).map_err(|error| invalid(field, error))
 }
 
 fn positive_u64(field: &str, value: i64) -> Result<u64, SessionError> {
