@@ -1,6 +1,6 @@
 [package]
-name = "worker-pi"
-description = "Agent worker for the Pi coding harness"
+name = "pi-harness"
+description = "NATS-native Pi coding harness server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 agent-contracts.workspace = true
+async-nats.workspace = true
 base64.workspace = true
 chrono.workspace = true
 dotenvy.workspace = true
@@ -16,12 +17,12 @@ execution-gateway-client.workspace = true
 execution-runtime.workspace = true
 futures-util.workspace = true
 llm-contracts.workspace = true
-rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true

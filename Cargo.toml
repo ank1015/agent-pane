@@ -12,6 +12,7 @@ license = "MIT"
 [workspace.dependencies]
 anyhow = "1.0"
 agent-contracts = { path = "packages/agent-contracts", version = "0.1.0" }
+async-nats = { version = "0.46", default-features = false, features = ["jetstream", "ring", "server_2_10", "server_2_11", "server_2_12"] }
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
