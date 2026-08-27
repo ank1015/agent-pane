@@ -1,7 +1,14 @@
 use std::error::Error;
 
-use agent::{AppState, Database, config::AppConfig, execution::spawn_reaper, router};
+use agent::{
+    AppState, Database,
+    broker::Broker,
+    config::AppConfig,
+    execution::{spawn_outbox_publisher, spawn_wait_expiry},
+    router,
+};
 use tokio::{net::TcpListener, signal};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -12,19 +19,42 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let config = AppConfig::from_env()?;
     let database = Database::connect(&config.database).await?;
     database.migrate().await?;
+    let broker = Broker::connect(&config.nats.url).await?;
+    broker.ensure_topology().await?;
+
+    let shutdown = CancellationToken::new();
+    let _commands = broker
+        .spawn_command_consumer(database.clone(), shutdown.clone())
+        .await?;
+    let _outbox = spawn_outbox_publisher(
+        database.clone(),
+        broker.context(),
+        config.nats.outbox_interval,
+        config.nats.outbox_batch_size,
+        shutdown.clone(),
+    );
+    let _wait_expiry = spawn_wait_expiry(
+        database.clone(),
+        config.nats.wait_expiry_interval,
+        config.nats.wait_expiry_batch_size,
+        shutdown.clone(),
+    );
 
     let listener = TcpListener::bind(config.bind_address).await?;
     tracing::info!(address = %config.bind_address, "agent listening");
 
-    let _reaper = spawn_reaper(database.clone(), config.execution_policy);
     let state = AppState::new(
         database,
         config.control_token,
-        config.worker_token,
+        config.harness_token,
         config.execution_policy,
-    );
+    )
+    .with_broker_client(broker.client());
     axum::serve(listener, router(state, config.max_request_bytes))
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            shutdown.cancel();
+        })
         .await?;
 
     Ok(())

@@ -3,6 +3,7 @@
 pub mod api_error;
 pub mod app;
 pub mod auth;
+pub mod broker;
 pub mod config;
 pub mod db;
 pub mod execution;

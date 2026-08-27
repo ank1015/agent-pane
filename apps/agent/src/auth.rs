@@ -18,46 +18,30 @@ const MINIMUM_TOKEN_BYTES: usize = 32;
 pub struct ControlToken {
     value: Arc<Zeroizing<Vec<u8>>>,
 }
-
 #[derive(Clone)]
-pub struct WorkerToken {
+pub struct HarnessToken {
     value: Arc<Zeroizing<Vec<u8>>>,
 }
 
 impl ControlToken {
     pub fn new(value: impl AsRef<[u8]>) -> Result<Self, ControlTokenError> {
-        let value = value.as_ref();
-        if value.len() < MINIMUM_TOKEN_BYTES {
-            return Err(ControlTokenError::TooShort);
-        }
-        if value.iter().any(u8::is_ascii_whitespace) {
-            return Err(ControlTokenError::ContainsWhitespace);
-        }
+        validate(value.as_ref()).map_err(ControlTokenError)?;
         Ok(Self {
-            value: Arc::new(Zeroizing::new(value.to_vec())),
+            value: Arc::new(Zeroizing::new(value.as_ref().to_vec())),
         })
     }
-
     #[must_use]
     pub fn authorizes(&self, headers: &HeaderMap) -> bool {
         authorizes(&self.value, headers)
     }
 }
-
-impl WorkerToken {
-    pub fn new(value: impl AsRef<[u8]>) -> Result<Self, WorkerTokenError> {
-        let value = value.as_ref();
-        if value.len() < MINIMUM_TOKEN_BYTES {
-            return Err(WorkerTokenError::TooShort);
-        }
-        if value.iter().any(u8::is_ascii_whitespace) {
-            return Err(WorkerTokenError::ContainsWhitespace);
-        }
+impl HarnessToken {
+    pub fn new(value: impl AsRef<[u8]>) -> Result<Self, HarnessTokenError> {
+        validate(value.as_ref()).map_err(HarnessTokenError)?;
         Ok(Self {
-            value: Arc::new(Zeroizing::new(value.to_vec())),
+            value: Arc::new(Zeroizing::new(value.as_ref().to_vec())),
         })
     }
-
     #[must_use]
     pub fn authorizes(&self, headers: &HeaderMap) -> bool {
         authorizes(&self.value, headers)
@@ -71,23 +55,32 @@ pub async fn require_control(
     next: Next,
 ) -> Response {
     if token.authorizes(&headers) {
-        return next.run(request).await;
+        next.run(request).await
+    } else {
+        unauthorized(ApiError::unauthorized_control())
     }
-    unauthorized(ApiError::unauthorized_control())
 }
-
-pub async fn require_worker(
-    State(token): State<WorkerToken>,
+pub async fn require_harness(
+    State(token): State<HarnessToken>,
     headers: HeaderMap,
     request: Request,
     next: Next,
 ) -> Response {
     if token.authorizes(&headers) {
-        return next.run(request).await;
+        next.run(request).await
+    } else {
+        unauthorized(ApiError::unauthorized_harness())
     }
-    unauthorized(ApiError::unauthorized_worker())
 }
-
+fn validate(value: &[u8]) -> Result<(), TokenError> {
+    if value.len() < MINIMUM_TOKEN_BYTES {
+        return Err(TokenError::TooShort);
+    }
+    if value.iter().any(u8::is_ascii_whitespace) {
+        return Err(TokenError::ContainsWhitespace);
+    }
+    Ok(())
+}
 fn authorizes(secret: &[u8], headers: &HeaderMap) -> bool {
     let Some(value) = headers.get(AUTHORIZATION) else {
         return false;
@@ -97,7 +90,6 @@ fn authorizes(secret: &[u8], headers: &HeaderMap) -> bool {
     };
     candidate.len() == secret.len() && bool::from(candidate.ct_eq(secret))
 }
-
 fn unauthorized(error: ApiError) -> Response {
     let mut response = error.into_response();
     response.headers_mut().insert(
@@ -106,63 +98,33 @@ fn unauthorized(error: ApiError) -> Response {
     );
     response
 }
-
-#[derive(Debug, thiserror::Error)]
-pub enum ControlTokenError {
-    #[error("AGENT_CONTROL_TOKEN must contain at least 32 bytes")]
+#[derive(Debug)]
+enum TokenError {
     TooShort,
-    #[error("AGENT_CONTROL_TOKEN must not contain whitespace")]
     ContainsWhitespace,
 }
-
 #[derive(Debug, thiserror::Error)]
-pub enum WorkerTokenError {
-    #[error("AGENT_WORKER_TOKEN must contain at least 32 bytes")]
-    TooShort,
-    #[error("AGENT_WORKER_TOKEN must not contain whitespace")]
-    ContainsWhitespace,
-}
+#[error("invalid AGENT_CONTROL_TOKEN: {0:?}")]
+pub struct ControlTokenError(TokenError);
+#[derive(Debug, thiserror::Error)]
+#[error("invalid AGENT_HARNESS_TOKEN: {0:?}")]
+pub struct HarnessTokenError(TokenError);
 
 #[cfg(test)]
 mod tests {
+    use super::{ControlToken, HarnessToken};
     use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
-
-    use super::{ControlToken, WorkerToken};
-
-    const CONTROL: &str = "agent-control-token-that-is-long-enough";
-    const WORKER: &str = "agent-worker-token-that-is-long-enough";
-
     #[test]
-    fn accepts_only_the_exact_control_bearer_token() {
-        let token = ControlToken::new(CONTROL).expect("control token");
+    fn tokens_are_exact_and_independent() {
+        let control = "agent-control-token-that-is-long-enough";
+        let harness = HarnessToken::new("agent-harness-token-that-is-long-enough").unwrap();
+        let control_token = ControlToken::new(control).unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {CONTROL}")).expect("authorization header"),
+            HeaderValue::from_str(&format!("Bearer {control}")).unwrap(),
         );
-        assert!(token.authorizes(&headers));
-
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_static("Bearer wrong-token-that-is-still-long-enough"),
-        );
-        assert!(!token.authorizes(&headers));
-    }
-
-    #[test]
-    fn keeps_control_and_worker_tokens_independent() {
-        let worker = WorkerToken::new(WORKER).expect("worker token");
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {CONTROL}")).expect("authorization header"),
-        );
-        assert!(!worker.authorizes(&headers));
-    }
-
-    #[test]
-    fn rejects_short_or_whitespace_tokens() {
-        assert!(ControlToken::new("short").is_err());
-        assert!(WorkerToken::new("agent-worker-token-that has whitespace").is_err());
+        assert!(control_token.authorizes(&headers));
+        assert!(!harness.authorizes(&headers));
     }
 }

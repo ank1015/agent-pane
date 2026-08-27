@@ -43,11 +43,11 @@ impl ApiError {
         )
     }
 
-    pub fn unauthorized_worker() -> Self {
+    pub fn unauthorized_harness() -> Self {
         Self::new(
             StatusCode::UNAUTHORIZED,
-            "unauthorized_worker",
-            "a valid Agent worker bearer token is required",
+            "unauthorized_harness",
+            "a valid Agent harness bearer token is required",
         )
     }
 
