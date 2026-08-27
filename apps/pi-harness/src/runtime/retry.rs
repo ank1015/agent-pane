@@ -25,7 +25,7 @@ impl RetryPolicy {
         }
     }
 
-    fn delay(self, retry: u32, requested: Option<Duration>) -> Duration {
+    pub(super) fn delay(self, retry: u32, requested: Option<Duration>) -> Duration {
         let multiplier = 1_u32
             .checked_shl(retry.saturating_sub(1))
             .unwrap_or(u32::MAX);
