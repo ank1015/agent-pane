@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: agent
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+    ports:
+      - "${DEV_SERVERS_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - agent-postgres:/var/lib/postgresql/data
+
+  nats:
+    image: nats:2.12-alpine
+    command: ["--jetstream", "--store_dir", "/data", "--http_port", "8222"]
+    ports:
+      - "${DEV_SERVERS_NATS_PORT:-4222}:4222"
+      - "${DEV_SERVERS_NATS_MONITOR_PORT:-8222}:8222"
+    volumes:
+      - agent-nats:/data
+
+volumes:
+  agent-postgres:
+  agent-nats:
