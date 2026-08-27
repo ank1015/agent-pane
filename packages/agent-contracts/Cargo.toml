@@ -1,6 +1,6 @@
 [package]
 name = "agent-contracts"
-description = "Shared HTTP contracts for the Agent control plane and workers"
+description = "Shared control and harness-runtime contracts for Agent"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
