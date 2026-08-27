@@ -6,7 +6,6 @@ use super::{ExecutionError, HarnessSelection, records::RevisionConfigurationRow}
 
 pub(super) struct ResolvedConfiguration {
     pub harness_revision_id: String,
-    pub harness_id: String,
     pub value: JsonObject,
 }
 
@@ -49,38 +48,6 @@ pub(super) async fn resolve_for_start(
     resolve(row, config_override)
 }
 
-pub(super) async fn resolve_existing(
-    transaction: &mut Transaction<'_, Postgres>,
-    harness_revision_id: &str,
-    config_override: &JsonObject,
-) -> Result<ResolvedConfiguration, ExecutionError> {
-    let row = sqlx::query_as::<_, RevisionConfigurationRow>(
-        "select harness_revision_id, harness_id, default_config, config_schema \
-         from harness_revisions where harness_revision_id = $1",
-    )
-    .bind(harness_revision_id)
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or_else(|| {
-        ExecutionError::InvalidStoredData(format!(
-            "run references missing harness revision {harness_revision_id:?}"
-        ))
-    })?;
-    resolve(row, config_override)
-}
-
-pub(super) fn selection_matches(
-    selection: &HarnessSelection,
-    configuration: &ResolvedConfiguration,
-) -> bool {
-    match selection {
-        HarnessSelection::ActiveRevision { harness_id } => harness_id == &configuration.harness_id,
-        HarnessSelection::ExactRevision {
-            harness_revision_id,
-        } => harness_revision_id == &configuration.harness_revision_id,
-    }
-}
-
 fn resolve(
     row: RevisionConfigurationRow,
     config_override: &JsonObject,
@@ -89,7 +56,6 @@ fn resolve(
     validate(row.config_schema.as_ref().map(|schema| &schema.0), &value)?;
     Ok(ResolvedConfiguration {
         harness_revision_id: row.harness_revision_id,
-        harness_id: row.harness_id,
         value,
     })
 }
