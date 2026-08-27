@@ -7,9 +7,9 @@ use llm_contracts::{
     AssistantContent, ContentPart, ImageSource, ToolArguments, ToolCallId, ToolResultMessage,
     ToolResultOutcome,
 };
+use pi_harness::harness::tools::{ToolExecutionContext, WorkspaceCwd, execute_tool_call};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-use worker_pi::harness::tools::{ToolExecutionContext, WorkspaceCwd, execute_tool_call};
 
 struct Fixture {
     _directory: TempDir,

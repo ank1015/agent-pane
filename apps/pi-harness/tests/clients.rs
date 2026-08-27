@@ -14,16 +14,16 @@ use axum::{
 use execution_gateway_client::ExecutionGatewayConfig;
 use execution_runtime::OperationContext;
 use llm_contracts::{LlmRequest, ModelId, ModelRef, ProviderId};
-use serde_json::{Value, json};
-use url::Url;
-use uuid::Uuid;
-use worker_pi::{
+use pi_harness::{
     clients::{
         AgentClient, ExecutionClient, HarnessRegistryClient, LlmGatewayClient,
         LlmGatewayClientError, PI_HARNESS_REVISION_ID,
     },
     config::{AgentControlServiceConfig, AgentServiceConfig, LlmGatewayServiceConfig},
 };
+use serde_json::{Value, json};
+use url::Url;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn completes_llm_requests_and_returns_the_assistant_message() {
@@ -70,22 +70,22 @@ async fn cancels_an_llm_request_before_sending_it() {
 }
 
 #[tokio::test]
-async fn fetches_every_agent_message_page_through_the_worker_route() {
+async fn fetches_every_agent_message_page_through_the_harness_route() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let app = Router::new()
-        .route("/v1/worker/runs/{run_id}/messages", get(agent_messages))
+        .route("/v1/harness/runs/{run_id}/messages", get(agent_messages))
         .with_state(calls.clone());
     let base_url = serve(app).await;
     let client = AgentClient::new(AgentServiceConfig {
         base_url,
-        worker_token: "worker-token".to_owned(),
+        harness_token: "harness-token".to_owned(),
         request_timeout: Duration::from_secs(5),
     })
     .expect("Agent client");
     let run_id = Uuid::now_v7();
 
     let messages = client
-        .fetch_session_messages(run_id, 7, "lease-token")
+        .fetch_session_messages(run_id)
         .await
         .expect("session messages");
 
@@ -96,9 +96,7 @@ async fn fetches_every_agent_message_page_through_the_worker_route() {
     let calls = calls.lock().expect("calls lock");
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].run_id, run_id.to_string());
-    assert_eq!(calls[0].authorization, "Bearer worker-token");
-    assert_eq!(calls[0].lease_token, "lease-token");
-    assert_eq!(calls[0].lease_version, "7");
+    assert_eq!(calls[0].authorization, "Bearer harness-token");
     assert_eq!(calls[0].limit, "500");
     assert_eq!(calls[0].after_revision, None);
     assert_eq!(calls[1].after_revision.as_deref(), Some("1"));
@@ -212,8 +210,6 @@ async fn registry_call(
 struct AgentCall {
     run_id: String,
     authorization: String,
-    lease_token: String,
-    lease_version: String,
     limit: String,
     after_revision: Option<String>,
 }
@@ -227,8 +223,6 @@ async fn agent_messages(
     calls.lock().expect("calls lock").push(AgentCall {
         run_id,
         authorization: header(&headers, "authorization"),
-        lease_token: header(&headers, "x-agent-lease-token"),
-        lease_version: query["lease_version"].clone(),
         limit: query["limit"].clone(),
         after_revision: query.get("after_revision").cloned(),
     });
