@@ -1,5 +1,6 @@
 import {
   Analytics03Icon,
+  ChatBotIcon,
   ComputerIcon,
   Folder01Icon,
   LayoutAlignLeftIcon,
@@ -14,21 +15,22 @@ import {
   matchPath,
   useLocation,
 } from 'react-router-dom'
+import { HarnessesTable } from './features/harnesses/HarnessesTable'
 import { MachinePage } from './features/machines/MachinePage'
 import { MachinesSection } from './features/machines/MachinesSection'
 import { SandboxAccountPage } from './features/machines/SandboxAccountPage'
 import { ProvidersTable } from './features/providers/ProvidersTable'
+import { ProjectPage } from './features/projects/ProjectPage'
+import { ProjectsGrid } from './features/projects/ProjectsGrid'
 import { useDashboardStore } from './stores/dashboard-store'
 import './App.css'
 
-type SectionId = 'projects' | 'machines' | 'providers'
+type SectionId = 'projects' | 'harnesses' | 'machines' | 'providers'
 
 type NavigationItem = {
   id: SectionId
   path: `/${SectionId}`
   label: string
-  description?: string
-  emptyMessage: string
   icon: IconSvgElement
 }
 
@@ -37,22 +39,24 @@ const NAVIGATION: NavigationItem[] = [
     id: 'projects',
     path: '/projects',
     label: 'Projects',
-    description: 'Create and manage your agent projects.',
-    emptyMessage: 'Projects you create will appear here.',
     icon: Folder01Icon,
+  },
+  {
+    id: 'harnesses',
+    path: '/harnesses',
+    label: 'Harnesses',
+    icon: ChatBotIcon,
   },
   {
     id: 'machines',
     path: '/machines',
     label: 'Machines',
-    emptyMessage: 'Connected machines will appear here.',
     icon: ComputerIcon,
   },
   {
     id: 'providers',
     path: '/providers',
     label: 'Providers',
-    emptyMessage: 'Configured providers will appear here.',
     icon: Analytics03Icon,
   },
 ]
@@ -68,6 +72,9 @@ function App() {
     matchPath('/machine/accounts/:accountId', pathname) ??
     matchPath('/machine/accounts/:accountId/*', pathname)
   const machineMatch = matchPath('/machines/:machineId', pathname)
+  const projectMatch =
+    matchPath('/projects/:projectId', pathname) ??
+    matchPath('/projects/:projectId/*', pathname)
   const activeItem =
     NAVIGATION.find((item) => item.path === pathname) ?? NAVIGATION[0]
 
@@ -81,6 +88,10 @@ function App() {
         accountId={sandboxAccountMatch.params.accountId ?? ''}
       />
     )
+  }
+
+  if (projectMatch !== null) {
+    return <ProjectPage projectId={projectMatch.params.projectId ?? ''} />
   }
 
   return (
@@ -170,6 +181,9 @@ function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route path="/projects" element={null} />
+          <Route path="/projects/:projectId" element={null} />
+          <Route path="/projects/:projectId/*" element={null} />
+          <Route path="/harnesses" element={null} />
           <Route path="/machines" element={null} />
           <Route path="/providers" element={null} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
@@ -177,17 +191,8 @@ function App() {
 
         <div className="cursor-container">
           {activeItem.id !== 'machines' ? (
-            <header
-              className={`page-header${
-                activeItem.id === 'providers' ? ' page-header--section' : ''
-              }`}
-            >
+            <header className="page-header page-header--section">
               <h1 className="cursor-page-title">{activeItem.label}</h1>
-              {activeItem.description ? (
-                <p className="cursor-caption page-description">
-                  {activeItem.description}
-                </p>
-              ) : null}
             </header>
           ) : null}
 
@@ -195,27 +200,10 @@ function App() {
             <ProvidersTable />
           ) : activeItem.id === 'machines' ? (
             <MachinesSection />
+          ) : activeItem.id === 'harnesses' ? (
+            <HarnessesTable />
           ) : activeItem.id === 'projects' ? (
-            <section
-              className="cursor-card cursor-empty dashboard-empty-state"
-              aria-labelledby={`${activeItem.id}-empty-title`}
-            >
-              <div className="empty-state-content">
-                <HugeiconsIcon
-                  icon={activeItem.icon}
-                  size={18}
-                  color="currentColor"
-                  strokeWidth={1.5}
-                  aria-hidden="true"
-                />
-                <div>
-                  <h2 id={`${activeItem.id}-empty-title`}>
-                    No {activeItem.label.toLowerCase()} yet
-                  </h2>
-                  <p>{activeItem.emptyMessage}</p>
-                </div>
-              </div>
-            </section>
+            <ProjectsGrid />
           ) : null}
         </div>
       </main>
