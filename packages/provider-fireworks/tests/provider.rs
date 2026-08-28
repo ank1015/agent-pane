@@ -8,7 +8,7 @@ use llm_contracts::{
 };
 use provider_fireworks::{
     FIREWORKS_MODELS, build_chat_completion_request, calculate_usage_cost, convert_response,
-    find_model,
+    find_model, reasoning_effort,
 };
 use serde_json::{Map, json};
 
@@ -47,6 +47,43 @@ fn catalog_is_current_and_a_strict_allowlist() {
 }
 
 #[test]
+fn maps_portable_reasoning_to_each_models_native_efforts() {
+    let levels = ["low", "medium", "high", "xhigh", "max"];
+    let expected = [
+        (
+            "accounts/fireworks/models/kimi-k3",
+            ["low", "medium", "high", "max", "max"],
+        ),
+        (
+            "accounts/fireworks/models/deepseek-v4-pro-0813",
+            ["high", "high", "high", "max", "max"],
+        ),
+        (
+            "accounts/fireworks/models/qwen3p8-2p4t-a95b",
+            ["low", "medium", "high", "high", "high"],
+        ),
+        (
+            "accounts/fireworks/models/deepseek-v4-flash-0731",
+            ["low", "high", "high", "max", "max"],
+        ),
+    ];
+
+    assert_eq!(expected.len(), FIREWORKS_MODELS.len());
+    for (model_id, efforts) in expected {
+        assert!(find_model(model_id).is_some());
+        for (level, effort) in levels.into_iter().zip(efforts) {
+            assert_eq!(reasoning_effort(model_id, level), Some(effort));
+        }
+    }
+
+    assert_eq!(reasoning_effort("unknown", "high"), None);
+    assert_eq!(
+        reasoning_effort("accounts/fireworks/models/kimi-k3", "minimal"),
+        None
+    );
+}
+
+#[test]
 fn request_is_non_streaming_and_catalog_owned_fields_win() {
     let mut request = request("accounts/fireworks/models/kimi-k3");
     request.instructions = Some("Be concise".into());
@@ -73,6 +110,8 @@ fn request_is_non_streaming_and_catalog_owned_fields_win() {
         ("stream".into(), json!(true)),
         ("n".into(), json!(8)),
         ("max_tokens".into(), json!(1_000_000)),
+        ("reasoning_effort".into(), json!("max")),
+        ("prompt_cache_key".into(), json!("session-123")),
     ]);
 
     let body = build_chat_completion_request(&request).expect("valid request");
@@ -81,6 +120,8 @@ fn request_is_non_streaming_and_catalog_owned_fields_win() {
     assert_eq!(body["stream"], false);
     assert_eq!(body["n"], 1);
     assert_eq!(body["max_tokens"], 1_000_000);
+    assert_eq!(body["reasoning_effort"], "max");
+    assert_eq!(body["prompt_cache_key"], "session-123");
     assert_eq!(body["messages"][0]["role"], "system");
     assert_eq!(body["messages"][1]["content"][0]["type"], "text");
     assert_eq!(
