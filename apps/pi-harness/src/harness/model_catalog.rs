@@ -1,108 +1,166 @@
-use llm_contracts::{ModelCost, ModelPricing, ModelPricingAbove};
+use provider_chatgpt::{CHATGPT_MODELS, CHATGPT_PROVIDER, find_model as find_chatgpt_model};
+use provider_deepseek::{DEEPSEEK_MODELS, DEEPSEEK_PROVIDER, find_model as find_deepseek_model};
+use provider_fireworks::{
+    FIREWORKS_MODELS, FIREWORKS_PROVIDER, find_model as find_fireworks_model,
+};
+use provider_openai::{OPENAI_MODELS, OPENAI_PROVIDER, find_model as find_openai_model};
+
+pub const SUPPORTED_PROVIDERS: &[&str] = &[
+    OPENAI_PROVIDER,
+    CHATGPT_PROVIDER,
+    FIREWORKS_PROVIDER,
+    DEEPSEEK_PROVIDER,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ModelCatalogEntry {
     pub provider: &'static str,
     pub id: &'static str,
     pub name: &'static str,
-    pub pricing: ModelPricing,
     pub context_window: u64,
     pub max_tokens: u64,
 }
 
-pub const MODEL_CATALOG: &[ModelCatalogEntry] = &[
+#[must_use]
+pub fn supports_provider(provider: &str) -> bool {
+    SUPPORTED_PROVIDERS.contains(&provider)
+}
+
+#[must_use]
+pub fn find_model(provider: &str, model_id: &str) -> Option<ModelCatalogEntry> {
+    match provider {
+        OPENAI_PROVIDER => {
+            let model = find_openai_model(model_id)?;
+            Some(model_entry(
+                OPENAI_PROVIDER,
+                model.id,
+                model.name,
+                model.context_window,
+                model.max_tokens,
+            ))
+        }
+        CHATGPT_PROVIDER => {
+            let model = find_chatgpt_model(model_id)?;
+            Some(model_entry(
+                CHATGPT_PROVIDER,
+                model.id,
+                model.name,
+                model.context_window,
+                model.max_tokens,
+            ))
+        }
+        FIREWORKS_PROVIDER => {
+            let model = find_fireworks_model(model_id)?;
+            Some(model_entry(
+                FIREWORKS_PROVIDER,
+                model.id,
+                model.name,
+                model.context_window,
+                model.max_tokens,
+            ))
+        }
+        DEEPSEEK_PROVIDER => {
+            let model = find_deepseek_model(model_id)?;
+            Some(model_entry(
+                DEEPSEEK_PROVIDER,
+                model.id,
+                model.name,
+                model.context_window,
+                model.max_tokens,
+            ))
+        }
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn model_ids(provider: &str) -> Option<Vec<&'static str>> {
+    match provider {
+        OPENAI_PROVIDER => Some(OPENAI_MODELS.iter().map(|model| model.id).collect()),
+        CHATGPT_PROVIDER => Some(CHATGPT_MODELS.iter().map(|model| model.id).collect()),
+        FIREWORKS_PROVIDER => Some(FIREWORKS_MODELS.iter().map(|model| model.id).collect()),
+        DEEPSEEK_PROVIDER => Some(DEEPSEEK_MODELS.iter().map(|model| model.id).collect()),
+        _ => None,
+    }
+}
+
+fn model_entry(
+    provider: &'static str,
+    id: &'static str,
+    name: &'static str,
+    context_window: u64,
+    max_tokens: u64,
+) -> ModelCatalogEntry {
     ModelCatalogEntry {
-        provider: "openai",
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
-        pricing: ModelPricing {
-            base: ModelCost {
-                input: 4.0,
-                output: 20.0,
-                cache_read: 0.4,
-                cache_write: 5.0,
-            },
-            above: Some(ModelPricingAbove {
-                prompt_tokens: 272_000,
-                cost: ModelCost {
-                    input: 8.0,
-                    output: 30.0,
-                    cache_read: 0.8,
-                    cache_write: 10.0,
-                },
-            }),
-        },
-        context_window: 1_050_000,
-        max_tokens: 128_000,
-    },
-    ModelCatalogEntry {
-        provider: "openai",
-        id: "gpt-5.6-terra",
-        name: "GPT-5.6 Terra",
-        pricing: ModelPricing {
-            base: ModelCost {
-                input: 2.0,
-                output: 12.0,
-                cache_read: 0.2,
-                cache_write: 2.5,
-            },
-            above: Some(ModelPricingAbove {
-                prompt_tokens: 272_000,
-                cost: ModelCost {
-                    input: 4.0,
-                    output: 18.0,
-                    cache_read: 0.4,
-                    cache_write: 5.0,
-                },
-            }),
-        },
-        context_window: 1_050_000,
-        max_tokens: 128_000,
-    },
-    ModelCatalogEntry {
-        provider: "openai",
-        id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
-        pricing: ModelPricing {
-            base: ModelCost {
-                input: 0.2,
-                output: 1.2,
-                cache_read: 0.02,
-                cache_write: 0.25,
-            },
-            above: Some(ModelPricingAbove {
-                prompt_tokens: 272_000,
-                cost: ModelCost {
-                    input: 0.4,
-                    output: 1.8,
-                    cache_read: 0.04,
-                    cache_write: 0.5,
-                },
-            }),
-        },
-        context_window: 1_050_000,
-        max_tokens: 128_000,
-    },
-];
+        provider,
+        id,
+        name,
+        context_window,
+        max_tokens,
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use super::MODEL_CATALOG;
+    use provider_chatgpt::CHATGPT_MODELS;
+    use provider_deepseek::DEEPSEEK_MODELS;
+    use provider_fireworks::FIREWORKS_MODELS;
+    use provider_openai::OPENAI_MODELS;
+
+    use super::{SUPPORTED_PROVIDERS, find_model, model_ids, supports_provider};
 
     #[test]
-    fn contains_the_supported_openai_models() {
-        let models: Vec<_> = MODEL_CATALOG
-            .iter()
-            .map(|model| (model.provider, model.id))
-            .collect();
+    fn resolves_models_from_the_provider_owned_catalogs() {
+        assert_eq!(CHATGPT_MODELS, OPENAI_MODELS);
+        for provider in ["openai", "chatgpt"] {
+            let model = find_model(provider, "gpt-5.6-terra").expect("provider catalog model");
+            assert_eq!(model.provider, provider);
+            assert_eq!(model.name, "GPT-5.6 Terra");
+            assert_eq!(model.context_window, 1_050_000);
+            assert_eq!(model.max_tokens, 128_000);
+        }
+    }
 
+    #[test]
+    fn rejects_unknown_providers_and_models() {
+        assert!(supports_provider("openai"));
+        assert!(supports_provider("chatgpt"));
+        assert!(supports_provider("fireworks"));
+        assert!(supports_provider("deepseek"));
+        assert!(!supports_provider("anthropic"));
+        assert!(find_model("anthropic", "gpt-5.6-sol").is_none());
+        assert!(find_model("chatgpt", "gpt-5.5").is_none());
         assert_eq!(
-            models,
-            [
-                ("openai", "gpt-5.6-sol"),
-                ("openai", "gpt-5.6-terra"),
-                ("openai", "gpt-5.6-luna"),
-            ]
+            SUPPORTED_PROVIDERS,
+            ["openai", "chatgpt", "fireworks", "deepseek"]
         );
+        assert_eq!(
+            model_ids("chatgpt").expect("ChatGPT models"),
+            ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+        );
+        assert_eq!(
+            model_ids("fireworks").expect("Fireworks models"),
+            FIREWORKS_MODELS
+                .iter()
+                .map(|model| model.id)
+                .collect::<Vec<_>>()
+        );
+        let fireworks = find_model("fireworks", "accounts/fireworks/models/kimi-k3")
+            .expect("Fireworks catalog model");
+        assert_eq!(fireworks.provider, "fireworks");
+        assert_eq!(fireworks.name, "Kimi K3");
+        assert_eq!(fireworks.context_window, 1_048_576);
+        assert_eq!(
+            model_ids("deepseek").expect("DeepSeek models"),
+            DEEPSEEK_MODELS
+                .iter()
+                .map(|model| model.id)
+                .collect::<Vec<_>>()
+        );
+        let deepseek = find_model("deepseek", "deepseek-v4-flash").expect("DeepSeek model");
+        assert_eq!(deepseek.provider, "deepseek");
+        assert_eq!(deepseek.name, "DeepSeek V4 Flash 0731");
+        assert_eq!(deepseek.context_window, 1_048_576);
+        assert_eq!(deepseek.max_tokens, 384_000);
     }
 }
