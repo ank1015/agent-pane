@@ -4,7 +4,10 @@ use platform::{
     config::AppConfig,
     providers::chatgpt_oauth::{ChatGptLoginService, callback_router},
     router,
-    upstream::{execution_gateway::ExecutionGatewayClient, llm_gateway::LlmGatewayClient},
+    upstream::{
+        agent::AgentClient, execution_gateway::ExecutionGatewayClient,
+        llm_gateway::LlmGatewayClient,
+    },
 };
 use tokio::{net::TcpListener, signal};
 use tracing_subscriber::EnvFilter;
@@ -25,6 +28,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &config.execution_gateway_control_token,
         config.execution_gateway_timeout,
     )?;
+    let agent = AgentClient::new(
+        config.agent_url.clone(),
+        &config.agent_control_token,
+        config.agent_timeout,
+    )?;
     let chatgpt_login = ChatGptLoginService::new(
         gateway.clone(),
         config.chatgpt_oauth_client_id,
@@ -39,6 +47,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         address = %config.bind_address,
         llm_gateway_url = %config.llm_gateway_url,
         execution_gateway_url = %config.execution_gateway_url,
+        agent_url = %config.agent_url,
         "platform server listening"
     );
     tracing::info!(
@@ -51,6 +60,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         router(
             gateway,
             execution_gateway,
+            agent,
             chatgpt_login.clone(),
             config.max_request_bytes,
         ),
