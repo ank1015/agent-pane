@@ -383,7 +383,8 @@ start_with_env \
   "$platform_env" \
   "$repo_root/target/debug/platform" \
   "PLATFORM_LLM_GATEWAY_ADMIN_TOKEN=$llm_gateway_admin_token" \
-  "PLATFORM_EXECUTION_GATEWAY_CONTROL_TOKEN=$execution_gateway_control_token"
+  "PLATFORM_EXECUTION_GATEWAY_CONTROL_TOKEN=$execution_gateway_control_token" \
+  "PLATFORM_AGENT_CONTROL_TOKEN=$agent_control_token"
 platform_pid="$started_pid"
 wait_for_service "platform" "http://127.0.0.1:3100/ready" "$platform_pid"
 
