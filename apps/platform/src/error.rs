@@ -6,12 +6,14 @@ use axum::{
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::upstream::agent::AgentError;
 use crate::upstream::execution_gateway::ExecutionGatewayError;
 use crate::upstream::llm_gateway::LlmGatewayError;
 
 #[derive(Debug)]
 pub enum ApiError {
     InvalidRequest(String),
+    Agent(AgentError),
     ExecutionGateway(ExecutionGatewayError),
     LlmGateway(LlmGatewayError),
 }
@@ -25,6 +27,12 @@ impl ApiError {
 impl From<LlmGatewayError> for ApiError {
     fn from(error: LlmGatewayError) -> Self {
         Self::LlmGateway(error)
+    }
+}
+
+impl From<AgentError> for ApiError {
+    fn from(error: AgentError) -> Self {
+        Self::Agent(error)
     }
 }
 
@@ -42,6 +50,20 @@ impl IntoResponse for ApiError {
                 Json(ErrorResponse::new("invalid_request", message)),
             )
                 .into_response(),
+            Self::Agent(AgentError::Rejected { status, body }) => {
+                (status, Json(body)).into_response()
+            }
+            Self::Agent(error) => {
+                tracing::error!(%error, "Agent request failed");
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorResponse::new(
+                        "agent_unavailable",
+                        "Agent is unavailable or returned an invalid response",
+                    )),
+                )
+                    .into_response()
+            }
             Self::ExecutionGateway(ExecutionGatewayError::Rejected { status, body }) => {
                 (status, Json(body)).into_response()
             }
@@ -122,6 +144,17 @@ pub(crate) fn execution_gateway_rejected_body(bytes: &[u8]) -> Value {
             "code": "internal",
             "message": "the execution gateway rejected the request",
             "retryable": false
+        })
+    })
+}
+
+pub(crate) fn agent_rejected_body(bytes: &[u8]) -> Value {
+    serde_json::from_slice(bytes).unwrap_or_else(|_| {
+        serde_json::json!({
+            "error": {
+                "code": "agent_error",
+                "message": "Agent rejected the request"
+            }
         })
     })
 }
