@@ -7,7 +7,7 @@ use super::{
         COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX, PI_COMPACTION_MESSAGE_TAG,
         latest_compaction, message_id,
     },
-    model_catalog::MODEL_CATALOG,
+    model_catalog::{find_model, supports_provider},
 };
 
 const COMPACTION_RESERVE_TOKENS: u64 = 16_384;
@@ -106,15 +106,13 @@ fn active_context(messages: &[Message]) -> ActiveContext {
 }
 
 fn model_context_window(provider: &str, model_id: &str) -> Result<u64, ContextFormationError> {
-    if !MODEL_CATALOG.iter().any(|model| model.provider == provider) {
+    if !supports_provider(provider) {
         return Err(ContextFormationError::UnsupportedProvider(
             provider.to_owned(),
         ));
     }
 
-    MODEL_CATALOG
-        .iter()
-        .find(|model| model.provider == provider && model.id == model_id)
+    find_model(provider, model_id)
         .map(|model| model.context_window)
         .ok_or_else(|| ContextFormationError::UnsupportedModel {
             provider: provider.to_owned(),
@@ -232,7 +230,7 @@ mod tests {
     };
     use crate::harness::{
         compact::{PiCompactionMessageContent, create_pi_compaction_message},
-        model_catalog::MODEL_CATALOG,
+        model_catalog::find_model,
     };
 
     #[test]
@@ -282,7 +280,7 @@ mod tests {
 
     #[test]
     fn requires_compaction_when_usage_crosses_the_reserved_threshold() {
-        let model = &MODEL_CATALOG[0];
+        let model = find_model("openai", "gpt-5.6-sol").expect("provider catalog model");
         let threshold = model.context_window - COMPACTION_RESERVE_TOKENS;
         let messages = vec![assistant_message(
             "assistant-1",
@@ -311,7 +309,7 @@ mod tests {
 
     #[test]
     fn ignores_stale_usage_from_before_the_latest_compaction() {
-        let model = &MODEL_CATALOG[0];
+        let model = find_model("openai", "gpt-5.6-sol").expect("provider catalog model");
         let messages = vec![
             assistant_message("kept", "Old response.", Some(model.context_window)),
             compaction_message("compaction-1", "Small summary", "kept"),
@@ -319,6 +317,28 @@ mod tests {
         ];
 
         assert!(form_context_messages(&messages, model.provider, model.id).is_ok());
+    }
+
+    #[test]
+    fn uses_the_chatgpt_provider_catalog_for_context_limits() {
+        let messages = vec![user_message("user-1", "Inspect the parser.")];
+
+        assert_eq!(
+            form_context_messages(&messages, "chatgpt", "gpt-5.6-sol")
+                .expect("ChatGPT context fits"),
+            messages
+        );
+    }
+
+    #[test]
+    fn uses_the_deepseek_provider_catalog_for_context_limits() {
+        let messages = vec![user_message("user-1", "Inspect the parser.")];
+
+        assert_eq!(
+            form_context_messages(&messages, "deepseek", "deepseek-v4-pro")
+                .expect("DeepSeek context fits"),
+            messages
+        );
     }
 
     #[test]
