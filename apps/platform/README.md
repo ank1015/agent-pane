@@ -4,7 +4,7 @@ The dashboard backend-for-frontend. `platform` exposes client-oriented APIs and
 coordinates the workspace's internal services; it does not take ownership of
 their data. The `providers` feature maps dashboard provider operations to
 `llm-gateway`, while `machines` maps machine and sandbox operations to
-`execution-gateway`.
+`execution-gateway`, and `harnesses` maps harness inventory to `agent`.
 
 ## Architecture
 
@@ -22,7 +22,12 @@ src/
 │   ├── http.rs             # Dashboard-facing routes
 │   ├── model.rs            # API contracts
 │   └── mod.rs              # Application service
+├── harnesses/              # Harness inventory feature slice
+│   ├── http.rs             # Dashboard-facing routes
+│   ├── model.rs            # Dashboard and Agent contracts
+│   └── mod.rs              # Application service and pagination
 ├── upstream/
+│   ├── agent.rs             # Agent control adapter
 │   ├── execution_gateway.rs # Execution gateway control adapter
 │   └── llm_gateway.rs       # LLM gateway admin adapter
 ├── config.rs               # Process configuration
@@ -41,13 +46,14 @@ persistence, and neither service offers a credential reveal endpoint.
 
 ## Local setup
 
-Start `llm-gateway` and `execution-gateway` first, then configure platform. The platform token must be
+Start `llm-gateway`, `execution-gateway`, and `agent` first, then configure platform. The platform token must be
 the same value as `GATEWAY_ADMIN_TOKEN` used by `llm-gateway`. When both
 processes load the same root `.env`, platform automatically falls back to that
 variable; `PLATFORM_LLM_GATEWAY_ADMIN_TOKEN` can override it.
 Likewise, `PLATFORM_EXECUTION_GATEWAY_CONTROL_TOKEN` must match
 `EXECUTION_GATEWAY_CONTROL_TOKEN`; platform falls back to the latter when all
 services load the root `.env`.
+`PLATFORM_AGENT_CONTROL_TOKEN` must likewise match `AGENT_CONTROL_TOKEN`.
 
 ```sh
 cp apps/platform/.env.example .env.platform
@@ -58,7 +64,18 @@ cargo run -p platform
 ```
 
 The default listener is `http://127.0.0.1:3100`. Liveness is available at
-`GET /health`; `GET /ready` checks both upstream gateways.
+`GET /health`; `GET /ready` checks all three upstream services.
+
+## Harnesses API
+
+```text
+GET /api/harnesses
+```
+
+Platform follows Agent pagination internally and returns a dashboard-oriented
+JSON array containing `id`, `name`, `description`, `created_at`, and
+`updated_at`. Upstream authentication uses the Agent control token; the token
+is never exposed to the dashboard.
 
 ## Sandbox accounts API
 
