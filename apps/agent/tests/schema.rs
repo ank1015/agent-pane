@@ -75,6 +75,17 @@ async fn migration_builds_the_schema_and_enforces_aggregate_boundaries() {
     .await
     .expect("sessions archived_at inspection");
     assert!(!archived_at_exists);
+    let harness_updated_at_exists: bool = sqlx::query_scalar(
+        "select exists(
+             select 1 from information_schema.columns
+             where table_schema = 'public' and table_name = 'harnesses'
+               and column_name = 'updated_at'
+         )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("harnesses updated_at inspection");
+    assert!(harness_updated_at_exists);
 
     let harness_id = format!("harness-{}", Uuid::now_v7());
     let revision_id = format!("revision-{}", Uuid::now_v7());

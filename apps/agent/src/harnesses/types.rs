@@ -15,6 +15,7 @@ pub struct Harness {
     pub enabled: bool,
     pub active_revision_id: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

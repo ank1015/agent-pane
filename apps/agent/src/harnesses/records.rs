@@ -3,8 +3,7 @@ use sqlx::{FromRow, types::Json};
 
 use super::{Harness, HarnessError, HarnessRevision, HarnessRevisionStatus, JsonObject};
 
-pub(super) const HARNESS_COLUMNS: &str =
-    "harness_id, slug, display_name, description, enabled, active_revision_id, created_at";
+pub(super) const HARNESS_COLUMNS: &str = "harness_id, slug, display_name, description, enabled, active_revision_id, created_at, updated_at";
 
 pub(super) const REVISION_COLUMNS: &str = "r.harness_revision_id, r.harness_id, r.revision, r.contract_version, \
      r.default_config, r.config_schema, r.first_activated_at, r.retired_at, r.created_at, \
@@ -19,6 +18,7 @@ pub(super) struct HarnessRow {
     pub enabled: bool,
     pub active_revision_id: Option<String>,
     pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 impl From<HarnessRow> for Harness {
@@ -31,6 +31,7 @@ impl From<HarnessRow> for Harness {
             enabled: row.enabled,
             active_revision_id: row.active_revision_id,
             created_at: row.created_at,
+            updated_at: row.updated_at,
         }
     }
 }
