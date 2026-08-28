@@ -316,11 +316,8 @@
   padding-inline: var(--cursor-space-8);
 }
 
-.page-description {
-  margin: var(--cursor-space-4) 0 0;
-}
-
-.providers-section {
+.providers-section,
+.harnesses-section {
   display: flex;
   flex-direction: column;
   gap: 9px;
@@ -376,6 +373,73 @@
   max-width: 1180px;
   gap: 14px;
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+}
+
+.project-card-grid {
+  display: grid;
+  max-width: 1020px;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+}
+
+.project-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: var(--cursor-radius-lg);
+  color: inherit;
+  background: #161616;
+  text-decoration: none;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 190px;
+  transition:
+    border-color var(--cursor-duration-fast) var(--cursor-ease),
+    transform var(--cursor-duration-fast) var(--cursor-ease);
+}
+
+.project-card:hover {
+  border-color: rgb(255 255 255 / 16%);
+  transform: translateY(-1px);
+}
+
+.project-card:focus-visible {
+  border-color: var(--cursor-border-strong);
+  outline: 1px solid var(--cursor-border-strong);
+  outline-offset: 2px;
+}
+
+.project-card-visual {
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: var(--cursor-overlay-04);
+}
+
+.project-card-visual img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  user-select: none;
+}
+
+.project-card-footer {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--cursor-space-12);
+  border-top: 1px solid var(--cursor-border-faint);
+}
+
+.project-card-footer h2 {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  color: var(--cursor-text-primary);
+  font-size: var(--cursor-font-sm);
+  font-weight: var(--cursor-weight-medium);
+  line-height: var(--cursor-leading-base);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .machine-card {
@@ -518,7 +582,8 @@
   line-height: var(--cursor-leading-base);
 }
 
-.providers-section-header {
+.providers-section-header,
+.harnesses-section-header {
   min-height: 28px;
   display: flex;
   align-items: center;
@@ -526,7 +591,8 @@
   padding: 0 var(--cursor-space-8);
 }
 
-.providers-section-header h2 {
+.providers-section-header h2,
+.harnesses-section-header h2 {
   flex: 1;
   margin: 0;
   color: var(--cursor-text-secondary);
@@ -1256,6 +1322,31 @@
   text-align: left;
 }
 
+.harnesses-table {
+  min-width: 760px;
+}
+
+.harness-name-column { width: 24%; }
+.harness-description-column { width: auto; }
+.harness-created-column { width: 150px; }
+.harness-updated-column { width: 150px; }
+
+.harness-name,
+.harness-detail {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.harness-detail {
+  color: var(--cursor-text-secondary);
+}
+
+.harness-description {
+  color: var(--cursor-text-tertiary);
+}
+
 .provider-icon-column { width: 48px; }
 .provider-name-column { width: 37%; }
 .provider-type-column { width: 22%; }
@@ -1477,39 +1568,6 @@
   border: 0;
 }
 
-.dashboard-empty-state {
-  min-height: 118px;
-}
-
-.empty-state-content {
-  display: flex;
-  align-items: center;
-  gap: var(--cursor-space-12);
-  text-align: left;
-}
-
-.empty-state-content > svg {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
-  color: var(--cursor-text-quaternary);
-}
-
-.empty-state-content h2 {
-  margin: 0 0 var(--cursor-space-2);
-  color: var(--cursor-text-secondary);
-  font-size: var(--cursor-font-base);
-  font-weight: var(--cursor-weight-regular);
-  line-height: var(--cursor-leading-base);
-}
-
-.empty-state-content p {
-  margin: 0;
-  color: var(--cursor-text-quaternary);
-  font-size: var(--cursor-font-sm);
-  line-height: var(--cursor-leading-sm);
-}
-
 @media (max-width: 960px) {
   .machine-detail-shell {
     grid-template-columns: 56px minmax(0, 1fr);
@@ -1622,10 +1680,6 @@
   .dashboard-nav-item[aria-current='page'],
   .dashboard-nav-item--active {
     color: var(--cursor-text-primary);
-  }
-
-  .dashboard-empty-state {
-    min-height: 132px;
   }
 
   .app-dialog {
