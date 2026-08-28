@@ -114,6 +114,10 @@ async fn registers_and_activates_the_packaged_pi_harness() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let app = Router::new()
         .route("/v1/harnesses", post(registry_call))
+        .route(
+            "/v1/harnesses/{harness_id}",
+            axum::routing::patch(registry_call),
+        )
         .route("/v1/harnesses/{harness_id}/revisions", post(registry_call))
         .route(
             "/v1/harnesses/{harness_id}/active-revision",
@@ -134,26 +138,61 @@ async fn registers_and_activates_the_packaged_pi_harness() {
     client.ensure_pi_harness().await.expect("Pi registration");
 
     let calls = calls.lock().expect("registry calls");
-    assert_eq!(calls.len(), 4);
+    assert_eq!(calls.len(), 5);
     assert_eq!(calls[0].method, Method::POST);
     assert_eq!(calls[0].path, "/v1/harnesses");
     assert_eq!(calls[0].authorization, "Bearer control-secret");
     assert_eq!(calls[0].body["harness_id"], "pi");
-    assert_eq!(calls[1].body["harness_revision_id"], PI_HARNESS_REVISION_ID);
-    assert_eq!(calls[1].body["default_config"]["model_id"], "gpt-5.6-sol");
     assert_eq!(
-        calls[1].body["config_schema"]["properties"]["execution"]["required"],
+        calls[0].body["description"],
+        "Minimalistic pi agent with four tools. Single agent, Single machine."
+    );
+    assert_eq!(calls[1].method, Method::PATCH);
+    assert_eq!(calls[1].path, "/v1/harnesses/pi");
+    assert_eq!(
+        calls[1].body["description"],
+        "Minimalistic pi agent with four tools. Single agent, Single machine."
+    );
+    assert_eq!(calls[2].body["harness_revision_id"], PI_HARNESS_REVISION_ID);
+    assert_eq!(calls[2].body["default_config"]["model_id"], "gpt-5.6-sol");
+    assert_eq!(
+        calls[2].body["config_schema"]["properties"]["provider"]["enum"],
+        json!(["openai", "chatgpt", "fireworks", "deepseek"])
+    );
+    assert_eq!(
+        calls[2].body["config_schema"]["oneOf"][1]["properties"]["model_id"]["enum"],
+        json!(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+    );
+    assert_eq!(
+        calls[2].body["config_schema"]["oneOf"][2]["properties"]["model_id"]["enum"],
+        json!([
+            "accounts/fireworks/models/kimi-k3",
+            "accounts/fireworks/models/deepseek-v4-pro-0813",
+            "accounts/fireworks/models/qwen3p8-2p4t-a95b",
+            "accounts/fireworks/models/deepseek-v4-flash-0731"
+        ])
+    );
+    assert_eq!(
+        calls[2].body["config_schema"]["oneOf"][3]["properties"]["model_id"]["enum"],
+        json!([
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "deepseek-v4-flash-vision-exp"
+        ])
+    );
+    assert_eq!(
+        calls[2].body["config_schema"]["properties"]["execution"]["required"],
         json!(["machine_id", "workspace_root_id", "cwd"])
     );
     assert!(
-        !calls[1].body["config_schema"]["required"]
+        !calls[2].body["config_schema"]["required"]
             .as_array()
             .unwrap()
             .contains(&json!("execution"))
     );
-    assert_eq!(calls[2].method, Method::PUT);
-    assert_eq!(calls[2].body["harness_revision_id"], PI_HARNESS_REVISION_ID);
-    assert_eq!(calls[3].body["enabled"], true);
+    assert_eq!(calls[3].method, Method::PUT);
+    assert_eq!(calls[3].body["harness_revision_id"], PI_HARNESS_REVISION_ID);
+    assert_eq!(calls[4].body["enabled"], true);
 }
 
 async fn complete(

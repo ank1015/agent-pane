@@ -5,10 +5,13 @@ use serde::Serialize;
 use serde_json::json;
 use url::Url;
 
-use crate::config::AgentControlServiceConfig;
+use crate::{
+    config::AgentControlServiceConfig,
+    harness::model_catalog::{SUPPORTED_PROVIDERS, model_ids},
+};
 
 pub const PI_HARNESS_ID: &str = "pi";
-pub const PI_HARNESS_REVISION_ID: &str = "pi-2026-08-27-nats-server";
+pub const PI_HARNESS_REVISION_ID: &str = "pi-2026-08-28-deepseek";
 
 #[derive(Clone)]
 pub struct HarnessRegistryClient {
@@ -44,6 +47,15 @@ impl HarnessRegistryClient {
         command: &CreateHarnessRequest,
     ) -> Result<(), HarnessRegistryError> {
         self.send(Method::POST, &["v1", "harnesses"], command).await
+    }
+
+    pub async fn update_harness(
+        &self,
+        harness_id: &str,
+        command: &UpdateHarnessRequest,
+    ) -> Result<(), HarnessRegistryError> {
+        self.send(Method::PATCH, &["v1", "harnesses", harness_id], command)
+            .await
     }
 
     pub async fn register_revision(
@@ -90,6 +102,8 @@ impl HarnessRegistryClient {
     /// Idempotently provisions the harness revision implemented by this binary.
     pub async fn ensure_pi_harness(&self) -> Result<(), HarnessRegistryError> {
         self.create_harness(&pi_harness()).await?;
+        self.update_harness(PI_HARNESS_ID, &pi_harness_metadata())
+            .await?;
         self.register_revision(PI_HARNESS_ID, &pi_revision())
             .await?;
         self.activate_revision(PI_HARNESS_ID, PI_HARNESS_REVISION_ID)
@@ -134,6 +148,11 @@ pub struct CreateHarnessRequest {
     pub description: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct UpdateHarnessRequest {
+    pub description: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RegisterHarnessRevisionRequest {
     pub harness_revision_id: String,
@@ -158,14 +177,37 @@ fn pi_harness() -> CreateHarnessRequest {
         harness_id: PI_HARNESS_ID.to_owned(),
         slug: "pi".to_owned(),
         display_name: "Pi Coding Agent".to_owned(),
-        description: Some("Pi's default four-tool coding harness".to_owned()),
+        description: Some(pi_harness_description().to_owned()),
     }
 }
 
+fn pi_harness_metadata() -> UpdateHarnessRequest {
+    UpdateHarnessRequest {
+        description: pi_harness_description().to_owned(),
+    }
+}
+
+fn pi_harness_description() -> &'static str {
+    "Minimalistic pi agent with four tools. Single agent, Single machine."
+}
+
 fn pi_revision() -> RegisterHarnessRevisionRequest {
+    let provider_model_schemas = SUPPORTED_PROVIDERS
+        .iter()
+        .map(|provider| {
+            json!({
+                "properties": {
+                    "provider": {"const": provider},
+                    "model_id": {
+                        "enum": model_ids(provider).expect("supported provider has a model catalog")
+                    }
+                }
+            })
+        })
+        .collect::<Vec<_>>();
     RegisterHarnessRevisionRequest {
         harness_revision_id: PI_HARNESS_REVISION_ID.to_owned(),
-        revision: "2026-08-27-nats-server".to_owned(),
+        revision: "2026-08-28-deepseek".to_owned(),
         contract_version: 1,
         default_config: object(json!({
             "provider": "openai",
@@ -177,10 +219,8 @@ fn pi_revision() -> RegisterHarnessRevisionRequest {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "properties": {
-                "provider": {"const": "openai"},
-                "model_id": {
-                    "enum": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
-                },
+                "provider": {"enum": SUPPORTED_PROVIDERS},
+                "model_id": {"type": "string"},
                 "reasoning_level": {
                     "enum": ["low", "medium", "high", "xhigh", "max"]
                 },
@@ -198,6 +238,7 @@ fn pi_revision() -> RegisterHarnessRevisionRequest {
                 "external_prompt": {"type": ["string", "null"]},
                 "is_replaced": {"type": "boolean"}
             },
+            "oneOf": provider_model_schemas,
             "required": ["provider", "model_id", "reasoning_level", "is_replaced"],
             "additionalProperties": false
         }))),
