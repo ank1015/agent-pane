@@ -63,13 +63,19 @@ pub(crate) fn build_chat_completion_request_for_model(
             "DeepSeek requests support at most 128 function tools.",
         ));
     }
+    let requires_reasoning_content = !tools.is_empty() && thinking_enabled(&body);
 
     let mut messages = Vec::new();
     if let Some(instructions) = &request.instructions {
         messages.push(json!({ "role": "system", "content": instructions }));
     }
     for message in &request.messages {
-        messages.extend(map_message(message, &request.tools, model)?);
+        messages.extend(map_message(
+            message,
+            &request.tools,
+            model,
+            requires_reasoning_content,
+        )?);
     }
     if messages.is_empty() {
         return Err(invalid_request(
@@ -84,6 +90,15 @@ pub(crate) fn build_chat_completion_request_for_model(
         body.insert("tools".into(), Value::Array(tools));
     }
     Ok(Value::Object(body))
+}
+
+fn thinking_enabled(options: &Map<String, Value>) -> bool {
+    options
+        .get("thinking")
+        .and_then(Value::as_object)
+        .and_then(|thinking| thinking.get("type"))
+        .and_then(Value::as_str)
+        != Some("disabled")
 }
 
 fn validate_max_tokens(
@@ -110,6 +125,7 @@ fn map_message(
     message: &Message,
     tools: &[ToolDefinition],
     model: &DeepSeekModel,
+    requires_reasoning_content: bool,
 ) -> Result<Vec<Value>, LlmError> {
     match message {
         Message::User(message) => Ok(vec![json!({
@@ -120,18 +136,21 @@ fn map_message(
             "role": "system",
             "content": join_text(&message.content),
         })]),
-        Message::Assistant(message) => map_assistant_message(message, tools),
+        Message::Assistant(message) => {
+            map_assistant_message(message, tools, requires_reasoning_content)
+        }
         Message::ToolResult(message) => Ok(vec![map_tool_result(message, tools)?]),
-        Message::Custom(message) => map_custom_message(message),
+        Message::Custom(message) => map_custom_message(message, requires_reasoning_content),
     }
 }
 
 fn map_assistant_message(
     message: &llm_contracts::AssistantMessage,
     tools: &[ToolDefinition],
+    requires_reasoning_content: bool,
 ) -> Result<Vec<Value>, LlmError> {
     if message.model.provider.as_str() == DEEPSEEK_PROVIDER {
-        let native_message = message
+        let mut native_message = message
             .native_message
             .get("choices")
             .and_then(Value::as_array)
@@ -148,6 +167,7 @@ fn map_assistant_message(
                     "DeepSeek assistant native_message must contain choice zero with a message object.",
                 )
             })?;
+        ensure_reasoning_content(&mut native_message, requires_reasoning_content);
         return Ok(vec![native_message]);
     }
 
@@ -187,7 +207,11 @@ fn map_assistant_message(
             json!(text.join(""))
         },
     );
-    if !reasoning.is_empty() {
+    if reasoning.is_empty() {
+        if requires_reasoning_content {
+            native.insert("reasoning_content".into(), json!(""));
+        }
+    } else {
         native.insert("reasoning_content".into(), json!(reasoning.join("")));
     }
     if !tool_calls.is_empty() {
@@ -196,19 +220,40 @@ fn map_assistant_message(
     Ok(vec![Value::Object(native)])
 }
 
-fn map_custom_message(message: &CustomMessage) -> Result<Vec<Value>, LlmError> {
+fn map_custom_message(
+    message: &CustomMessage,
+    requires_reasoning_content: bool,
+) -> Result<Vec<Value>, LlmError> {
     if message.tag.as_deref() != Some(DEEPSEEK_NATIVE_INPUT_TAG) {
         return Err(invalid_request(format!(
             "Unsupported DeepSeek custom message tag: {}.",
             message.tag.as_deref().unwrap_or("<missing>")
         )));
     }
-    message
+    let mut messages = message
         .content
         .get("messages")
         .and_then(Value::as_array)
         .cloned()
-        .ok_or_else(|| invalid_request("DeepSeek native input content.messages must be an array."))
+        .ok_or_else(|| {
+            invalid_request("DeepSeek native input content.messages must be an array.")
+        })?;
+    for message in &mut messages {
+        ensure_reasoning_content(message, requires_reasoning_content);
+    }
+    Ok(messages)
+}
+
+fn ensure_reasoning_content(message: &mut Value, required: bool) {
+    if !required || message.get("role").and_then(Value::as_str) != Some("assistant") {
+        return;
+    }
+    let object = message
+        .as_object_mut()
+        .expect("an assistant role can only be read from an object");
+    object
+        .entry("reasoning_content")
+        .or_insert_with(|| json!(""));
 }
 
 fn map_tool_result(
