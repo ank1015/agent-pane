@@ -68,6 +68,125 @@ async fn retries_a_transient_llm_failure_inside_the_harness_and_completes() {
 }
 
 #[tokio::test]
+async fn sends_the_chatgpt_provider_profile_to_the_gateway() {
+    let agent = Arc::new(AgentState::for_provider("chatgpt"));
+    let llm = Arc::new(LlmState::new(0));
+    let runtime = runtime(&llm).await;
+    let turn = active_turn(&agent).await;
+
+    let outcome = runtime.execute(&turn).await.expect("runtime outcome");
+
+    assert!(matches!(
+        outcome,
+        TurnOutcome::Command(HarnessOperation::Complete { .. })
+    ));
+    let requests = llm.requests.lock().expect("LLM requests");
+    let request = &requests[0]["request"];
+    assert_eq!(request["model"]["provider"], "chatgpt");
+    assert_eq!(
+        request["provider_options"]["prompt_cache_key"],
+        agent.session_id.to_string()
+    );
+    assert_eq!(
+        request["provider_options"]["reasoning"],
+        json!({"effort": "high", "summary": "auto"})
+    );
+    assert_eq!(
+        request["provider_options"]["text"],
+        json!({"verbosity": "low"})
+    );
+    assert_eq!(request["provider_options"]["tool_choice"], "auto");
+    assert_eq!(request["provider_options"]["parallel_tool_calls"], true);
+    assert!(
+        request["provider_options"]
+            .get("prompt_cache_options")
+            .is_none()
+    );
+    assert!(
+        request["provider_options"]
+            .get("max_output_tokens")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn sends_the_fireworks_provider_profile_to_the_gateway() {
+    let agent = Arc::new(AgentState::for_provider("fireworks"));
+    let llm = Arc::new(LlmState::new(0));
+    let runtime = runtime(&llm).await;
+    let turn = active_turn(&agent).await;
+
+    let outcome = runtime.execute(&turn).await.expect("runtime outcome");
+
+    assert!(matches!(
+        outcome,
+        TurnOutcome::Command(HarnessOperation::Complete { .. })
+    ));
+    let requests = llm.requests.lock().expect("LLM requests");
+    let request = &requests[0]["request"];
+    assert_eq!(request["model"]["provider"], "fireworks");
+    assert_eq!(request["model"]["id"], "accounts/fireworks/models/kimi-k3");
+    assert_eq!(
+        request["provider_options"]["prompt_cache_key"],
+        agent.session_id.to_string()
+    );
+    assert_eq!(request["provider_options"]["reasoning_effort"], "high");
+    assert_eq!(request["provider_options"]["max_tokens"], 1_048_576);
+    assert!(
+        request["provider_options"]
+            .get("reasoning_history")
+            .is_none()
+    );
+    assert!(request["provider_options"].get("tool_choice").is_none());
+    assert!(
+        request["provider_options"]
+            .get("parallel_tool_calls")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn sends_the_deepseek_provider_profile_to_the_gateway() {
+    let agent = Arc::new(AgentState::for_provider("deepseek"));
+    let llm = Arc::new(LlmState::new(0));
+    let runtime = runtime(&llm).await;
+    let turn = active_turn(&agent).await;
+
+    let outcome = runtime.execute(&turn).await.expect("runtime outcome");
+
+    assert!(matches!(
+        outcome,
+        TurnOutcome::Command(HarnessOperation::Complete { .. })
+    ));
+    let requests = llm.requests.lock().expect("LLM requests");
+    let request = &requests[0]["request"];
+    assert_eq!(request["model"]["provider"], "deepseek");
+    assert_eq!(request["model"]["id"], "deepseek-v4-pro");
+    assert_eq!(
+        request["provider_options"]["thinking"],
+        json!({"type": "enabled"})
+    );
+    assert_eq!(request["provider_options"]["reasoning_effort"], "high");
+    assert_eq!(request["provider_options"]["max_tokens"], 384_000);
+    assert!(
+        request["provider_options"]
+            .get("prompt_cache_key")
+            .is_none()
+    );
+    assert!(
+        request["provider_options"]
+            .get("prompt_cache_options")
+            .is_none()
+    );
+    assert!(request["provider_options"].get("tool_choice").is_none());
+    assert!(
+        request["provider_options"]
+            .get("parallel_tool_calls")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn converts_exhausted_retryable_llm_failures_into_an_expiring_wait() {
     let agent = Arc::new(AgentState::new());
     let llm = Arc::new(LlmState::new(usize::MAX));
@@ -130,23 +249,34 @@ struct AgentState {
     session_id: Uuid,
     trigger_session_message_id: Uuid,
     account_id: Uuid,
+    provider: &'static str,
     revision: AtomicU64,
     appends: Mutex<Vec<AppendSessionMessages>>,
 }
 
 impl AgentState {
     fn new() -> Self {
+        Self::for_provider("openai")
+    }
+
+    fn for_provider(provider: &'static str) -> Self {
         Self {
             run_id: Uuid::now_v7(),
             session_id: Uuid::now_v7(),
             trigger_session_message_id: Uuid::now_v7(),
             account_id: Uuid::now_v7(),
+            provider,
             revision: AtomicU64::new(1),
             appends: Mutex::new(Vec::new()),
         }
     }
 
     fn request(&self) -> TurnRequested {
+        let model_id = match self.provider {
+            "fireworks" => "accounts/fireworks/models/kimi-k3",
+            "deepseek" => "deepseek-v4-pro",
+            _ => "gpt-5.6-sol",
+        };
         TurnRequested {
             protocol_version: HARNESS_PROTOCOL_VERSION,
             event_id: Uuid::now_v7(),
@@ -160,8 +290,8 @@ impl AgentState {
             harness_slug: "pi".to_owned(),
             harness_revision_id: "pi-test".to_owned(),
             resolved_config: json!({
-                "provider": "openai",
-                "model_id": "gpt-5.6-sol",
+                "provider": self.provider,
+                "model_id": model_id,
                 "reasoning_level": "high",
                 "execution": {
                     "machine_id": "machine-a",
@@ -265,6 +395,14 @@ impl LlmState {
 }
 
 async fn llm_complete(State(state): State<Arc<LlmState>>, Json(request): Json<Value>) -> Response {
+    let provider = request["request"]["model"]["provider"]
+        .as_str()
+        .expect("request provider")
+        .to_owned();
+    let model_id = request["request"]["model"]["id"]
+        .as_str()
+        .expect("request model")
+        .to_owned();
     state.requests.lock().expect("LLM requests").push(request);
     let call = state.calls.fetch_add(1, Ordering::AcqRel);
     if call < state.failures_before_success {
@@ -288,7 +426,7 @@ async fn llm_complete(State(state): State<Arc<LlmState>>, Json(request): Json<Va
         "account_id": Uuid::now_v7(),
         "message": {
             "id": "assistant-1",
-            "model": {"provider": "openai", "id": "gpt-5.6-sol"},
+            "model": {"provider": provider, "id": model_id},
             "duration_ms": 12,
             "native_message": {},
             "content": [{

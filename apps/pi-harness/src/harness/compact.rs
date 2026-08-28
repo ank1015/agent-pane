@@ -5,11 +5,10 @@ use llm_contracts::{
     Timestamp, ToolArguments, Usage, UserMessage,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 
 use super::{
     context_formation::estimate_message_tokens,
-    model_resolver::{ModelResolverError, get_model_config},
+    model_resolver::{ModelResolverError, RequestKind, get_model_config},
 };
 
 pub const PI_COMPACTION_MESSAGE_TAG: &str = "pi.compaction";
@@ -123,17 +122,14 @@ pub fn form_compaction_request(
     model_id: &str,
     reasoning_level: &str,
 ) -> Result<LlmRequest, ModelResolverError> {
-    let config = get_model_config(provider, model_id, reasoning_level, "")?;
-    let mut provider_options = config.provider_options;
-    provider_options.remove("prompt_cache_key");
-    provider_options.insert(
-        "prompt_cache_options".to_owned(),
-        json!({ "mode": "explicit" }),
-    );
-    provider_options.insert(
-        "max_output_tokens".to_owned(),
-        json!(COMPACTION_MAX_OUTPUT_TOKENS),
-    );
+    let config = get_model_config(
+        provider,
+        model_id,
+        reasoning_level,
+        RequestKind::Compaction {
+            max_output_tokens: COMPACTION_MAX_OUTPUT_TOKENS,
+        },
+    )?;
 
     let conversation = serialize_message_history(messages);
     let content =
@@ -155,7 +151,7 @@ pub fn form_compaction_request(
             })],
         })],
         tools: Vec::new(),
-        provider_options,
+        provider_options: config.provider_options,
         metadata: BTreeMap::new(),
     })
 }
@@ -551,6 +547,83 @@ Current summary\n\
         );
         assert!(content.content.contains("## Goal"));
         assert!(content.content.contains("## Next Steps"));
+    }
+
+    #[test]
+    fn forms_a_chatgpt_compaction_request_without_openai_only_options() {
+        let messages = vec![user_message("user-1", "Fix the parser.")];
+
+        let request = form_compaction_request(&messages, "chatgpt", "gpt-5.6-terra", "high")
+            .expect("supported ChatGPT compaction request");
+
+        request.validate().expect("valid LLM request");
+        assert_eq!(request.model.provider.as_str(), "chatgpt");
+        assert_eq!(
+            request.provider_options["reasoning"],
+            json!({"effort": "high", "summary": "auto"})
+        );
+        assert_eq!(
+            request.provider_options["text"],
+            json!({"verbosity": "low"})
+        );
+        assert_eq!(request.provider_options["tool_choice"], json!("auto"));
+        assert_eq!(request.provider_options["parallel_tool_calls"], json!(true));
+        assert!(!request.provider_options.contains_key("prompt_cache_key"));
+        assert!(
+            !request
+                .provider_options
+                .contains_key("prompt_cache_options")
+        );
+        assert!(!request.provider_options.contains_key("max_output_tokens"));
+    }
+
+    #[test]
+    fn forms_a_fireworks_compaction_request_without_session_affinity() {
+        let messages = vec![user_message("user-1", "Fix the parser.")];
+
+        let request = form_compaction_request(
+            &messages,
+            "fireworks",
+            "accounts/fireworks/models/kimi-k3",
+            "xhigh",
+        )
+        .expect("supported Fireworks compaction request");
+
+        request.validate().expect("valid LLM request");
+        assert_eq!(request.model.provider.as_str(), "fireworks");
+        assert_eq!(request.provider_options["reasoning_effort"], json!("max"));
+        assert_eq!(
+            request.provider_options["max_tokens"],
+            json!(COMPACTION_MAX_OUTPUT_TOKENS)
+        );
+        assert!(!request.provider_options.contains_key("prompt_cache_key"));
+        assert!(!request.provider_options.contains_key("reasoning_history"));
+    }
+
+    #[test]
+    fn forms_a_deepseek_compaction_request_without_cache_options() {
+        let messages = vec![user_message("user-1", "Fix the parser.")];
+
+        let request = form_compaction_request(&messages, "deepseek", "deepseek-v4-flash", "xhigh")
+            .expect("supported DeepSeek compaction request");
+
+        request.validate().expect("valid LLM request");
+        assert_eq!(request.model.provider.as_str(), "deepseek");
+        assert_eq!(
+            request.provider_options["thinking"],
+            json!({"type": "enabled"})
+        );
+        assert_eq!(request.provider_options["reasoning_effort"], json!("high"));
+        assert_eq!(
+            request.provider_options["max_tokens"],
+            json!(COMPACTION_MAX_OUTPUT_TOKENS)
+        );
+        assert!(!request.provider_options.contains_key("prompt_cache_key"));
+        assert!(
+            !request
+                .provider_options
+                .contains_key("prompt_cache_options")
+        );
     }
 
     #[test]

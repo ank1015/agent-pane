@@ -22,8 +22,7 @@ use crate::{
             select_first_kept_message_id,
         },
         context_formation::{ContextFormationError, form_context_messages},
-        model_catalog::MODEL_CATALOG,
-        model_resolver::get_model_config,
+        model_resolver::{RequestKind, get_model_config},
         system_prompt::generate_system_prompt,
         tools::{ToolExecutionContext, WorkspaceCwd, default_tool_definitions, execute_tool_call},
     },
@@ -345,15 +344,10 @@ fn main_request(
         &config.provider,
         &config.model_id,
         &config.reasoning_level,
-        &run.request().session_id.to_string(),
+        RequestKind::Turn {
+            session_id: &run.request().session_id.to_string(),
+        },
     )?;
-    let mut provider_options = model.provider_options;
-    let max_tokens = MODEL_CATALOG
-        .iter()
-        .find(|entry| entry.provider == config.provider && entry.id == config.model_id)
-        .expect("model resolver already verified the catalog entry")
-        .max_tokens;
-    provider_options.insert("max_output_tokens".to_owned(), json!(max_tokens));
     Ok(LlmRequest {
         model: model.model,
         instructions: Some(generate_system_prompt(
@@ -362,7 +356,7 @@ fn main_request(
         )),
         messages,
         tools: default_tool_definitions(),
-        provider_options,
+        provider_options: model.provider_options,
         metadata: BTreeMap::new(),
     })
 }
