@@ -22,13 +22,32 @@ pub fn find_model(model_id: &str) -> Option<&'static DeepSeekModel> {
     DEEPSEEK_MODELS.iter().find(|model| model.id == model_id)
 }
 
+/// Maps a portable reasoning level to the closest DeepSeek V4 effort.
+///
+/// DeepSeek documents one common effort scale for its V4 Chat Completions models.
+#[must_use]
+pub fn reasoning_effort(model_id: &str, reasoning_level: &str) -> Option<&'static str> {
+    find_model(model_id)?;
+    match reasoning_level {
+        "low" => Some("low"),
+        "medium" | "high" | "xhigh" => Some("high"),
+        "max" => Some("max"),
+        _ => None,
+    }
+}
+
 /// Returns whether a Unix millisecond timestamp falls in DeepSeek peak pricing.
 ///
-/// Peak windows are 01:00–04:00 and 06:00–10:00 UTC, with end times exclusive.
+/// Peak windows are 01:00–04:00 and 06:00–10:00 UTC on weekdays, with end times exclusive.
 #[must_use]
 pub fn is_peak_pricing(timestamp_ms: u64) -> bool {
     const DAY_MS: u64 = 24 * 60 * 60 * 1_000;
     const HOUR_MS: u64 = 60 * 60 * 1_000;
+    const UNIX_EPOCH_WEEKDAY_FROM_MONDAY: u64 = 3;
+    let weekday_from_monday = (timestamp_ms / DAY_MS + UNIX_EPOCH_WEEKDAY_FROM_MONDAY) % 7;
+    if weekday_from_monday >= 5 {
+        return false;
+    }
     let hour = (timestamp_ms % DAY_MS) / HOUR_MS;
     (1..4).contains(&hour) || (6..10).contains(&hour)
 }

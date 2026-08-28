@@ -11,6 +11,7 @@ pub use client::DeepSeekProvider;
 pub use config::{DEFAULT_DEEPSEEK_TIMEOUT, DeepSeekConfig};
 pub use models::{
     DEEPSEEK_MODELS, DeepSeekModel, calculate_usage_cost, find_model, is_peak_pricing,
+    reasoning_effort,
 };
 pub use request::{DEEPSEEK_NATIVE_INPUT_TAG, build_chat_completion_request};
 pub use response::convert_response;
