@@ -65,6 +65,11 @@ async fn registers_activates_and_enables_the_packaged_revision() {
     );
     assert_eq!(calls[2].body["default_config"]["provider"], "openai");
     assert_eq!(calls[2].body["default_config"]["model_id"], "gpt-5.6-sol");
+    assert_eq!(calls[2].body["default_config"]["web_search_enabled"], true);
+    assert_eq!(
+        calls[2].body["config_schema"]["properties"]["web_search_enabled"],
+        json!({"type": "boolean", "default": true})
+    );
     assert_eq!(
         calls[2].body["config_schema"]["properties"]["model_id"]["enum"],
         json!(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])

@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::runtime::{SUPPORTED_MODEL_IDS, SUPPORTED_PROVIDER_IDS, SUPPORTED_REASONING_LEVELS};
 
 pub const CODEX_HARNESS_ID: &str = "codex";
-pub const CODEX_HARNESS_REVISION_ID: &str = "codex-2026-08-30-runtime-v1";
+pub const CODEX_HARNESS_REVISION_ID: &str = "codex-2026-08-31-web-search-v2";
 pub const CODEX_HARNESS_DESCRIPTOR: HarnessDescriptor =
     HarnessDescriptor::new(CODEX_HARNESS_ID, "codex", "codex-harness-turns-v1");
 
@@ -69,12 +69,13 @@ fn description() -> &'static str {
 fn revision_request() -> RegisterHarnessRevisionRequest {
     RegisterHarnessRevisionRequest {
         harness_revision_id: CODEX_HARNESS_REVISION_ID.to_owned(),
-        revision: "2026-08-30-runtime-v1".to_owned(),
+        revision: "2026-08-31-web-search-v2".to_owned(),
         contract_version: 1,
         default_config: object(json!({
             "provider": "openai",
             "model_id": "gpt-5.6-sol",
-            "reasoning_level": "low"
+            "reasoning_level": "low",
+            "web_search_enabled": true
         })),
         config_schema: Some(object(json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -95,7 +96,8 @@ fn revision_request() -> RegisterHarnessRevisionRequest {
                 },
                 "account_id": {"type": "string", "format": "uuid"},
                 "external_prompt": {"type": ["string", "null"]},
-                "is_replaced": {"type": "boolean"}
+                "is_replaced": {"type": "boolean"},
+                "web_search_enabled": {"type": "boolean", "default": true}
             },
             "required": ["provider", "model_id", "reasoning_level"],
             "additionalProperties": false

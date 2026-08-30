@@ -80,6 +80,7 @@ pub struct CodexHarnessConfig {
     pub account_id: Option<Uuid>,
     pub external_prompt: Option<String>,
     pub is_replaced: bool,
+    pub web_search_enabled: bool,
 }
 
 impl CodexHarnessConfig {
@@ -101,6 +102,7 @@ impl CodexHarnessConfig {
             account_id: raw.account_id,
             external_prompt: raw.external_prompt,
             is_replaced: raw.is_replaced,
+            web_search_enabled: raw.web_search_enabled,
         })
     }
 }
@@ -120,6 +122,8 @@ struct RawCodexHarnessConfig {
     external_prompt: Option<String>,
     #[serde(default, alias = "isReplaced")]
     is_replaced: bool,
+    #[serde(default, alias = "webSearchEnabled")]
+    web_search_enabled: bool,
 }
 
 fn parse_provider(provider: &str) -> Result<CodexProvider, CodexHarnessConfigError> {
@@ -192,6 +196,7 @@ mod tests {
                 assert_eq!(config.model, model);
                 assert_eq!(config.reasoning_level, ReasoningLevel::High);
                 assert!(config.model.profile().code_mode);
+                assert!(!config.web_search_enabled);
             }
         }
     }
@@ -211,6 +216,7 @@ mod tests {
             "accountId": account_id,
             "externalPrompt": "Follow the project rules.",
             "isReplaced": true,
+            "webSearchEnabled": true,
             "future_setting": true
         }));
 
@@ -224,6 +230,7 @@ mod tests {
             Some("Follow the project rules.")
         );
         assert!(config.is_replaced);
+        assert!(config.web_search_enabled);
     }
 
     #[test]
