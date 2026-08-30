@@ -117,6 +117,44 @@ async fn complete_normalizes_http_errors() {
     assert!(error.can_retry);
 }
 
+#[tokio::test]
+async fn responses_lite_sends_the_native_codex_header() {
+    let sse = sse_body(&[json!({
+        "type": "response.completed",
+        "response": {
+            "id": "response-lite",
+            "model": "gpt-5.6-sol",
+            "status": "completed",
+            "output": [],
+            "usage": {"input_tokens": 1, "output_tokens": 0}
+        }
+    })]);
+    let (base_url, captured) = spawn_server("200 OK", &[], &sse, "text/event-stream").await;
+    let provider = ChatGptProvider::new(
+        ChatGptConfig::new("oauth-token", "account-123")
+            .expect("valid config")
+            .with_base_url(format!("{base_url}/backend-api"))
+            .expect("valid test URL"),
+    )
+    .expect("valid provider");
+    let mut request = request();
+    request.provider_options.insert(
+        provider_openai::CODEX_RESPONSES_LITE_OPTION.to_owned(),
+        json!(true),
+    );
+
+    provider
+        .complete(request)
+        .await
+        .expect("successful response");
+    let raw_request = captured.await.expect("mock server completed");
+    assert!(
+        raw_request
+            .to_ascii_lowercase()
+            .contains("x-openai-internal-codex-responses-lite: true\r\n")
+    );
+}
+
 fn sse_body(events: &[Value]) -> String {
     events
         .iter()

@@ -82,7 +82,7 @@ impl LlmTransport for ChatGptProvider {
         let body = build_response_request(&request)?;
         let started = Instant::now();
 
-        let mut response = self
+        let mut http_request = self
             .client
             .post(responses_url(self.config.base_url()))
             .header(ACCEPT, "text/event-stream")
@@ -98,7 +98,11 @@ impl LlmTransport for ChatGptProvider {
                 concat!("agent-pane-provider-chatgpt/", env!("CARGO_PKG_VERSION")),
             )
             .header("openai-beta", OPENAI_BETA)
-            .json(&body)
+            .json(&body);
+        if provider_openai::uses_codex_responses_lite(&request) {
+            http_request = http_request.header("x-openai-internal-codex-responses-lite", "true");
+        }
+        let mut response = http_request
             .send()
             .await
             .map_err(|error| network_error(&error))?;

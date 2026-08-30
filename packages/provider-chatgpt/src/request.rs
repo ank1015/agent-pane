@@ -34,6 +34,8 @@ pub fn build_response_request(request: &LlmRequest) -> Result<Value, LlmError> {
         ));
     }
 
+    let responses_lite = provider_openai::uses_codex_responses_lite(request);
+
     // The portable Responses mapping is shared with provider-openai. Adapt
     // same-provider native messages so encrypted reasoning and tool-call items
     // are replayed verbatim instead of reconstructed from normalized content.
@@ -79,14 +81,16 @@ pub fn build_response_request(request: &LlmRequest) -> Result<Value, LlmError> {
     object.insert("store".into(), Value::Bool(false));
     object.insert("stream".into(), Value::Bool(true));
     object.insert("include".into(), json!(["reasoning.encrypted_content"]));
-    object.insert(
-        "instructions".into(),
-        Value::String(
-            request
-                .instructions
-                .clone()
-                .unwrap_or_else(|| DEFAULT_CHATGPT_INSTRUCTIONS.to_owned()),
-        ),
-    );
+    if !responses_lite {
+        object.insert(
+            "instructions".into(),
+            Value::String(
+                request
+                    .instructions
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_CHATGPT_INSTRUCTIONS.to_owned()),
+            ),
+        );
+    }
     Ok(body)
 }
