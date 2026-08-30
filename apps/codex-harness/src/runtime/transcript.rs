@@ -15,13 +15,9 @@ pub enum ResumePlan {
     /// Sampling began but no assistant was committed. Reissuing the call would
     /// violate the one-primary-call invariant.
     PrimaryModelCallInterrupted,
-    /// The one assistant response exists, but some of its tools still need results.
-    ExecuteTools {
-        assistant_session_message_id: Uuid,
-        assistant: Box<AssistantMessage>,
-        missing_tool_calls: Vec<AssistantContent>,
-    },
-    /// The assistant requested tools and every result is already committed.
+    /// The assistant requested tools. Any missing result is repaired as a
+    /// prompt-only `aborted` output during context normalization; historical
+    /// calls are never dispatched again.
     Continue,
     /// The committed assistant response is terminal and can be completed again safely.
     Complete { final_message_id: Uuid },
@@ -133,27 +129,7 @@ fn plan_after_assistant(
         });
     }
 
-    let missing_tool_calls = assistant
-        .content
-        .iter()
-        .filter_map(|content| match content {
-            AssistantContent::ToolCall { tool_call_id, .. }
-                if !completed.contains(tool_call_id.as_str()) =>
-            {
-                Some(content.clone())
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    if missing_tool_calls.is_empty() {
-        Ok(ResumePlan::Continue)
-    } else {
-        Ok(ResumePlan::ExecuteTools {
-            assistant_session_message_id: assistant_message.session_message_id,
-            assistant: Box::new(assistant.clone()),
-            missing_tool_calls,
-        })
-    }
+    Ok(ResumePlan::Continue)
 }
 
 struct ToolCall<'a> {
@@ -213,7 +189,7 @@ pub enum TranscriptError {
 mod tests {
     use agent_contracts::{SessionMessage, SessionMessageDelivery, SessionMessageOrigin};
     use chrono::Utc;
-    use llm_contracts::{AssistantContent, Message};
+    use llm_contracts::Message;
     use serde_json::json;
     use uuid::Uuid;
 
@@ -281,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn resumes_only_missing_tools_in_assistant_order() {
+    fn continues_without_reexecuting_partial_or_missing_tool_results() {
         let run_id = Uuid::now_v7();
         let messages = vec![
             session_message(
@@ -295,21 +271,19 @@ mod tests {
             session_message(run_id, Some(1), tool_result("result-2", "call-2", "wait")),
         ];
 
-        let ResumePlan::ExecuteTools {
-            assistant_session_message_id,
-            missing_tool_calls,
-            ..
-        } = plan_turn(&messages, run_id, 1).expect("plan")
-        else {
-            panic!("missing tool calls should be resumed")
-        };
-        assert_eq!(assistant_session_message_id, messages[0].session_message_id);
         assert_eq!(
-            missing_tool_calls
-                .iter()
-                .map(tool_call_id)
-                .collect::<Vec<_>>(),
-            ["call-1", "call-3"]
+            plan_turn(&messages, run_id, 1).expect("plan"),
+            ResumePlan::Continue
+        );
+
+        let all_missing = vec![session_message(
+            run_id,
+            Some(1),
+            assistant_with_tools("assistant", &[("call-1", "exec"), ("call-2", "wait")]),
+        )];
+        assert_eq!(
+            plan_turn(&all_missing, run_id, 1).expect("plan"),
+            ResumePlan::Continue
         );
     }
 
@@ -505,13 +479,6 @@ mod tests {
             "timestamp": 1,
             "outcome": {"status": "success"}
         }))
-    }
-
-    fn tool_call_id(content: &AssistantContent) -> &str {
-        let AssistantContent::ToolCall { tool_call_id, .. } = content else {
-            panic!("tool call")
-        };
-        tool_call_id.as_str()
     }
 
     fn message(value: serde_json::Value) -> Message {

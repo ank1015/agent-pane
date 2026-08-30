@@ -15,6 +15,8 @@ use agent_harness_sdk::{ActiveTurn, AgentClient, TurnOutcome};
 use axum::{
     Json, Router,
     extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
     routing::get,
 };
 use chrono::Utc;
@@ -34,6 +36,7 @@ use llm_contracts::{
     Timestamp, ToolResultMessage, ToolResultOutcome,
 };
 use serde_json::json;
+use tokio::sync::Notify;
 use url::Url;
 use uuid::Uuid;
 
@@ -61,14 +64,18 @@ async fn calls_one_primary_model_and_commits_a_terminal_assistant() {
     drop(requests);
 
     let messages = agent.messages.lock().expect("Agent messages");
-    assert_eq!(messages.len(), 3);
+    assert_eq!(messages.len(), 4);
     assert!(matches!(
         &messages[1].message,
+        Message::User(user) if user.id.as_str().starts_with("codex-environment-")
+    ));
+    assert!(matches!(
+        &messages[2].message,
         Message::Custom(custom)
             if custom.tag.as_deref() == Some(CODEX_PRIMARY_CALL_STARTED_TAG)
     ));
-    assert_eq!(messages[2].session_message_id, final_message_id);
-    assert!(matches!(messages[2].message, Message::Assistant(_)));
+    assert_eq!(messages[3].session_message_id, final_message_id);
+    assert!(matches!(messages[3].message, Message::Assistant(_)));
 }
 
 #[tokio::test]
@@ -95,7 +102,7 @@ async fn refuses_to_resample_after_a_committed_primary_start_marker() {
 }
 
 #[tokio::test]
-async fn resumes_missing_tools_without_calling_the_model_again() {
+async fn does_not_reexecute_a_historical_tool_missing_its_result() {
     let assistant = message(json!({
         "role": "assistant",
         "id": "assistant-tools",
@@ -121,12 +128,64 @@ async fn resumes_missing_tools_without_calling_the_model_again() {
 
     assert_eq!(outcome, TurnOutcome::Command(HarnessOperation::Continue));
     assert_eq!(model.calls.load(Ordering::Acquire), 0);
-    assert_eq!(tools.calls.load(Ordering::Acquire), 1);
+    assert_eq!(tools.calls.load(Ordering::Acquire), 0);
     let messages = agent.messages.lock().expect("Agent messages");
-    assert!(matches!(
-        messages.last().unwrap().message,
-        Message::ToolResult(_)
-    ));
+    assert_eq!(messages.len(), 2, "recovery is prompt-only like Codex");
+}
+
+#[tokio::test]
+async fn cancellation_commits_codex_aborted_results_before_the_turn_exits() {
+    let agent = Arc::new(AgentState::new(vec![]));
+    let model = Arc::new(FakeModel::new(vec![assistant(
+        "assistant-tools",
+        &[("call-exec", "exec_command"), ("call-wait", "wait")],
+    )]));
+    let tools = Arc::new(BlockingTools::default());
+    let fixture = RuntimeFixture::new(model, tools.clone()).await;
+    let turn = active_turn(&agent).await;
+    let started = tools.started.notified();
+    tokio::pin!(started);
+    let execution = fixture.runtime.execute(&turn);
+    tokio::pin!(execution);
+
+    tokio::select! {
+        () = &mut started => {
+            agent.aborted.store(true, Ordering::Release);
+            turn.operation().cancel();
+        },
+        result = &mut execution => panic!("turn completed before cancellation: {result:?}"),
+    }
+    let outcome = tokio::time::timeout(Duration::from_secs(2), execution)
+        .await
+        .expect("cancelled turn should return promptly")
+        .expect("turn outcome");
+    assert_eq!(outcome, TurnOutcome::Cancelled);
+    assert_eq!(
+        agent.cancellation_appends.load(Ordering::Acquire),
+        1,
+        "runtime must retry through the narrowly fenced abort-cleanup append"
+    );
+
+    let messages = agent.messages.lock().expect("Agent messages");
+    let results = messages
+        .iter()
+        .filter_map(|message| match &message.message {
+            Message::ToolResult(result) => Some(result),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 2);
+    assert!(matches!(results[0].outcome, ToolResultOutcome::Success));
+    let ContentPart::Text(exec_text) = &results[0].content[0] else {
+        panic!("exec cancellation must be text")
+    };
+    assert!(exec_text.content.starts_with("Wall time: "));
+    assert!(exec_text.content.ends_with("aborted by user"));
+    let ContentPart::Text(wait_text) = &results[1].content[0] else {
+        panic!("wait cancellation must be text")
+    };
+    assert!(wait_text.content.starts_with("aborted by user after "));
+    assert!(wait_text.content.ends_with('s'));
 }
 
 struct RuntimeFixture {
@@ -135,7 +194,7 @@ struct RuntimeFixture {
 }
 
 impl RuntimeFixture {
-    async fn new(model: Arc<FakeModel>, tools: Arc<FakeTools>) -> Self {
+    async fn new(model: Arc<FakeModel>, tools: Arc<dyn CodexToolCallExecutor>) -> Self {
         let directory = tempfile::tempdir().expect("temporary directory");
         let workspace = directory.path().join("workspace");
         tokio::fs::create_dir_all(workspace.join("project"))
@@ -258,10 +317,58 @@ impl CodexToolCallExecutor for FakeTools {
     }
 }
 
+#[derive(Default)]
+struct BlockingTools {
+    started: Notify,
+}
+
+#[async_trait::async_trait]
+impl CodexToolCallExecutor for BlockingTools {
+    async fn execute_tool_calls(
+        &self,
+        content: &[AssistantContent],
+        context: &CodexToolExecutionContext,
+    ) -> Result<Vec<ToolResultMessage>, CodexToolDispatchError> {
+        self.started.notify_one();
+        context.operation.cancelled().await;
+        Ok(content
+            .iter()
+            .map(|content| {
+                let AssistantContent::ToolCall {
+                    name, tool_call_id, ..
+                } = content
+                else {
+                    panic!("tool call")
+                };
+                let text = if name == "exec_command" {
+                    "Wall time: 0.1 seconds\naborted by user"
+                } else {
+                    "aborted by user after 0.1s"
+                };
+                ToolResultMessage {
+                    id: MessageId::new(format!("cancelled-{tool_call_id}"))
+                        .expect("tool result ID"),
+                    tool_name: name.clone(),
+                    tool_call_id: tool_call_id.clone(),
+                    content: vec![ContentPart::Text(TextContent {
+                        content: text.to_owned(),
+                        metadata: None,
+                    })],
+                    details: None,
+                    timestamp: Timestamp(1),
+                    outcome: ToolResultOutcome::Success,
+                }
+            })
+            .collect())
+    }
+}
+
 struct AgentState {
     run_id: Uuid,
     session_id: Uuid,
     revision: AtomicU64,
+    aborted: std::sync::atomic::AtomicBool,
+    cancellation_appends: AtomicUsize,
     messages: Mutex<Vec<SessionMessage>>,
 }
 
@@ -284,6 +391,8 @@ impl AgentState {
             run_id,
             session_id,
             revision: AtomicU64::new(revision),
+            aborted: std::sync::atomic::AtomicBool::new(false),
+            cancellation_appends: AtomicUsize::new(0),
             messages: Mutex::new(messages),
         }
     }
@@ -351,8 +460,23 @@ async fn append_messages(
     State(state): State<Arc<AgentState>>,
     Path(run_id): Path<Uuid>,
     Json(command): Json<AppendSessionMessages>,
-) -> Json<SessionMessagesAppended> {
+) -> Response {
     assert_eq!(run_id, state.run_id);
+    if state.aborted.load(Ordering::Acquire) && !command.after_cancellation {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": {
+                    "code": "run_state_conflict",
+                    "message": "run was aborted"
+                }
+            })),
+        )
+            .into_response();
+    }
+    if command.after_cancellation {
+        state.cancellation_appends.fetch_add(1, Ordering::AcqRel);
+    }
     let mut revision = state.revision.load(Ordering::Acquire);
     assert_eq!(command.expected_session_revision, revision);
     let items = command
@@ -376,6 +500,7 @@ async fn append_messages(
         items,
         current_session_revision: revision,
     })
+    .into_response()
 }
 
 fn session_message(
