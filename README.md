@@ -12,6 +12,7 @@ agent-pane/
 │   ├── execution-gateway/    # Durable cloud router for machine execution
 │   ├── llm-gateway/          # Stateless LLM gateway service
 │   ├── machine-daemon/       # Deployable local machine execution process
+│   ├── codex-harness/        # NATS-native Codex harness server
 │   ├── pi-harness/           # NATS-native concurrent Pi harness server
 │   └── platform/             # Dashboard backend and service orchestrator
 ├── packages/
@@ -61,6 +62,9 @@ cargo run -p platform
 
 # Run the Pi harness server (Agent, NATS, and both gateways must be running)
 cargo run -p pi-harness
+
+# Run the Codex harness (Agent, NATS, both gateways, and its PostgreSQL database must be running)
+cargo run -p codex-harness
 
 # Run the complete local stack, including Docker infrastructure and dashboard
 ./scripts/dev-servers.sh

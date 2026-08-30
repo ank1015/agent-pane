@@ -1,0 +1,6 @@
+This application includes the model instruction template and compaction summary
+prefix from OpenAI Codex:
+https://github.com/openai/codex
+
+Source revision: 536f86e5cc9ec1ff38457d099bf320b9d08eeeba
+Original license: Apache License 2.0
