@@ -178,6 +178,47 @@ returned as headers.
 The application owns retries. The gateway never switches accounts or retries a
 provider call.
 
+### Run a Codex web search
+
+OpenAI and ChatGPT accounts also expose the provider-backed Codex search API:
+
+```http
+POST /v1/search
+Content-Type: application/json
+```
+
+```json
+{
+  "account_id": null,
+  "provider": "openai",
+  "request": {
+    "id": "session-1",
+    "model": "gpt-5.6-luna",
+    "commands": {
+      "search_query": [{"q":"OpenAI Codex","domains":["openai.com"]}],
+      "response_length": "short"
+    },
+    "max_output_tokens": 2048
+  },
+  "request_options": {
+    "originator": "agent-pane",
+    "codex_turn_metadata": "{\"turn_id\":\"turn-1\"}"
+  }
+}
+```
+
+`request` is forwarded using the Codex `alpha/search` wire format. The gateway
+routes it to `/v1/alpha/search` for an OpenAI API-key account or
+`/backend-api/codex/alpha/search` for a ChatGPT account. The optional request
+metadata is forwarded as `originator` and `x-codex-turn-metadata` headers but is
+never added to the upstream JSON body. Other provider kinds are rejected.
+
+The success body contains `request_id`, the resolved `account_id`, and the
+unchanged provider result as `response` (`encrypted_output`, `output`, and
+optional opaque `results`). Search calls share completion calls' concurrency
+limit, timeout, normalized errors, account selection, and one-time ChatGPT
+token refresh after a `401`.
+
 ### Discovery and health
 
 ```http

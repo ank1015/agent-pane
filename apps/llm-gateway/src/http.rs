@@ -11,7 +11,10 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post, put},
 };
-use llm_contracts::{AssistantMessage, LlmRequest, Model};
+use llm_contracts::{
+    AssistantMessage, LlmRequest, Model, ProviderId, SearchRequest, SearchRequestOptions,
+    SearchResponse as ProviderSearchResponse,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -73,6 +76,7 @@ pub fn router(
         .route("/v1/models", get(models))
         .route("/v1/accounts", get(accounts))
         .route("/v1/complete", post(complete))
+        .route("/v1/search", post(search))
         .merge(admin_routes)
         .layer(DefaultBodyLimit::max(max_request_bytes))
         .with_state(AppState {
@@ -220,6 +224,68 @@ async fn complete(
     }
 }
 
+async fn search(
+    State(state): State<AppState>,
+    payload: Result<Json<SearchGatewayRequest>, JsonRejection>,
+) -> Response {
+    let request_id = Uuid::now_v7();
+    let Json(payload) = match payload {
+        Ok(payload) => payload,
+        Err(rejection) => {
+            return error_response(request_id, GatewayError::bad_json(rejection.body_text()));
+        }
+    };
+    let provider = payload.provider.to_string();
+    let model = payload.request.model.clone();
+    let requested_account_id = payload.account_id;
+    let started = Instant::now();
+
+    match state
+        .gateway
+        .search(
+            payload.provider,
+            payload.request,
+            payload.request_options,
+            payload.account_id,
+        )
+        .await
+    {
+        Ok(search) => {
+            tracing::info!(
+                %request_id,
+                account_id = %search.account_id,
+                %provider,
+                %model,
+                duration_ms = started.elapsed().as_millis(),
+                "web search request completed"
+            );
+            success_response(
+                request_id,
+                Some(search.account_id),
+                SearchGatewayResponse {
+                    request_id,
+                    account_id: search.account_id,
+                    response: search.response,
+                },
+            )
+        }
+        Err(error) => {
+            tracing::warn!(
+                %request_id,
+                requested_account_id = ?requested_account_id,
+                resolved_account_id = ?error.account_id,
+                %provider,
+                %model,
+                error_kind = ?error.kind,
+                can_retry = error.can_retry,
+                duration_ms = started.elapsed().as_millis(),
+                "web search request failed"
+            );
+            error_response(request_id, error)
+        }
+    }
+}
+
 fn parse_provider(value: Option<&str>) -> Result<Option<ProviderKind>, GatewayError> {
     value
         .map(str::parse::<ProviderKind>)
@@ -308,6 +374,24 @@ struct CompleteResponse {
     request_id: Uuid,
     account_id: Uuid,
     message: AssistantMessage,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchGatewayRequest {
+    #[serde(default)]
+    account_id: Option<Uuid>,
+    provider: ProviderId,
+    request: SearchRequest,
+    #[serde(default)]
+    request_options: SearchRequestOptions,
+}
+
+#[derive(Serialize)]
+struct SearchGatewayResponse {
+    request_id: Uuid,
+    account_id: Uuid,
+    response: ProviderSearchResponse,
 }
 
 #[derive(Serialize)]

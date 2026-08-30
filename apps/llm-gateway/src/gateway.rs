@@ -1,6 +1,9 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use llm_contracts::{AssistantMessage, LlmError, LlmRequest, LlmTransport, Validate};
+use llm_contracts::{
+    AssistantMessage, LlmError, LlmRequest, LlmTransport, ProviderId, SearchRequest,
+    SearchRequestOptions, SearchResponse, Validate,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, Semaphore};
 use uuid::Uuid;
@@ -124,6 +127,89 @@ impl Gateway {
         })
     }
 
+    pub async fn search(
+        &self,
+        provider_id: ProviderId,
+        request: SearchRequest,
+        options: SearchRequestOptions,
+        requested_account_id: Option<Uuid>,
+    ) -> Result<GatewaySearch, GatewayError> {
+        request
+            .validate()
+            .map_err(|error| GatewayError::invalid_request(error.to_string()))?;
+        let provider = provider_id
+            .as_str()
+            .parse::<ProviderKind>()
+            .map_err(|error| GatewayError::invalid_request(error.to_string()))?;
+        let model_supported = match provider {
+            ProviderKind::Openai => provider_openai::find_model(&request.model).is_some(),
+            ProviderKind::Chatgpt => provider_chatgpt::find_model(&request.model).is_some(),
+            _ => {
+                return Err(GatewayError::invalid_request(format!(
+                    "provider `{provider}` does not support the alpha/search API"
+                )));
+            }
+        };
+        if !model_supported {
+            return Err(GatewayError::unknown_model(format!(
+                "model `{}` is not in the curated {} catalog",
+                request.model, provider
+            )));
+        }
+
+        let _permit = self
+            .concurrency
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| GatewayError::overloaded())?;
+        let account = self
+            .database
+            .resolve_account(provider.as_str(), requested_account_id)
+            .await
+            .map_err(GatewayError::database)?
+            .ok_or_else(|| match requested_account_id {
+                Some(account_id) => GatewayError::account_not_found(account_id),
+                None => GatewayError::default_account_not_found(provider),
+            })?;
+        validate_resolved_account(&account, provider)
+            .map_err(|error| error.with_account_id(account.id))?;
+
+        let retry_request = request.clone();
+        let retry_options = options.clone();
+        let (account, transport) = self
+            .transport(&account, false)
+            .await
+            .map_err(|error| error.with_account_id(account.id))?;
+        let account_id = account.id;
+        let result = tokio::time::timeout(self.request_timeout, transport.search(request, options))
+            .await
+            .map_err(|_| GatewayError::provider_timeout().with_account_id(account.id))?;
+        let result = if provider == ProviderKind::Chatgpt
+            && result
+                .as_ref()
+                .is_err_and(|error| error.http_status == Some(401))
+        {
+            let (refreshed_account, refreshed_transport) = self
+                .transport(&account, true)
+                .await
+                .map_err(|error| error.with_account_id(account.id))?;
+            tokio::time::timeout(
+                self.request_timeout,
+                refreshed_transport.search(retry_request, retry_options),
+            )
+            .await
+            .map_err(|_| GatewayError::provider_timeout().with_account_id(account.id))?
+            .map_err(|error| GatewayError::provider(error).with_account_id(refreshed_account.id))?
+        } else {
+            result.map_err(|error| GatewayError::provider(error).with_account_id(account.id))?
+        };
+
+        Ok(GatewaySearch {
+            account_id,
+            response: result,
+        })
+    }
+
     async fn transport(
         &self,
         account: &ResolvedAccount,
@@ -188,6 +274,11 @@ struct TransportCacheKey {
 pub struct GatewayCompletion {
     pub account_id: Uuid,
     pub message: AssistantMessage,
+}
+
+pub struct GatewaySearch {
+    pub account_id: Uuid,
+    pub response: SearchResponse,
 }
 
 #[derive(Clone)]
