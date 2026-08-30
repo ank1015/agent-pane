@@ -83,6 +83,41 @@ pub fn exec_definition_with_options(
     })
 }
 
+/// Returns `exec` from already-normalized runtime definitions. This preserves
+/// namespace metadata such as Codex's `web.run` -> `tools.web__run` mapping.
+#[must_use]
+pub fn exec_definition_from_runtime_tools(
+    nested_tools: &[RuntimeToolDefinition],
+) -> ToolDefinition {
+    let mut namespace_descriptions = BTreeMap::new();
+    for namespace in nested_tools
+        .iter()
+        .filter_map(|tool| tool.tool_name.namespace.as_deref())
+    {
+        namespace_descriptions
+            .entry(namespace.to_owned())
+            .or_insert_with(|| ToolNamespaceDescription {
+                name: namespace.to_owned(),
+                description: format!("Tools in the {namespace} namespace."),
+            });
+    }
+    ToolDefinition::Custom(CustomTool {
+        name: EXEC_TOOL_NAME.to_owned(),
+        description: build_exec_tool_description(
+            nested_tools,
+            &[],
+            &namespace_descriptions,
+            DEFAULT_EXEC_YIELD_TIME_MS,
+            true,
+            ImageDetailVisibility::Visible,
+        ),
+        format: CustomToolFormat {
+            syntax: GrammarSyntax::Lark,
+            definition: EXEC_LARK_GRAMMAR.to_owned(),
+        },
+    })
+}
+
 /// Returns Codex's model-facing `wait` function definition.
 #[must_use]
 pub fn wait_definition() -> ToolDefinition {
@@ -127,6 +162,17 @@ pub fn wait_definition() -> ToolDefinition {
 #[must_use]
 pub fn definitions(nested_tools: &[ToolDefinition]) -> Vec<ToolDefinition> {
     vec![exec_definition(nested_tools), wait_definition()]
+}
+
+/// Returns model-facing `exec` and `wait` from namespace-aware runtime tools.
+#[must_use]
+pub fn definitions_from_runtime_tools(
+    nested_tools: &[RuntimeToolDefinition],
+) -> Vec<ToolDefinition> {
+    vec![
+        exec_definition_from_runtime_tools(nested_tools),
+        wait_definition(),
+    ]
 }
 
 /// Converts portable definitions to the augmented metadata installed in V8.

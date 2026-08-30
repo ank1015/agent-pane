@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use codex_code_mode_runtime::{
     CellId, CodeModeSession, DEFAULT_EXEC_YIELD_TIME_MS, DEFAULT_WAIT_YIELD_TIME_MS,
-    ExecuteRequest, WaitRequest,
+    ExecuteRequest, ToolDefinition as RuntimeToolDefinition, WaitRequest,
 };
 use llm_contracts::{ToolArguments, ToolDefinition};
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ use crate::{
 /// Harness-owned inputs shared by `exec` and `wait` execution.
 pub struct CodeModeToolContext<'a> {
     session: &'a dyn CodeModeSession,
-    nested_tools: &'a [ToolDefinition],
+    nested_tools: Vec<RuntimeToolDefinition>,
     tool_call_id: String,
     default_exec_yield_time_ms: u64,
 }
@@ -34,15 +34,22 @@ impl<'a> CodeModeToolContext<'a> {
         }
         Ok(Self {
             session,
-            nested_tools: &[],
+            nested_tools: Vec::new(),
             tool_call_id,
             default_exec_yield_time_ms: DEFAULT_EXEC_YIELD_TIME_MS,
         })
     }
 
     #[must_use]
-    pub fn with_nested_tools(mut self, nested_tools: &'a [ToolDefinition]) -> Self {
-        self.nested_tools = nested_tools;
+    pub fn with_nested_tools(mut self, nested_tools: &[ToolDefinition]) -> Self {
+        self.nested_tools = collect_runtime_tool_definitions(nested_tools);
+        self
+    }
+
+    /// Installs namespace-aware definitions that are already in runtime form.
+    #[must_use]
+    pub fn with_runtime_nested_tools(mut self, nested_tools: &[RuntimeToolDefinition]) -> Self {
+        self.nested_tools = nested_tools.to_vec();
         self
     }
 
@@ -58,8 +65,8 @@ impl<'a> CodeModeToolContext<'a> {
     }
 
     #[must_use]
-    pub fn nested_tools(&self) -> &[ToolDefinition] {
-        self.nested_tools
+    pub fn nested_tools(&self) -> &[RuntimeToolDefinition] {
+        &self.nested_tools
     }
 
     #[must_use]
@@ -118,7 +125,7 @@ pub async fn execute_exec(
         .session
         .execute(ExecuteRequest {
             tool_call_id: context.tool_call_id.clone(),
-            enabled_tools: collect_runtime_tool_definitions(context.nested_tools),
+            enabled_tools: context.nested_tools.clone(),
             source: parsed.code,
             yield_time_ms: Some(
                 parsed
