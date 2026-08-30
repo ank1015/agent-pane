@@ -83,6 +83,9 @@ impl LlmTransport for OpenAiProvider {
             .header(CONTENT_TYPE, "application/json")
             .header(AUTHORIZATION, bearer_header(&self.config.api_key)?)
             .json(&body);
+        if crate::uses_codex_responses_lite(&request) {
+            http_request = http_request.header("x-openai-internal-codex-responses-lite", "true");
+        }
         if let Some(organization) = &self.config.organization {
             http_request = http_request.header("openai-organization", organization);
         }

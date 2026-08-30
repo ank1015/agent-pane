@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use llm_contracts::{LlmRequest, LlmTransport, ModelId, ModelRef, ProviderId};
-use provider_openai::{OpenAiConfig, OpenAiProvider};
+use provider_openai::{CODEX_RESPONSES_LITE_OPTION, OpenAiConfig, OpenAiProvider};
 use serde_json::{Map, Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -106,6 +106,41 @@ async fn complete_normalizes_retryable_http_errors() {
     assert_eq!(error.provider_code.as_deref(), Some("limited"));
     assert_eq!(error.retry_after_ms, Some(1_500));
     assert!(error.can_retry);
+}
+
+#[tokio::test]
+async fn responses_lite_sends_the_native_codex_header() {
+    let native = json!({
+        "id": "response-lite",
+        "object": "response",
+        "model": "gpt-5.6-sol",
+        "status": "completed",
+        "output": [],
+        "usage": {"input_tokens": 1, "output_tokens": 0}
+    });
+    let (base_url, captured) = spawn_server("200 OK", &[], native).await;
+    let provider = OpenAiProvider::new(
+        OpenAiConfig::new("secret-key")
+            .expect("valid config")
+            .with_base_url(format!("{base_url}/v1"))
+            .expect("valid test URL"),
+    )
+    .expect("valid provider");
+    let mut request = request("gpt-5.6-sol");
+    request
+        .provider_options
+        .insert(CODEX_RESPONSES_LITE_OPTION.to_owned(), json!(true));
+
+    provider
+        .complete(request)
+        .await
+        .expect("successful response");
+    let raw_request = captured.await.expect("mock server completed");
+    assert!(
+        raw_request
+            .to_ascii_lowercase()
+            .contains("x-openai-internal-codex-responses-lite: true\r\n")
+    );
 }
 
 async fn spawn_server(
