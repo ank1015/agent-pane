@@ -11,6 +11,7 @@ use agent_contracts::{
     SessionMessageDelivery, SessionMessageOrigin, SessionMessagePage, SessionMessagesAppended,
     TurnRequested,
 };
+use agent_harness_sdk::ActiveTurn;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -26,7 +27,6 @@ use pi_harness::{
     clients::{AgentClient, ExecutionClient, LlmGatewayClient},
     config::{AgentServiceConfig, LlmGatewayServiceConfig},
     runtime::{PiRuntime, RetryPolicy, TurnOutcome},
-    server::ActiveTurn,
 };
 use serde_json::{Value, json};
 use url::Url;

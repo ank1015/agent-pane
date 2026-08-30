@@ -1,10 +1,11 @@
 use std::error::Error;
 
+use agent_harness_sdk::HarnessServer;
 use execution_runtime::OperationContext;
 use pi_harness::{
-    clients::{HarnessRegistryClient, PI_HARNESS_REVISION_ID},
+    clients::{PI_HARNESS_DESCRIPTOR, PI_HARNESS_REVISION_ID, ensure_pi_harness},
     config::HarnessConfig,
-    server::HarnessServer,
+    runtime::PiRuntime,
 };
 use tokio::signal;
 use tracing_subscriber::EnvFilter;
@@ -16,15 +17,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let config = HarnessConfig::from_env()?;
     if let Some(registration) = config.harness_registration.clone() {
-        HarnessRegistryClient::new(registration)?
-            .ensure_pi_harness()
-            .await?;
+        ensure_pi_harness(registration).await?;
         tracing::info!(
             harness_revision_id = PI_HARNESS_REVISION_ID,
             "Pi harness registered with Agent"
         );
     }
-    let server = HarnessServer::connect(&config).await?;
+    let runtime = PiRuntime::from_config(&config)?;
+    let server =
+        HarnessServer::connect(&config.server_config(), PI_HARNESS_DESCRIPTOR, runtime).await?;
     tracing::info!(instance_id = %config.instance_id, max_concurrent_turns = config.max_concurrent_turns, "Pi harness server started");
 
     let shutdown = OperationContext::new();

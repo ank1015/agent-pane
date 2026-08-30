@@ -11,6 +11,7 @@ use agent_contracts::{
     SessionMessageOrigin, SessionMessagePage, SessionMessagesAppended, TurnRequested,
     WORK_STREAM_NAME, WORK_SUBJECT_PATTERN, result_subject, turn_subject,
 };
+use agent_harness_sdk::HarnessServer;
 use async_nats::jetstream::{self, consumer, stream};
 use axum::{
     Json, Router,
@@ -22,8 +23,9 @@ use execution_gateway_client::ExecutionGatewayConfig;
 use execution_runtime::OperationContext;
 use futures_util::StreamExt as _;
 use pi_harness::{
+    clients::PI_HARNESS_DESCRIPTOR,
     config::{AgentServiceConfig, BrokerConfig, HarnessConfig, LlmGatewayServiceConfig},
-    server::HarnessServer,
+    runtime::PiRuntime,
 };
 use serde_json::{Value, json};
 use url::Url;
@@ -49,8 +51,9 @@ async fn consumes_a_turn_and_completes_the_command_round_trip_over_jetstream() {
     .await;
     let llm_url = serve(Router::new().route("/v1/complete", post(llm_complete))).await;
     let config = config(nats_url, agent_url, llm_url);
+    let runtime = PiRuntime::from_config(&config).expect("Pi runtime");
     let server = Arc::new(
-        HarnessServer::connect(&config)
+        HarnessServer::connect(&config.server_config(), PI_HARNESS_DESCRIPTOR, runtime)
             .await
             .expect("harness server"),
     );

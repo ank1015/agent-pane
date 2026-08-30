@@ -16,8 +16,8 @@ use execution_runtime::OperationContext;
 use llm_contracts::{LlmRequest, ModelId, ModelRef, ProviderId};
 use pi_harness::{
     clients::{
-        AgentClient, ExecutionClient, HarnessRegistryClient, LlmGatewayClient,
-        LlmGatewayClientError, PI_HARNESS_REVISION_ID,
+        AgentClient, ExecutionClient, LlmGatewayClient, LlmGatewayClientError,
+        PI_HARNESS_REVISION_ID, ensure_pi_harness,
     },
     config::{AgentControlServiceConfig, AgentServiceConfig, LlmGatewayServiceConfig},
 };
@@ -128,14 +128,13 @@ async fn registers_and_activates_the_packaged_pi_harness() {
             axum::routing::put(registry_call),
         )
         .with_state(calls.clone());
-    let client = HarnessRegistryClient::new(AgentControlServiceConfig {
+    let config = AgentControlServiceConfig {
         base_url: serve(app).await,
         control_token: "control-secret".to_owned(),
         request_timeout: Duration::from_secs(2),
-    })
-    .expect("registry client");
+    };
 
-    client.ensure_pi_harness().await.expect("Pi registration");
+    ensure_pi_harness(config).await.expect("Pi registration");
 
     let calls = calls.lock().expect("registry calls");
     assert_eq!(calls.len(), 5);
