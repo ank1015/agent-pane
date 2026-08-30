@@ -6,6 +6,10 @@ The crate provides serializable messages, requests, model metadata, tools,
 usage, provider errors, and a non-streaming transport trait. Contract JSON uses
 snake-case field names and discriminators.
 
+The shared search types mirror the Codex `alpha/search` wire contract, including
+all `web.run` commands, settings, native Responses API input items, opaque
+structured results, and the two request metadata headers Codex forwards.
+
 Every successful `AssistantMessage` must contain `native_message`. Its value is
 opaque JSON so the original provider response is retained without coupling the
 shared message collection to one provider SDK.
@@ -49,4 +53,3 @@ let tool = FunctionTool::for_type::<WeatherArguments>(
 ```
 
 Executable handlers stay outside this crate and can be registered by tool name.
-

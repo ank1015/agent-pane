@@ -1,5 +1,6 @@
 use llm_contracts::{
-    AssistantMessage, FunctionTool, LlmRequest, Message, Validate, validation::from_json_value,
+    AssistantMessage, FunctionTool, LlmRequest, Message, SearchRequest, Validate,
+    validation::from_json_value,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -179,4 +180,37 @@ fn generates_a_schema_for_the_complete_request() {
     assert_eq!(value["type"], "object");
     assert!(value["properties"]["model"].is_object());
     assert!(value["properties"]["messages"].is_object());
+}
+
+#[test]
+fn search_contract_matches_the_codex_alpha_search_shape() {
+    let value = json!({
+        "id": "session-1",
+        "model": "gpt-5.6-luna",
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "latest news"}]
+        }],
+        "commands": {
+            "search_query": [{
+                "q": "OpenAI news",
+                "recency": 7,
+                "domains": ["openai.com"]
+            }],
+            "response_length": "short"
+        },
+        "settings": {
+            "search_context_size": "low",
+            "external_web_access": "live"
+        },
+        "max_output_tokens": 2048
+    });
+
+    let request: SearchRequest =
+        from_json_value(value.clone()).expect("valid Codex search request");
+    assert_eq!(
+        serde_json::to_value(request).expect("serializable search request"),
+        value
+    );
 }
