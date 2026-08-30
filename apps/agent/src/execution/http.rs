@@ -330,6 +330,7 @@ fn error_code(error: &ExecutionError) -> &'static str {
         ExecutionError::HarnessNotAvailable(_) => "harness_not_available",
         ExecutionError::HarnessRevisionNotAvailable(_) => "harness_revision_not_available",
         ExecutionError::RunNotActive { .. } => "run_not_active",
+        ExecutionError::InvalidCancellationAppend(_) => "invalid_cancellation_append",
         ExecutionError::RunTurnLimitReached { .. } => "run_turn_limit_reached",
         ExecutionError::InvalidFinalMessage => "invalid_final_message",
         ExecutionError::WaitIdConflict(_) => "wait_id_conflict",

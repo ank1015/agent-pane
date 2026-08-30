@@ -72,6 +72,28 @@ impl ActiveTurn {
         *revision = appended.current_session_revision;
         Ok(appended)
     }
+
+    /// Appends only tool results produced while handling the durable abort for
+    /// this turn. Agent applies a stricter post-cancellation fence server-side;
+    /// this does not relax ordinary harness-message appends.
+    pub async fn append_cancelled_tool_results(
+        &self,
+        messages: &[NewRunMessage],
+    ) -> Result<SessionMessagesAppended, ActiveTurnError> {
+        let mut revision = self.session_revision.lock().await;
+        let appended = self
+            .agent
+            .append_cancelled_tool_results(
+                self.run_id(),
+                self.request.expected_state_version,
+                self.request.turn_number,
+                *revision,
+                messages.to_vec(),
+            )
+            .await?;
+        *revision = appended.current_session_revision;
+        Ok(appended)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -81,6 +103,13 @@ pub enum ActiveTurnError {
 }
 
 impl ActiveTurnError {
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        match self {
+            Self::Agent(error) => error.code(),
+        }
+    }
+
     #[must_use]
     pub fn retryable(&self) -> bool {
         matches!(self, Self::Agent(error) if error.retryable())

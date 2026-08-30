@@ -1,5 +1,7 @@
-use llm_contracts::Validate as _;
-use sqlx::types::Json;
+use std::collections::{HashMap, HashSet};
+
+use llm_contracts::{AssistantContent, Message, ToolCallId, Validate as _};
+use sqlx::{Postgres, Transaction, types::Json};
 use uuid::Uuid;
 
 use super::{
@@ -204,11 +206,15 @@ pub(super) async fn append_harness(
         });
     }
 
-    runs::require_active(
-        &context,
-        request.expected_state_version,
-        request.turn_number,
-    )?;
+    if request.after_cancellation {
+        require_cancelled_tool_result_append(&mut tx, &context, run_id, &request).await?;
+    } else {
+        runs::require_active(
+            &context,
+            request.expected_state_version,
+            request.turn_number,
+        )?;
+    }
     let actual_revision = u64::try_from(context.current_session_revision).map_err(|e| {
         ExecutionError::InvalidStoredData(format!("sessions.current_revision: {e}"))
     })?;
@@ -241,4 +247,126 @@ pub(super) async fn append_harness(
             ExecutionError::InvalidStoredData(format!("sessions.current_revision: {e}"))
         })?,
     })
+}
+
+async fn require_cancelled_tool_result_append(
+    tx: &mut Transaction<'_, Postgres>,
+    context: &crate::execution::RunContextRow,
+    run_id: Uuid,
+    request: &AppendSessionMessages,
+) -> Result<(), ExecutionError> {
+    let status = agent_contracts::RunStatus::from_db(&context.status).ok_or_else(|| {
+        ExecutionError::InvalidStoredData(format!("runs.status: {}", context.status))
+    })?;
+    if status != agent_contracts::RunStatus::Aborted {
+        return Err(ExecutionError::InvalidCancellationAppend(format!(
+            "run {run_id} is {status:?}, not aborted"
+        )));
+    }
+
+    let actual_state_version = u64::try_from(context.state_version).map_err(|error| {
+        ExecutionError::InvalidStoredData(format!("runs.state_version: {error}"))
+    })?;
+    let cancellation_state_version =
+        request
+            .expected_state_version
+            .checked_add(1)
+            .ok_or_else(|| {
+                ExecutionError::InvalidCancellationAppend(
+                    "expected state version cannot advance to the abort version".to_owned(),
+                )
+            })?;
+    if actual_state_version != cancellation_state_version {
+        return Err(ExecutionError::RunStateConflict {
+            expected: cancellation_state_version,
+            actual: actual_state_version,
+        });
+    }
+
+    let actual_turn = u32::try_from(context.current_turn).map_err(|error| {
+        ExecutionError::InvalidStoredData(format!("runs.current_turn: {error}"))
+    })?;
+    if actual_turn != request.turn_number {
+        return Err(ExecutionError::RunTurnConflict {
+            expected: request.turn_number,
+            actual: actual_turn,
+        });
+    }
+    let abort_turn =
+        sqlx::query_scalar::<_, i32>("select turn_number from run_aborts where run_id = $1")
+            .bind(run_id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or_else(|| {
+                ExecutionError::InvalidCancellationAppend(
+                    "the aborted run has no matching abort record".to_owned(),
+                )
+            })?;
+    if abort_turn != context.current_turn {
+        return Err(ExecutionError::InvalidCancellationAppend(format!(
+            "abort belongs to turn {abort_turn}, not {}",
+            context.current_turn
+        )));
+    }
+
+    let rows = sqlx::query_as::<_, CommittedMessageRow>(&format!(
+        "select {COMMITTED_MESSAGE_COLUMNS} from session_messages where run_id = $1 and turn_number = $2 and state = 'committed' order by revision"
+    ))
+    .bind(run_id)
+    .bind(context.current_turn)
+    .fetch_all(&mut **tx)
+    .await?;
+    let mut calls = HashMap::<ToolCallId, String>::new();
+    let mut completed = HashSet::<ToolCallId>::new();
+    for row in rows {
+        match row.message.0 {
+            Message::Assistant(assistant) => {
+                for content in assistant.content {
+                    if let AssistantContent::ToolCall {
+                        name, tool_call_id, ..
+                    } = content
+                        && calls.insert(tool_call_id.clone(), name).is_some()
+                    {
+                        return Err(ExecutionError::InvalidCancellationAppend(format!(
+                            "tool call {tool_call_id:?} is ambiguous in the aborted turn"
+                        )));
+                    }
+                }
+            }
+            Message::ToolResult(result) => {
+                completed.insert(result.tool_call_id);
+            }
+            _ => {}
+        }
+    }
+
+    let mut requested = HashSet::new();
+    for message in &request.messages {
+        let Message::ToolResult(result) = &message.message else {
+            return Err(ExecutionError::InvalidCancellationAppend(
+                "only tool results may be appended after cancellation".to_owned(),
+            ));
+        };
+        let Some(expected_name) = calls.get(&result.tool_call_id) else {
+            return Err(ExecutionError::InvalidCancellationAppend(format!(
+                "tool result references unknown call {:?}",
+                result.tool_call_id
+            )));
+        };
+        if expected_name != &result.tool_name {
+            return Err(ExecutionError::InvalidCancellationAppend(format!(
+                "tool result for {:?} names {:?}, expected {:?}",
+                result.tool_call_id, result.tool_name, expected_name
+            )));
+        }
+        if completed.contains(&result.tool_call_id)
+            || !requested.insert(result.tool_call_id.clone())
+        {
+            return Err(ExecutionError::InvalidCancellationAppend(format!(
+                "tool call {:?} already has a result",
+                result.tool_call_id
+            )));
+        }
+    }
+    Ok(())
 }

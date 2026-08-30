@@ -81,6 +81,45 @@ impl AgentClient {
         expected_session_revision: u64,
         messages: Vec<NewRunMessage>,
     ) -> Result<SessionMessagesAppended, AgentClientError> {
+        self.append_messages_with_mode(
+            run_id,
+            expected_state_version,
+            turn_number,
+            expected_session_revision,
+            messages,
+            false,
+        )
+        .await
+    }
+
+    pub async fn append_cancelled_tool_results(
+        &self,
+        run_id: Uuid,
+        expected_state_version: u64,
+        turn_number: u32,
+        expected_session_revision: u64,
+        messages: Vec<NewRunMessage>,
+    ) -> Result<SessionMessagesAppended, AgentClientError> {
+        self.append_messages_with_mode(
+            run_id,
+            expected_state_version,
+            turn_number,
+            expected_session_revision,
+            messages,
+            true,
+        )
+        .await
+    }
+
+    async fn append_messages_with_mode(
+        &self,
+        run_id: Uuid,
+        expected_state_version: u64,
+        turn_number: u32,
+        expected_session_revision: u64,
+        messages: Vec<NewRunMessage>,
+        after_cancellation: bool,
+    ) -> Result<SessionMessagesAppended, AgentClientError> {
         let run_id = run_id.to_string();
         let url = endpoint(
             &self.base_url,
@@ -93,6 +132,7 @@ impl AgentClient {
                 expected_state_version,
                 turn_number,
                 expected_session_revision,
+                after_cancellation,
                 messages,
             })
             .send()

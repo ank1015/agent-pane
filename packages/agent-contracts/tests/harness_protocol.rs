@@ -107,6 +107,7 @@ fn session_message_append_is_lease_free_and_fenced_by_run_state() {
         expected_state_version: 3,
         turn_number: 2,
         expected_session_revision: 7,
+        after_cancellation: false,
         messages: vec![NewRunMessage {
             session_message_id: Uuid::now_v7(),
             message: serde_json::from_value(json!({
@@ -122,8 +123,34 @@ fn session_message_append_is_lease_free_and_fenced_by_run_state() {
     request.validate().expect("valid append request");
     let value = serde_json::to_value(request).expect("serialize append request");
     assert!(value.get("lease_version").is_none());
+    assert!(value.get("after_cancellation").is_none());
     assert_eq!(value["expected_state_version"], 3);
     assert_eq!(value["turn_number"], 2);
+}
+
+#[test]
+fn post_cancellation_append_rejects_non_tool_messages() {
+    let request = AppendSessionMessages {
+        expected_state_version: 3,
+        turn_number: 2,
+        expected_session_revision: 7,
+        after_cancellation: true,
+        messages: vec![NewRunMessage {
+            session_message_id: Uuid::now_v7(),
+            message: serde_json::from_value(json!({
+                "role": "custom",
+                "id": "not-a-tool-result",
+                "content": {},
+                "timestamp": 1
+            }))
+            .expect("custom message"),
+        }],
+    };
+
+    let error = request
+        .validate()
+        .expect_err("post-cancellation append must be tool-result-only");
+    assert_eq!(error.issues[0].path, "messages[0].message");
 }
 
 fn object(value: serde_json::Value) -> llm_contracts::JsonObject {

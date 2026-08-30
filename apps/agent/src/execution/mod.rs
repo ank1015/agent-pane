@@ -58,6 +58,8 @@ pub enum ExecutionError {
     InvalidFinalMessage,
     #[error("the message batch exceeds the maximum of {0}")]
     MessageBatchTooLarge(usize),
+    #[error("invalid post-cancellation tool-result append: {0}")]
+    InvalidCancellationAppend(String),
     #[error("message page limit must be between 1 and 500")]
     InvalidMessagePageSize,
     #[error("queued run message page limit must be between 1 and 100")]

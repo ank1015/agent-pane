@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
-use llm_contracts::{JsonObject, Validate, ValidationError};
+use llm_contracts::{JsonObject, Message, Validate, ValidationError};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -109,7 +109,8 @@ impl Validate for TurnRequested {
 ///
 /// Agent makes the durable abort decision before publishing this event. A late
 /// harness outcome is rejected by its expected state version even if this
-/// notification is delayed or missed.
+/// notification is delayed or missed; only the separately flagged and tightly
+/// correlated tool-result cleanup append is accepted afterward.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunCancelled {
@@ -322,7 +323,15 @@ pub struct AppendSessionMessages {
     pub expected_state_version: u64,
     pub turn_number: u32,
     pub expected_session_revision: u64,
+    /// Requests the tightly fenced post-abort cleanup path. Agent accepts this
+    /// only for tool results correlated to calls from the just-aborted turn.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub after_cancellation: bool,
     pub messages: Vec<NewRunMessage>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Validate for AppendSessionMessages {
@@ -348,6 +357,13 @@ impl Validate for AppendSessionMessages {
             }
             if let Err(error) = message.validate() {
                 append_nested(&mut issues, &format!("messages[{index}]"), error);
+            }
+            if self.after_cancellation && !matches!(&message.message, Message::ToolResult(_)) {
+                issue(
+                    &mut issues,
+                    format!("messages[{index}].message"),
+                    "post-cancellation appends may contain only tool results",
+                );
             }
         }
         finish(issues)
