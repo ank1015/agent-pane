@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use llm_contracts::{LlmRequest, LlmTransport, ModelId, ModelRef, ProviderId};
+use llm_contracts::{
+    LlmRequest, LlmTransport, ModelId, ModelRef, ProviderId, SearchCommands, SearchQuery,
+    SearchRequest, SearchRequestOptions,
+};
 use provider_openai::{CODEX_RESPONSES_LITE_OPTION, OpenAiConfig, OpenAiProvider};
 use serde_json::{Map, Value, json};
 use tokio::{
@@ -141,6 +144,74 @@ async fn responses_lite_sends_the_native_codex_header() {
             .to_ascii_lowercase()
             .contains("x-openai-internal-codex-responses-lite: true\r\n")
     );
+}
+
+#[tokio::test]
+async fn search_posts_the_codex_wire_contract_and_forwards_metadata() {
+    let native = json!({
+        "encrypted_output": "ciphertext",
+        "output": "search result",
+        "results": [{"type": "computer_initialize_state", "id": "1"}]
+    });
+    let (base_url, captured) = spawn_server("200 OK", &[], native.clone()).await;
+    let provider = OpenAiProvider::new(
+        OpenAiConfig::new("secret-key")
+            .expect("valid config")
+            .with_base_url(format!("{base_url}/v1"))
+            .expect("valid test URL")
+            .with_organization("org-1")
+            .with_project("project-1"),
+    )
+    .expect("valid provider");
+    let search = SearchRequest {
+        id: "session-1".into(),
+        model: "gpt-5.6-luna".into(),
+        reasoning: None,
+        input: None,
+        commands: Some(SearchCommands {
+            search_query: Some(vec![SearchQuery {
+                q: "OpenAI Codex".into(),
+                recency: Some(7),
+                domains: Some(vec!["openai.com".into()]),
+            }]),
+            ..Default::default()
+        }),
+        settings: None,
+        max_output_tokens: Some(2048),
+    };
+
+    let response = provider
+        .search(
+            search,
+            SearchRequestOptions {
+                originator: Some("codex_chatgpt_desktop".into()),
+                codex_turn_metadata: Some(r#"{"turn_id":"turn-1"}"#.into()),
+            },
+        )
+        .await
+        .expect("successful search");
+    let raw_request = captured.await.expect("mock server completed");
+    let lower = raw_request.to_ascii_lowercase();
+    let body: Value = serde_json::from_str(
+        raw_request
+            .split_once("\r\n\r\n")
+            .expect("HTTP request contains a body")
+            .1,
+    )
+    .expect("request body is JSON");
+
+    assert!(raw_request.starts_with("POST /v1/alpha/search HTTP/1.1\r\n"));
+    assert!(lower.contains("authorization: bearer secret-key\r\n"));
+    assert!(lower.contains("originator: codex_chatgpt_desktop\r\n"));
+    assert!(lower.contains("x-codex-turn-metadata: {\"turn_id\":\"turn-1\"}\r\n"));
+    assert!(lower.contains("openai-organization: org-1\r\n"));
+    assert!(lower.contains("openai-project: project-1\r\n"));
+    assert_eq!(body["id"], "session-1");
+    assert_eq!(body["model"], "gpt-5.6-luna");
+    assert_eq!(body["commands"]["search_query"][0]["q"], "OpenAI Codex");
+    assert!(body.get("provider").is_none());
+    assert_eq!(response.output, "search result");
+    assert_eq!(response.results, native["results"].as_array().cloned());
 }
 
 async fn spawn_server(

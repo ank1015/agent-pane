@@ -2,21 +2,24 @@ use std::time::{Instant, SystemTime};
 
 use async_trait::async_trait;
 use llm_contracts::{
-    AssistantMessage, LlmError, LlmProviderAdapter, LlmRequest, LlmTransport, ProviderId, Validate,
+    AssistantMessage, LlmError, LlmProviderAdapter, LlmRequest, LlmTransport, ProviderId,
+    SearchRequest, SearchRequestOptions, SearchResponse, Validate,
 };
-use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue, RETRY_AFTER};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue, RETRY_AFTER, USER_AGENT};
 
 use crate::{
     OPENAI_PROVIDER,
     config::OpenAiConfig,
     error::{
-        invalid_config, invalid_model, invalid_request, network_error, normalize_http_error,
-        unix_millis,
+        invalid_config, invalid_model, invalid_request, invalid_response, network_error,
+        normalize_http_error, unix_millis,
     },
     find_model,
     request::build_response_request_for_model,
     response::convert_response,
 };
+
+const ORIGINATOR: &str = "agent-pane";
 
 /// Non-streaming OpenAI Responses API client.
 #[derive(Clone, Debug)]
@@ -132,6 +135,74 @@ impl LlmTransport for OpenAiProvider {
         let duration_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
         convert_response(native, model, duration_ms, unix_millis(now))
     }
+
+    async fn search(
+        &self,
+        request: SearchRequest,
+        options: SearchRequestOptions,
+    ) -> Result<SearchResponse, LlmError> {
+        request
+            .validate()
+            .map_err(|error| invalid_request(error.to_string()))?;
+        if find_model(&request.model).is_none() {
+            return Err(invalid_model(&request.model));
+        }
+
+        let mut http_request = self
+            .client
+            .post(format!("{}/alpha/search", self.config.base_url))
+            .header(ACCEPT, "application/json")
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, bearer_header(&self.config.api_key)?)
+            .header(
+                USER_AGENT,
+                concat!("agent-pane-provider-openai/", env!("CARGO_PKG_VERSION")),
+            )
+            .json(&request);
+        let originator = options.originator.as_deref().unwrap_or(ORIGINATOR);
+        http_request = http_request.header("originator", request_header(originator)?);
+        if let Some(metadata) = options.codex_turn_metadata.as_deref() {
+            http_request = http_request.header("x-codex-turn-metadata", request_header(metadata)?);
+        }
+        if let Some(organization) = &self.config.organization {
+            http_request = http_request.header("openai-organization", organization);
+        }
+        if let Some(project) = &self.config.project {
+            http_request = http_request.header("openai-project", project);
+        }
+
+        let response = http_request
+            .send()
+            .await
+            .map_err(|error| network_error(&error))?;
+        let status = response.status();
+        let status_text = status.canonical_reason().unwrap_or_default().to_owned();
+        let retry_after = response
+            .headers()
+            .get(RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        let response_body = response
+            .text()
+            .await
+            .map_err(|error| network_error(&error))?;
+        if !status.is_success() {
+            return Err(normalize_http_error(
+                status.as_u16(),
+                &status_text,
+                &response_body,
+                retry_after.as_deref(),
+                SystemTime::now(),
+            ));
+        }
+
+        serde_json::from_str(&response_body).map_err(|error| {
+            invalid_response(
+                format!("OpenAI returned an invalid alpha/search response: {error}"),
+                serde_json::Value::String(response_body),
+            )
+        })
+    }
 }
 
 impl LlmProviderAdapter for OpenAiProvider {
@@ -145,4 +216,9 @@ fn bearer_header(api_key: &str) -> Result<HeaderValue, LlmError> {
         .map_err(|_| invalid_config("OpenAI API key contains invalid header characters."))?;
     value.set_sensitive(true);
     Ok(value)
+}
+
+fn request_header(value: &str) -> Result<HeaderValue, LlmError> {
+    HeaderValue::from_str(value)
+        .map_err(|_| invalid_request("search request metadata contains invalid header characters"))
 }

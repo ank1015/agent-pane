@@ -20,6 +20,11 @@ println!("{}", message.native_message);
 # }
 ```
 
+The same transport implements `search` for the Codex provider-backed
+`POST /v1/alpha/search` API. Search request and response types live in
+`llm-contracts`, including the native command/settings schema and optional
+`originator` and `x-codex-turn-metadata` forwarding.
+
 The library does not read environment variables. Applications should load and
 pass credentials explicitly.
 
@@ -34,4 +39,3 @@ non-streaming request:
 OPENAI_API_KEY=... cargo test -p provider-openai --test live \
   -- --ignored --nocapture --test-threads=1
 ```
-
