@@ -12,7 +12,10 @@ pub use config::{DEFAULT_OPENAI_TIMEOUT, OpenAiConfig};
 pub use models::{
     OPENAI_MODELS, OpenAiModel, calculate_usage_cost, find_model, select_model_pricing,
 };
-pub use request::{OPENAI_NATIVE_INPUT_TAG, build_response_request};
+pub use request::{
+    CODEX_RESPONSES_LITE_OPTION, OPENAI_NATIVE_INPUT_TAG, build_response_request,
+    uses_codex_responses_lite,
+};
 pub use response::convert_response;
 
 /// Provider identifier used by this package.

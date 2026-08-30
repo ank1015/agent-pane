@@ -14,6 +14,17 @@ use crate::{
 
 /// Tag for custom messages containing native OpenAI Responses input items.
 pub const OPENAI_NATIVE_INPUT_TAG: &str = "openai.native_input";
+/// Provider option enabling Codex's Responses-Lite input layout.
+pub const CODEX_RESPONSES_LITE_OPTION: &str = "codex_responses_lite";
+
+#[must_use]
+pub fn uses_codex_responses_lite(request: &LlmRequest) -> bool {
+    request
+        .provider_options
+        .get(CODEX_RESPONSES_LITE_OPTION)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
 
 /// Builds a non-streaming `POST /responses` JSON body.
 pub fn build_response_request(request: &LlmRequest) -> Result<Value, LlmError> {
@@ -36,6 +47,15 @@ pub(crate) fn build_response_request_for_model(
     model: &OpenAiModel,
 ) -> Result<Value, LlmError> {
     let mut body = request.provider_options.clone();
+    let responses_lite = match body.remove(CODEX_RESPONSES_LITE_OPTION) {
+        None => false,
+        Some(Value::Bool(enabled)) => enabled,
+        Some(_) => {
+            return Err(invalid_request(format!(
+                "OpenAI provider_options.{CODEX_RESPONSES_LITE_OPTION} must be a boolean."
+            )));
+        }
+    };
 
     for owned in ["model", "input", "instructions", "stream"] {
         body.remove(owned);
@@ -65,11 +85,35 @@ pub(crate) fn build_response_request_for_model(
     }
 
     body.insert("model".into(), Value::String(model.id.to_owned()));
-    if let Some(instructions) = &request.instructions {
-        body.insert("instructions".into(), Value::String(instructions.clone()));
-    }
-    if !tools.is_empty() {
-        body.insert("tools".into(), Value::Array(tools));
+    if responses_lite {
+        let mut prefix = Vec::new();
+        if !tools.is_empty() {
+            prefix.push(json!({
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [{
+                    "type": "namespace",
+                    "name": "functions",
+                    "description": "",
+                    "tools": tools,
+                }],
+            }));
+        }
+        if let Some(instructions) = &request.instructions {
+            prefix.push(json!({
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": instructions}],
+            }));
+        }
+        input.splice(0..0, prefix);
+    } else {
+        if let Some(instructions) = &request.instructions {
+            body.insert("instructions".into(), Value::String(instructions.clone()));
+        }
+        if !tools.is_empty() {
+            body.insert("tools".into(), Value::Array(tools));
+        }
     }
     body.insert("input".into(), Value::Array(input));
     Ok(Value::Object(body))
@@ -78,10 +122,12 @@ pub(crate) fn build_response_request_for_model(
 fn map_message(message: &Message, tools: &[ToolDefinition]) -> Result<Vec<Value>, LlmError> {
     match message {
         Message::User(message) => Ok(vec![json!({
+            "type": "message",
             "role": "user",
             "content": map_content(&message.content),
         })]),
         Message::System(message) => Ok(vec![json!({
+            "type": "message",
             "role": "developer",
             "content": map_system_content(&message.content),
         })]),
@@ -118,7 +164,11 @@ fn map_assistant_message(
     for part in &message.content {
         match part {
             AssistantContent::Response { response } if !response.content.is_empty() => {
-                input.push(json!({ "role": "assistant", "content": response.content }));
+                input.push(json!({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": response.content,
+                }));
             }
             AssistantContent::Response { .. } | AssistantContent::Thinking { .. } => {}
             AssistantContent::ToolCall {
