@@ -1,9 +1,9 @@
 # platform
 
 The dashboard backend-for-frontend. `platform` exposes client-oriented APIs and
-coordinates the workspace's internal services; it does not take ownership of
-their data. The `providers` feature maps dashboard provider operations to
-`llm-gateway`, while `machines` maps machine and sandbox operations to
+coordinates the workspace's internal services. Platform owns dashboard-level
+data such as projects, while `providers` maps dashboard provider operations to
+`llm-gateway`, `machines` maps machine and sandbox operations to
 `execution-gateway`, and `harnesses` maps harness inventory to `agent`.
 
 ## Architecture
@@ -13,6 +13,10 @@ dashboard tab):
 
 ```text
 src/
+├── projects/               # Platform-owned project CRUD
+│   ├── http.rs             # Dashboard-facing routes
+│   ├── model.rs            # API and persistence models
+│   └── mod.rs              # Application service
 ├── providers/              # Providers feature slice
 │   ├── http.rs             # Dashboard-facing routes
 │   ├── chatgpt_oauth.rs    # ChatGPT PKCE login and callback state
@@ -31,6 +35,7 @@ src/
 │   ├── execution_gateway.rs # Execution gateway control adapter
 │   └── llm_gateway.rs       # LLM gateway admin adapter
 ├── config.rs               # Process configuration
+├── db.rs                   # PostgreSQL connection and migrations
 ├── error.rs                # Shared HTTP error mapping
 ├── lib.rs                  # Router composition
 └── main.rs                 # Process lifecycle
@@ -46,7 +51,8 @@ persistence, and neither service offers a credential reveal endpoint.
 
 ## Local setup
 
-Start `llm-gateway`, `execution-gateway`, and `agent` first, then configure platform. The platform token must be
+Create a PostgreSQL database for Platform, then start `llm-gateway`,
+`execution-gateway`, and `agent` before configuring Platform. The platform token must be
 the same value as `GATEWAY_ADMIN_TOKEN` used by `llm-gateway`. When both
 processes load the same root `.env`, platform automatically falls back to that
 variable; `PLATFORM_LLM_GATEWAY_ADMIN_TOKEN` can override it.
@@ -64,7 +70,20 @@ cargo run -p platform
 ```
 
 The default listener is `http://127.0.0.1:3100`. Liveness is available at
-`GET /health`; `GET /ready` checks all three upstream services.
+`GET /health`; `GET /ready` checks the database and all three upstream services.
+
+## Projects API
+
+```text
+GET    /api/projects
+POST   /api/projects
+GET    /api/projects/{project_id}
+PATCH  /api/projects/{project_id}
+DELETE /api/projects/{project_id}
+```
+
+Create a project with `{"name":"Agent Pane","avatar":null}`. `avatar` may be
+omitted, supplied as a string, or set to `null` in a PATCH request to clear it.
 
 ## Harnesses API
 
