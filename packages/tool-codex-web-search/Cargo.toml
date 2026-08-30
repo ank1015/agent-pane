@@ -1,0 +1,16 @@
+[package]
+name = "tool-codex-web-search"
+description = "Codex-compatible code-mode web.run definition and defaults"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "MIT AND Apache-2.0"
+
+[dependencies]
+codex-code-mode-runtime.workspace = true
+llm-contracts.workspace = true
+schemars.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

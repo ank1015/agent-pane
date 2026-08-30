@@ -4125,6 +4125,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tool-codex-web-search"
+version = "0.1.0"
+dependencies = [
+ "codex-code-mode-runtime",
+ "llm-contracts",
+ "schemars",
+ "serde_json",
+]
+
+[[package]]
 name = "tool-pi-bash"
 version = "0.1.0"
 dependencies = [
