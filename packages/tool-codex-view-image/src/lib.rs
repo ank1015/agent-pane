@@ -24,6 +24,8 @@ use url::Url;
 pub const TOOL_NAME: &str = "view_image";
 
 const ARTIFACT_CHUNK_BYTES: u64 = 1_024 * 1_024;
+const VIEW_IMAGE_INVALID_MESSAGE: &str =
+    "unable to process image: invalid or unsupported image data";
 
 /// Image detail levels accepted by the Codex tool.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -221,7 +223,32 @@ pub fn definition() -> ToolDefinition {
 pub fn parse_arguments(
     arguments: &ToolArguments,
 ) -> Result<ViewImageArguments, ViewImageToolError> {
-    parse(arguments).map_err(ViewImageToolError::invalid_arguments)
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct RawViewImageArguments {
+        path: String,
+        detail: Option<String>,
+    }
+
+    let raw: RawViewImageArguments =
+        parse(arguments).map_err(ViewImageToolError::invalid_arguments)?;
+    let detail = match raw.detail.as_deref() {
+        None => None,
+        Some("high") => Some(ViewImageDetail::High),
+        Some("original") => Some(ViewImageDetail::Original),
+        Some(detail) => {
+            return Err(ViewImageToolError::new(
+                "invalid_arguments",
+                format!(
+                    "view_image.detail only supports `high` or `original`; omit `detail` for default high resized behavior, got `{detail}`"
+                ),
+            ));
+        }
+    };
+    Ok(ViewImageArguments {
+        path: raw.path,
+        detail,
+    })
 }
 
 /// Parses and executes an LLM view-image tool call.
@@ -265,17 +292,11 @@ pub async fn execute(
         artifact.metadata.size,
     )
     .await?;
-    let format = image::guess_format(&bytes).map_err(|error| {
-        ViewImageToolError::invalid_image(format!(
-            "unable to process image: invalid or unsupported image data: {error}"
-        ))
-    })?;
+    let format = image::guess_format(&bytes)
+        .map_err(|_| ViewImageToolError::invalid_image(VIEW_IMAGE_INVALID_MESSAGE))?;
     let mime_type = supported_mime_type(format)?;
-    let decoded = image::load_from_memory_with_format(&bytes, format).map_err(|error| {
-        ViewImageToolError::invalid_image(format!(
-            "unable to process image: invalid or unsupported image data: {error}"
-        ))
-    })?;
+    let decoded = image::load_from_memory_with_format(&bytes, format)
+        .map_err(|_| ViewImageToolError::invalid_image(VIEW_IMAGE_INVALID_MESSAGE))?;
     let (width, height) = decoded.dimensions();
     let detail = arguments.detail.unwrap_or(ViewImageDetail::High);
     let provider_detail = ImageDetail::from(detail);
@@ -284,7 +305,9 @@ pub async fn execute(
         content: vec![ContentPart::Image(ImageContent {
             source: ImageSource::Base64(Base64ImageSource {
                 data: STANDARD.encode(&bytes),
-                mime_type: mime_type.to_owned(),
+                // Match Codex: the tool returns unmodified file bytes and lets
+                // centralized request preparation identify/transcode them.
+                mime_type: "application/octet-stream".to_owned(),
             }),
             detail: Some(provider_detail),
             metadata: None,
@@ -372,10 +395,11 @@ fn supported_mime_type(format: ImageFormat) -> Result<&'static str, ViewImageToo
     match format {
         ImageFormat::Jpeg => Ok("image/jpeg"),
         ImageFormat::Png => Ok("image/png"),
+        ImageFormat::Gif => Ok("image/gif"),
         ImageFormat::WebP => Ok("image/webp"),
-        _ => Err(ViewImageToolError::invalid_image(format!(
-            "unable to process image: unsupported image format {format:?}"
-        ))),
+        _ => Err(ViewImageToolError::invalid_image(
+            VIEW_IMAGE_INVALID_MESSAGE,
+        )),
     }
 }
 
@@ -391,20 +415,24 @@ fn function_tool(name: &str, description: &str, parameters: Value) -> ToolDefini
             json!({
                 "type": "object",
                 "properties": {
-                    "image_url": { "type": "string" },
+                    "image_url": {
+                        "type": "string",
+                        "description": "Data URL for the loaded image."
+                    },
                     "detail": {
                         "type": "string",
-                        "enum": ["high", "original"]
+                        "enum": ["high", "original"],
+                        "description": "Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved."
                     }
                 },
-                "required": ["image_url"],
+                "required": ["image_url", "detail"],
                 "additionalProperties": false
             })
             .as_object()
             .expect("output schema is an object")
             .clone(),
         ),
-        strict: None,
+        strict: Some(false),
     })
 }
 

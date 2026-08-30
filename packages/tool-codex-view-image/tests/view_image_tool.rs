@@ -81,6 +81,7 @@ fn exports_the_codex_view_image_definition() {
     let llm_contracts::ToolDefinition::Function(tool) = definition else {
         panic!("view_image must be a function tool")
     };
+    assert_eq!(tool.strict, Some(false));
     assert_eq!(
         tool.description,
         "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk."
@@ -101,6 +102,25 @@ fn exports_the_codex_view_image_definition() {
                 }
             },
             "required": ["path"],
+            "additionalProperties": false
+        })
+    );
+    assert_eq!(
+        Value::Object(tool.output_schema.expect("view_image output schema")),
+        json!({
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string",
+                    "description": "Data URL for the loaded image."
+                },
+                "detail": {
+                    "type": "string",
+                    "enum": ["high", "original"],
+                    "description": "Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved."
+                }
+            },
+            "required": ["image_url", "detail"],
             "additionalProperties": false
         })
     );
@@ -134,6 +154,10 @@ fn parses_object_and_string_arguments_with_codex_detail_values() {
     ))
     .expect_err("unsupported detail must fail");
     assert_eq!(error.name(), "invalid_arguments");
+    assert_eq!(
+        error.message(),
+        "view_image.detail only supports `high` or `original`; omit `detail` for default high resized behavior, got `low`"
+    );
 }
 
 #[tokio::test]
@@ -155,7 +179,7 @@ async fn returns_validated_image_content_with_default_high_detail() {
     let ImageSource::Base64(source) = &image.source else {
         panic!("workspace image must be returned inline")
     };
-    assert_eq!(source.mime_type, "image/png");
+    assert_eq!(source.mime_type, "application/octet-stream");
     assert_eq!(
         STANDARD.decode(&source.data).expect("base64 image"),
         expected
@@ -167,6 +191,46 @@ async fn returns_validated_image_content_with_default_high_detail() {
     assert_eq!(details["width"], 2);
     assert_eq!(details["height"], 1);
     assert_eq!(details["detail"], "high");
+}
+
+#[tokio::test]
+async fn accepts_gif_and_preserves_raw_bytes_for_central_preparation() {
+    let fixture = Fixture::new().await;
+    let image = RgbImage::from_pixel(2, 1, Rgb([12, 34, 56]));
+    let mut bytes = Cursor::new(Vec::new());
+    DynamicImage::ImageRgb8(image)
+        .write_to(&mut bytes, ImageFormat::Gif)
+        .expect("encode GIF fixture");
+    let bytes = bytes.into_inner();
+    tokio::fs::write(fixture.workspace.join("project/diagram.gif"), &bytes)
+        .await
+        .expect("write GIF fixture");
+    let operation = OperationContext::new();
+    let context = fixture.context(&operation);
+
+    let output = execute(
+        ViewImageArguments {
+            path: "diagram.gif".to_owned(),
+            detail: None,
+        },
+        &context,
+    )
+    .await
+    .expect("view GIF");
+
+    let ContentPart::Image(image) = &output.content[0] else {
+        panic!("view_image must return image content")
+    };
+    let ImageSource::Base64(source) = &image.source else {
+        panic!("workspace image must be returned inline")
+    };
+    assert_eq!(source.mime_type, "application/octet-stream");
+    assert_eq!(STANDARD.decode(&source.data).expect("base64 GIF"), bytes);
+    assert_eq!(image.detail, Some(ImageDetail::High));
+    assert_eq!(
+        output.details.expect("image details")["mime_type"],
+        "image/gif"
+    );
 }
 
 #[tokio::test]
@@ -214,7 +278,10 @@ async fn rejects_invalid_images_and_paths_outside_the_workspace() {
     .await
     .expect_err("invalid image must fail");
     assert_eq!(invalid.name(), "invalid_image");
-    assert!(invalid.message().contains("unable to process image"));
+    assert_eq!(
+        invalid.message(),
+        "unable to process image: invalid or unsupported image data"
+    );
 
     let outside = execute(
         ViewImageArguments {
