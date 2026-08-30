@@ -52,6 +52,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-harness-sdk"
+version = "0.1.0"
+dependencies = [
+ "agent-contracts",
+ "async-nats",
+ "async-trait",
+ "chrono",
+ "execution-runtime",
+ "futures-util",
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1976,9 +1997,10 @@ name = "pi-harness"
 version = "0.1.0"
 dependencies = [
  "agent-contracts",
+ "agent-harness-sdk",
  "async-nats",
+ "async-trait",
  "axum",
- "base64",
  "chrono",
  "dotenvy",
  "execution-contracts",
@@ -1998,6 +2020,10 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
+ "tool-pi-bash",
+ "tool-pi-edit",
+ "tool-pi-read",
+ "tool-pi-write",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -3484,6 +3510,76 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "tool-pi-bash"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "execution-contracts",
+ "execution-local",
+ "execution-runtime",
+ "futures-util",
+ "llm-contracts",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "tool-pi-edit"
+version = "0.1.0"
+dependencies = [
+ "execution-contracts",
+ "execution-local",
+ "execution-runtime",
+ "llm-contracts",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "tool-pi-read"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "execution-contracts",
+ "execution-local",
+ "execution-runtime",
+ "futures-util",
+ "llm-contracts",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "tool-pi-write"
+version = "0.1.0"
+dependencies = [
+ "execution-contracts",
+ "execution-local",
+ "execution-runtime",
+ "llm-contracts",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid",
 ]
 
 [[package]]

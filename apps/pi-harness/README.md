@@ -5,6 +5,10 @@ durable turn requests from NATS JetStream, runs up to a configured number of Pi
 workers inside the process, and publishes exactly one lifecycle operation back
 to Agent: `complete`, `continue`, `fail`, or `wait`.
 
+The binary uses `packages/agent-harness-sdk` for the reusable broker server,
+cancellation, command-result routing, and Agent transcript access. Pi-specific
+model, context, compaction, tool, and execution behavior remains in this app.
+
 Agent does not poll this process and this process does not claim or lease runs.
 The broker provides at-least-once delivery; Agent state versions and stable
 command IDs make redelivery safe.
@@ -44,7 +48,7 @@ cargo run -p pi-harness
 
 Set `PI_HARNESS_AGENT_CONTROL_TOKEN` to the Agent control token to have the
 server idempotently register and activate revision
-`pi-2026-08-27-nats-server` during startup. Otherwise provision the harness
+`pi-2026-08-28-deepseek` during startup. Otherwise provision the harness
 through Agent before submitting runs.
 
 ## Broker topology
