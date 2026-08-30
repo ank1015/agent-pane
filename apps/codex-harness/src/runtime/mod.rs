@@ -12,6 +12,7 @@ mod tool_admission;
 mod tools;
 mod transcript;
 mod turn;
+mod web_search;
 
 pub use compaction::{
     CODEX_COMPACTION_MESSAGE_TAG, CODEX_COMPACTION_SCHEMA_VERSION, CodexCompactionMessageContent,
@@ -36,13 +37,16 @@ pub use model_resolver::{CodexModelConfig, resolve_model_config};
 pub use request::{ContextFormationError, form_main_request};
 pub use stateful_tools::{
     CodexToolCallExecutor, CodexToolDispatchError, CodexToolExecutionContext, CodexToolExecutor,
+    CodexWebSearchExecutionContext,
 };
 pub use tools::{
     StatelessToolContext, StatelessToolDispatchError, StatelessToolExecutor,
-    default_nested_tool_definitions, model_visible_tool_definitions,
+    code_mode_nested_tool_definitions, default_nested_tool_definitions,
+    model_visible_tool_definitions,
 };
 pub use transcript::{
     CODEX_CONTEXT_OVERFLOW_TAG, CODEX_PRIMARY_CALL_STARTED_TAG, ResumePlan, TranscriptError,
     plan_turn,
 };
 pub use turn::{CodexRuntime, CodexRuntimeBuildError, CodexRuntimeError};
+pub use web_search::recent_search_input;

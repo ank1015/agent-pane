@@ -16,7 +16,9 @@ It uses `packages/agent-harness-sdk` for:
 compaction when required, calls the model through the LLM gateway, commits the
 assistant, executes its tools, and returns `Continue` or `Complete` to Agent.
 It supports `exec`, `wait`, `exec_command`, and `write_stdin`, including
-code-mode nested calls, plus `apply_patch` and `view_image`.
+code-mode nested calls, plus `apply_patch` and `view_image`. When the run's
+`web_search_enabled` harness setting is true, code mode also exposes Codex's
+namespaced `tools.web__run` extension.
 
 Before the primary model call, the runtime commits a
 `codex.primary_call_started` marker. A redelivery that sees that marker without
@@ -36,7 +38,8 @@ It also deterministically forms a provider-neutral model request from:
 - revision-ordered session messages and a typed `codex.compaction` replacement
   checkpoint containing the provider's opaque native compaction item;
 - the code-mode-only `exec` and `wait` definitions, embedding `apply_patch`,
-  `exec_command`, `write_stdin`, and `view_image` as nested tools;
+  `exec_command`, `write_stdin`, and `view_image` as nested tools and, when
+  enabled, Codex's full `web.run` description and command schema;
 - Codex Responses Lite layout and header, including a namespaced
   `additional_tools` developer item, developer base-instruction message,
   all-turn reasoning context, encrypted reasoning replay, low verbosity,
@@ -65,6 +68,14 @@ configuration, invalid requests, and semantic overload failures are terminal.
 Context overflow is classified distinctly so the turn runtime can mark the
 window full and defer compaction to the next pre-sampling boundary. Cancellation
 and the turn deadline interrupt both the HTTP request/body read and retry sleep.
+
+`web.run` uses the gateway's separate `POST /v1/search` endpoint. Its request
+matches Codex's default cached mode: direct callers only, external live web
+access false, a 2,500 approximate-token output limit, and a native input tail
+containing the last two visible user messages plus up to 1,000 approximate
+tokens of assistant text between them. Only the search response's `output`
+string is returned to JavaScript; provider result metadata is not injected into
+the model-visible tool value.
 
 Stateful tools use a deliberately small hybrid persistence boundary:
 

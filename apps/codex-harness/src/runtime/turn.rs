@@ -7,15 +7,17 @@ use agent_harness_sdk::{ActiveTurn, ActiveTurnError, HarnessRuntime, TurnOutcome
 use chrono::Local;
 use execution_runtime::{ExecutionRuntime, OperationContext};
 use llm_contracts::{
-    AssistantContent, AssistantMessage, ContentPart, CustomMessage, JsonObject, Message, MessageId,
-    StopReason, TextContent, Timestamp, ToolResultError, ToolResultMessage, ToolResultOutcome,
+    AssistantContent, AssistantMessage, ContentPart, CustomMessage, JsonObject, LlmRequest,
+    Message, MessageId, StopReason, TextContent, Timestamp, ToolResultError, ToolResultMessage,
+    ToolResultOutcome,
 };
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
     clients::{
-        ExecutionClient, ExecutionResolutionError, LlmGatewayClientError, MachineRuntimeResolver,
+        ExecutionClient, ExecutionResolutionError, LlmGatewayClient, LlmGatewayClientError,
+        MachineRuntimeResolver,
     },
     config::HarnessConfig,
     persistence::CodexToolState,
@@ -29,9 +31,9 @@ use super::{
     CodexCompletionClient, CodexEnvironmentError, CodexEnvironmentSnapshot, CodexHarnessConfig,
     CodexHarnessConfigError, CodexModelCallError, CodexModelClient, CodexModelFailureKind,
     CodexToolCallExecutor, CodexToolDispatchError, CodexToolExecutionContext, CodexToolExecutor,
-    CompactionError, CompactionPlan, ContextFormationError, ResumePlan, TranscriptError,
-    checkpoint_from_response, form_compaction_request, form_main_request, plan_compaction,
-    plan_turn,
+    CodexWebSearchExecutionContext, CompactionError, CompactionPlan, ContextFormationError,
+    ResumePlan, TranscriptError, checkpoint_from_response, form_compaction_request,
+    form_main_request, plan_compaction, plan_turn, recent_search_input,
 };
 
 const AGENT_MAX_RETRIES: u32 = 3;
@@ -55,9 +57,10 @@ impl CodexRuntime {
         config: &HarnessConfig,
         tool_state: Arc<CodexToolState>,
     ) -> Result<Self, CodexRuntimeBuildError> {
-        let model = CodexModelClient::from_config(config.llm_gateway.clone())?;
+        let gateway = LlmGatewayClient::new(config.llm_gateway.clone())?;
+        let model = CodexModelClient::new(gateway.clone());
         let execution = ExecutionClient::new(config.execution_gateway.clone())?;
-        let tools = CodexToolExecutor::new(tool_state);
+        let tools = CodexToolExecutor::with_llm_gateway(tool_state, gateway);
         Ok(Self::new(
             Arc::new(model),
             Arc::new(execution),
@@ -248,7 +251,7 @@ impl CodexRuntime {
         if tool_calls.is_empty() {
             return Ok(TurnDecision::Complete(assistant_session_message_id));
         }
-        self.run_tools(turn, &config, runtime, &assistant, &tool_calls)
+        self.run_tools(turn, &config, runtime, &request, &assistant, &tool_calls)
             .await?;
         Ok(TurnDecision::Continue)
     }
@@ -271,6 +274,7 @@ impl CodexRuntime {
         turn: &ActiveTurn,
         config: &CodexHarnessConfig,
         runtime: Arc<dyn ExecutionRuntime>,
+        request: &LlmRequest,
         assistant: &AssistantMessage,
         tool_calls: &[AssistantContent],
     ) -> Result<(), TurnError> {
@@ -285,6 +289,14 @@ impl CodexRuntime {
                 runtime,
                 execution: config.execution.clone(),
                 operation: turn.operation().clone(),
+                web_search: config
+                    .web_search_enabled
+                    .then(|| CodexWebSearchExecutionContext {
+                        provider: request.model.provider.clone(),
+                        model: request.model.id.to_string(),
+                        account_id: config.account_id,
+                        input: recent_search_input(&request.messages),
+                    }),
             };
             self.tools.execute_tool_calls(tool_calls, &context).await?
         };

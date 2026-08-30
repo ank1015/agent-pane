@@ -41,6 +41,7 @@ fn supports_parallel(tool_name: &str) -> bool {
         tool_codex_unified_exec::EXEC_COMMAND_TOOL_NAME
             | tool_codex_unified_exec::WRITE_STDIN_TOOL_NAME
             | tool_codex_view_image::TOOL_NAME
+            | "web.run"
     )
 }
 
@@ -61,6 +62,9 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(100), gate.acquire("view_image"))
             .await
             .expect("view_image should overlap another reader");
+        tokio::time::timeout(Duration::from_millis(100), gate.acquire("web.run"))
+            .await
+            .expect("web.run should overlap another reader");
         drop(first);
     }
 

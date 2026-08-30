@@ -11,8 +11,9 @@ use codex_code_mode_runtime::{
 use execution_runtime::{ExecutionRuntime, OperationContext};
 use futures_util::future::try_join_all;
 use llm_contracts::{
-    AssistantContent, ContentPart, MessageId, TextContent, Timestamp, ToolArguments,
-    ToolResultError, ToolResultMessage, ToolResultOutcome,
+    AssistantContent, ContentPart, MessageId, ProviderId, SearchCommands, SearchInput,
+    SearchRequest, SearchRequestOptions, TextContent, Timestamp, ToolArguments, ToolResultError,
+    ToolResultMessage, ToolResultOutcome,
 };
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
@@ -21,9 +22,18 @@ use uuid::Uuid;
 
 use super::{
     CodexExecutionTarget, StatelessToolContext, StatelessToolExecutor,
-    default_nested_tool_definitions, tool_admission::ToolAdmissionGate,
+    code_mode_nested_tool_definitions, tool_admission::ToolAdmissionGate,
 };
-use crate::persistence::CodexToolStateBackend;
+use crate::{clients::LlmGatewayClient, persistence::CodexToolStateBackend};
+
+/// Request-scoped inputs used by Codex's standalone `web.run` extension.
+#[derive(Clone)]
+pub struct CodexWebSearchExecutionContext {
+    pub provider: ProviderId,
+    pub model: String,
+    pub account_id: Option<Uuid>,
+    pub input: Option<SearchInput>,
+}
 
 /// Per-turn inputs used by both top-level code mode and its nested tools.
 #[derive(Clone)]
@@ -32,6 +42,7 @@ pub struct CodexToolExecutionContext {
     pub runtime: Arc<dyn ExecutionRuntime>,
     pub execution: CodexExecutionTarget,
     pub operation: OperationContext,
+    pub web_search: Option<CodexWebSearchExecutionContext>,
 }
 
 /// Dispatches Codex's stateful tools and owns the stable delegates used by
@@ -40,6 +51,7 @@ pub struct CodexToolExecutionContext {
 pub struct CodexToolExecutor {
     state: Arc<dyn CodexToolStateBackend>,
     stateless: Arc<StatelessToolExecutor>,
+    search: Option<LlmGatewayClient>,
     delegates: Arc<Mutex<HashMap<Uuid, Weak<SessionNestedToolDelegate>>>>,
 }
 
@@ -66,6 +78,20 @@ impl CodexToolExecutor {
         Self {
             state,
             stateless: Arc::new(StatelessToolExecutor::new()),
+            search: None,
+            delegates: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[must_use]
+    pub fn with_llm_gateway(
+        state: Arc<dyn CodexToolStateBackend>,
+        gateway: LlmGatewayClient,
+    ) -> Self {
+        Self {
+            state,
+            stateless: Arc::new(StatelessToolExecutor::new()),
+            search: Some(gateway),
             delegates: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -202,10 +228,10 @@ impl CodexToolExecutor {
             .state
             .code_mode_session(context.agent_session_id, delegate.clone())
             .await;
-        let nested_tools = default_nested_tool_definitions();
+        let nested_tools = code_mode_nested_tool_definitions(context.web_search.is_some());
         let tool_context =
             match tool_codex_code_mode::CodeModeToolContext::new(session.as_ref(), tool_call_id) {
-                Ok(context) => context.with_nested_tools(&nested_tools),
+                Ok(context) => context.with_runtime_nested_tools(&nested_tools),
                 Err(error) => return code_mode_error(error),
             };
         let output = match name {
@@ -266,6 +292,7 @@ impl CodexToolExecutor {
             agent_session_id,
             Arc::clone(&self.state),
             Arc::clone(&self.stateless),
+            self.search.clone(),
         ));
         delegates.insert(agent_session_id, Arc::downgrade(&delegate));
         delegate
@@ -295,12 +322,14 @@ struct NestedTurnBinding {
     execution: CodexExecutionTarget,
     operation: OperationContext,
     admission: ToolAdmissionGate,
+    web_search: Option<CodexWebSearchExecutionContext>,
 }
 
 struct SessionNestedToolDelegate {
     agent_session_id: Uuid,
     state: Arc<dyn CodexToolStateBackend>,
     stateless: Arc<StatelessToolExecutor>,
+    search: Option<LlmGatewayClient>,
     binding: RwLock<Option<NestedTurnBinding>>,
     notifications: Mutex<HashMap<String, Vec<String>>>,
 }
@@ -310,11 +339,13 @@ impl SessionNestedToolDelegate {
         agent_session_id: Uuid,
         state: Arc<dyn CodexToolStateBackend>,
         stateless: Arc<StatelessToolExecutor>,
+        search: Option<LlmGatewayClient>,
     ) -> Self {
         Self {
             agent_session_id,
             state,
             stateless,
+            search,
             binding: RwLock::new(None),
             notifications: Mutex::new(HashMap::new()),
         }
@@ -326,6 +357,7 @@ impl SessionNestedToolDelegate {
             execution: context.execution.clone(),
             operation: context.operation.clone(),
             admission,
+            web_search: context.web_search.clone(),
         });
     }
 
@@ -350,7 +382,9 @@ impl SessionNestedToolDelegate {
         };
         let admission = binding.admission.clone();
         let admission_future = async {
-            if invocation.tool_name.namespace.is_some() {
+            if is_web_run(&invocation) {
+                admission.acquire("web.run").await
+            } else if invocation.tool_name.namespace.is_some() {
                 admission.acquire_exclusive().await
             } else {
                 admission.acquire(&invocation.tool_name.name).await
@@ -364,7 +398,7 @@ impl SessionNestedToolDelegate {
                 return Err("code mode nested tool call cancelled".to_owned());
             }
         };
-        if invocation.tool_name.namespace.is_some() {
+        if invocation.tool_name.namespace.is_some() && !is_web_run(&invocation) {
             return Err(format!(
                 "unknown nested tool `{}`",
                 invocation.tool_name.name
@@ -381,38 +415,98 @@ impl SessionNestedToolDelegate {
             runtime: Arc::clone(&binding.runtime),
             execution: binding.execution,
             operation,
+            web_search: binding.web_search,
         };
-        let result = match invocation.tool_name.name.as_str() {
-            tool_codex_apply_patch::TOOL_NAME | tool_codex_view_image::TOOL_NAME => {
+        let result = match (
+            invocation.tool_name.namespace.as_deref(),
+            invocation.tool_name.name.as_str(),
+        ) {
+            (Some(tool_codex_web_search::WEB_NAMESPACE), tool_codex_web_search::RUN_TOOL_NAME) => {
+                self.execute_web_search(&invocation, &context).await
+            }
+            (None, tool_codex_apply_patch::TOOL_NAME | tool_codex_view_image::TOOL_NAME) => {
                 self.stateless
                     .execute_nested_tool_call_admitted(&invocation, &stateless_context(&context))
                     .await
             }
-            tool_codex_unified_exec::EXEC_COMMAND_TOOL_NAME
-            | tool_codex_unified_exec::WRITE_STDIN_TOOL_NAME => {
-                match nested_arguments(&invocation) {
-                    Ok(arguments) => match execute_unified(
-                        Arc::clone(&self.state),
-                        &invocation.tool_name.name,
-                        &arguments,
-                        &invocation.runtime_tool_call_id,
-                        &context,
-                    )
-                    .await
-                    {
-                        DispatchResult::Success { details, .. } => {
-                            Ok(details.unwrap_or(Value::Null))
-                        }
-                        DispatchResult::Error { message, .. } => Err(message),
-                    },
-                    Err(error) => Err(error),
-                }
-            }
-            name => Err(format!("unknown nested tool `{name}`")),
+            (
+                None,
+                tool_codex_unified_exec::EXEC_COMMAND_TOOL_NAME
+                | tool_codex_unified_exec::WRITE_STDIN_TOOL_NAME,
+            ) => match nested_arguments(&invocation) {
+                Ok(arguments) => match execute_unified(
+                    Arc::clone(&self.state),
+                    &invocation.tool_name.name,
+                    &arguments,
+                    &invocation.runtime_tool_call_id,
+                    &context,
+                )
+                .await
+                {
+                    DispatchResult::Success { details, .. } => Ok(details.unwrap_or(Value::Null)),
+                    DispatchResult::Error { message, .. } => Err(message),
+                },
+                Err(error) => Err(error),
+            },
+            _ => Err(format!(
+                "unknown nested tool `{}`",
+                display_nested_tool_name(&invocation)
+            )),
         };
         cancellation_watcher.abort();
         result
     }
+
+    async fn execute_web_search(
+        &self,
+        invocation: &CodeModeNestedToolCall,
+        context: &CodexToolExecutionContext,
+    ) -> Result<Value, String> {
+        let Some(search) = &self.search else {
+            return Err("web search transport is unavailable".to_owned());
+        };
+        let Some(web) = &context.web_search else {
+            return Err("web search is disabled for this run".to_owned());
+        };
+        let input = invocation
+            .input
+            .clone()
+            .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+        let commands = serde_json::from_value::<SearchCommands>(input)
+            .map_err(|error| format!("invalid web.run arguments: {error}"))?;
+        let request = SearchRequest {
+            id: context.agent_session_id.to_string(),
+            model: web.model.clone(),
+            reasoning: None,
+            input: web.input.clone(),
+            commands: Some(commands),
+            settings: Some(tool_codex_web_search::default_search_settings()),
+            max_output_tokens: Some(tool_codex_web_search::DEFAULT_SEARCH_MAX_OUTPUT_TOKENS),
+        };
+        let response = search
+            .search(
+                web.account_id,
+                &web.provider,
+                &request,
+                &SearchRequestOptions::default(),
+                &context.operation,
+            )
+            .await
+            .map_err(|error| format!("web search request failed: {error}"))?;
+        Ok(Value::String(response.output))
+    }
+}
+
+fn is_web_run(invocation: &CodeModeNestedToolCall) -> bool {
+    invocation.tool_name.namespace.as_deref() == Some(tool_codex_web_search::WEB_NAMESPACE)
+        && invocation.tool_name.name == tool_codex_web_search::RUN_TOOL_NAME
+}
+
+fn display_nested_tool_name(invocation: &CodeModeNestedToolCall) -> String {
+    invocation.tool_name.namespace.as_ref().map_or_else(
+        || invocation.tool_name.name.clone(),
+        |namespace| format!("{namespace}.{}", invocation.tool_name.name),
+    )
 }
 
 impl CodeModeSessionDelegate for SessionNestedToolDelegate {
@@ -655,9 +749,15 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
+    use std::{
+        collections::HashMap,
+        path::Path,
+        sync::{Arc, Mutex as StdMutex},
+        time::Duration,
+    };
 
     use async_trait::async_trait;
+    use axum::{Json, Router, extract::State, routing::post};
     use codex_code_mode_runtime::{
         CellId, CodeModeNestedToolCall, CodeModeSession, CodeModeSessionDelegate, CodeModeToolKind,
         InMemoryCodeModeStateStore, ToolName,
@@ -666,8 +766,11 @@ mod tests {
     use execution_local::{LocalExecutionRuntime, LocalRuntimeConfig, LocalWorkspaceRoot};
     use execution_runtime::OperationContext;
     use llm_contracts::{
-        AssistantContent, ContentPart, ToolArguments, ToolCallId, ToolResultOutcome,
+        AssistantContent, ContentPart, ProviderId, SearchInput, ToolArguments, ToolCallId,
+        ToolResultOutcome,
     };
+    use serde_json::Value as JsonValue;
+    use tokio::net::TcpListener;
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
     use tool_codex_unified_exec::{
@@ -676,10 +779,13 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        CodexToolExecutionContext, CodexToolExecutor, DispatchResult, ToolAdmissionBatch,
-        ToolAdmissionGate, is_cancellation_origin, user_aborted_tool_result,
+        CodexToolExecutionContext, CodexToolExecutor, CodexWebSearchExecutionContext,
+        DispatchResult, ToolAdmissionBatch, ToolAdmissionGate, is_cancellation_origin,
+        user_aborted_tool_result,
     };
     use crate::{
+        clients::LlmGatewayClient,
+        config::LlmGatewayServiceConfig,
         persistence::{CodeModeSessionFuture, CodexToolStateBackend, LiveCodeModeRegistry},
         runtime::CodexExecutionTarget,
     };
@@ -841,6 +947,105 @@ store("answer", 42);"#
         };
         assert_eq!(error.name.as_deref(), Some("code_mode_script_error"));
         assert!(text(&result.content).contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn web_run_uses_codex_search_request_defaults_and_returns_only_output() {
+        let captured = Arc::new(StdMutex::new(None));
+        let app = Router::new()
+            .route("/v1/search", post(search_response))
+            .with_state(captured.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind server");
+        let address = listener.local_addr().expect("server address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve gateway");
+        });
+        let gateway = LlmGatewayClient::new(LlmGatewayServiceConfig {
+            base_url: format!("http://{address}").parse().expect("gateway URL"),
+            request_timeout: Duration::from_secs(5),
+        })
+        .expect("gateway client");
+        let fixture = Fixture::new().await;
+        let executor =
+            CodexToolExecutor::with_llm_gateway(Arc::new(InMemoryToolState::default()), gateway);
+        let account_id = Uuid::now_v7();
+        let mut context = fixture.context(OperationContext::new());
+        context.web_search = Some(CodexWebSearchExecutionContext {
+            provider: ProviderId::new("openai").expect("provider"),
+            model: "gpt-5.6-sol".to_owned(),
+            account_id: Some(account_id),
+            input: Some(SearchInput::Items(vec![serde_json::json!({
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "current question"}]
+            })])),
+        });
+
+        let result = executor
+            .execute_tool_call(
+                &call(
+                    "exec",
+                    ToolArguments::String(
+                        r#"const result = await tools.web__run({
+    search_query: [{q: "Codex web.run"}],
+    response_length: "short"
+});
+text(result);"#
+                            .to_owned(),
+                    ),
+                    "web-code-mode",
+                ),
+                &context,
+            )
+            .await
+            .expect("code-mode result");
+
+        assert_eq!(result.outcome, ToolResultOutcome::Success);
+        let output = text(&result.content);
+        assert!(output.contains("web answer"));
+        assert!(!output.contains("computer_initialize_state"));
+        let request = captured.lock().expect("capture lock").clone().unwrap();
+        assert_eq!(request["account_id"], account_id.to_string());
+        assert_eq!(request["provider"], "openai");
+        assert_eq!(
+            request["request"]["id"],
+            fixture.agent_session_id.to_string()
+        );
+        assert_eq!(request["request"]["model"], "gpt-5.6-sol");
+        assert!(request["request"].get("reasoning").is_none());
+        assert_eq!(request["request"]["input"][0]["role"], "user");
+        assert_eq!(
+            request["request"]["commands"],
+            serde_json::json!({
+                "search_query": [{"q": "Codex web.run"}],
+                "response_length": "short"
+            })
+        );
+        assert_eq!(
+            request["request"]["settings"],
+            serde_json::json!({
+                "allowed_callers": ["direct"],
+                "external_web_access": false
+            })
+        );
+        assert_eq!(request["request"]["max_output_tokens"], 2_500);
+        assert_eq!(request["request_options"], serde_json::json!({}));
+    }
+
+    async fn search_response(
+        State(captured): State<Arc<StdMutex<Option<JsonValue>>>>,
+        Json(request): Json<JsonValue>,
+    ) -> Json<JsonValue> {
+        *captured.lock().expect("capture lock") = Some(request);
+        Json(serde_json::json!({
+            "request_id": Uuid::now_v7(),
+            "account_id": Uuid::now_v7(),
+            "response": {
+                "encrypted_output": "opaque",
+                "output": "web answer",
+                "results": [{"type": "computer_initialize_state"}]
+            }
+        }))
     }
 
     #[tokio::test]
@@ -1258,6 +1463,7 @@ text(results.map(result => result.output).join(""));"#
                 runtime: self.runtime.clone(),
                 execution: self.execution.clone(),
                 operation,
+                web_search: None,
             }
         }
 
