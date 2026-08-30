@@ -146,11 +146,45 @@ async fn registers_and_activates_the_packaged_pi_harness() {
         calls[0].body["description"],
         "Minimalistic pi agent with four tools. Single agent, Single machine."
     );
+    assert_eq!(
+        calls[0].body["supported_providers"],
+        json!([
+            {
+                "provider_id": "openai",
+                "model_ids": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+            },
+            {
+                "provider_id": "chatgpt",
+                "model_ids": ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+            },
+            {
+                "provider_id": "fireworks",
+                "model_ids": [
+                    "accounts/fireworks/models/kimi-k3",
+                    "accounts/fireworks/models/deepseek-v4-pro-0813",
+                    "accounts/fireworks/models/qwen3p8-2p4t-a95b",
+                    "accounts/fireworks/models/deepseek-v4-flash-0731"
+                ]
+            },
+            {
+                "provider_id": "deepseek",
+                "model_ids": [
+                    "deepseek-v4-flash",
+                    "deepseek-v4-pro",
+                    "deepseek-v4-flash-vision-exp"
+                ]
+            }
+        ])
+    );
     assert_eq!(calls[1].method, Method::PATCH);
     assert_eq!(calls[1].path, "/v1/harnesses/pi");
     assert_eq!(
         calls[1].body["description"],
         "Minimalistic pi agent with four tools. Single agent, Single machine."
+    );
+    assert_eq!(
+        calls[1].body["supported_providers"],
+        calls[0].body["supported_providers"]
     );
     assert_eq!(calls[2].body["harness_revision_id"], PI_HARNESS_REVISION_ID);
     assert_eq!(calls[2].body["default_config"]["model_id"], "gpt-5.6-sol");

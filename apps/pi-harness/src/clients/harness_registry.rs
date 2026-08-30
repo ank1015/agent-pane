@@ -1,8 +1,9 @@
 use agent_harness_sdk::{
-    AgentControlServiceConfig, CreateHarnessRequest, HarnessDescriptor, HarnessRegistryClient,
-    HarnessRegistryError, RegisterHarnessRevisionRequest, UpdateHarnessRequest,
+    AgentControlServiceConfig, CreateHarnessRequest, HarnessDescriptor, HarnessProvider,
+    HarnessRegistryClient, HarnessRegistryError, RegisterHarnessRevisionRequest,
+    UpdateHarnessRequest,
 };
-use llm_contracts::JsonObject;
+use llm_contracts::{JsonObject, ModelId, ProviderId};
 use serde_json::json;
 
 use crate::harness::model_catalog::{SUPPORTED_PROVIDERS, model_ids};
@@ -36,6 +37,7 @@ fn pi_harness() -> CreateHarnessRequest {
         slug: "pi".to_owned(),
         display_name: "Pi Coding Agent".to_owned(),
         description: Some(pi_harness_description().to_owned()),
+        supported_providers: pi_supported_providers(),
     }
 }
 
@@ -43,7 +45,22 @@ fn pi_harness_metadata() -> UpdateHarnessRequest {
     UpdateHarnessRequest {
         display_name: None,
         description: Some(Some(pi_harness_description().to_owned())),
+        supported_providers: Some(pi_supported_providers()),
     }
+}
+
+fn pi_supported_providers() -> Vec<HarnessProvider> {
+    SUPPORTED_PROVIDERS
+        .iter()
+        .map(|provider_id| HarnessProvider {
+            provider_id: ProviderId::new(*provider_id).expect("catalog provider id is valid"),
+            model_ids: model_ids(provider_id)
+                .expect("supported provider has a model catalog")
+                .into_iter()
+                .map(|model_id| ModelId::new(model_id).expect("catalog model id is valid"))
+                .collect(),
+        })
+        .collect()
 }
 
 fn pi_harness_description() -> &'static str {
