@@ -34,6 +34,10 @@ httpdate = "1.0"
 ignore = "0.4"
 jsonschema = { version = "0.50", default-features = false }
 llm-contracts = { path = "packages/llm-contracts", version = "0.1.0" }
+tool-pi-read = { path = "packages/tool-pi-read", version = "0.1.0" }
+tool-pi-edit = { path = "packages/tool-pi-edit", version = "0.1.0" }
+tool-pi-bash = { path = "packages/tool-pi-bash", version = "0.1.0" }
+tool-pi-write = { path = "packages/tool-pi-write", version = "0.1.0" }
 provider-anthropic = { path = "packages/provider-anthropic", version = "0.1.0" }
 provider-chatgpt = { path = "packages/provider-chatgpt", version = "0.1.0" }
 provider-deepseek = { path = "packages/provider-deepseek", version = "0.1.0" }

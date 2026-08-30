@@ -1,22 +1,12 @@
-pub mod bash;
-pub mod edit;
-pub mod read;
-mod truncate;
-pub mod write;
-
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use execution_contracts::{
-    MachineDescriptor, OperationId, PathConvention, PathSpec, WorkspaceRootId,
-};
+use execution_contracts::WorkspaceRootId;
 use execution_runtime::{ExecutionRuntime, OperationContext};
 use llm_contracts::{
-    AssistantContent, ContentPart, FunctionTool, MessageId, TextContent, Timestamp, ToolArguments,
+    AssistantContent, ContentPart, MessageId, TextContent, Timestamp, ToolArguments,
     ToolDefinition, ToolResultError, ToolResultMessage, ToolResultOutcome,
 };
-use serde::de::DeserializeOwned;
 use serde_json::Value;
-use url::Url;
 use uuid::Uuid;
 
 pub struct ToolExecutionContext<'a> {
@@ -49,39 +39,6 @@ impl WorkspaceCwd {
     pub fn path(&self) -> &str {
         &self.path
     }
-
-    fn resolve(
-        &self,
-        descriptor: &MachineDescriptor,
-        input: &str,
-    ) -> Result<PathSpec, ToolExecutionError> {
-        let root = descriptor
-            .workspace_roots
-            .iter()
-            .find(|root| root.id == self.root_id)
-            .ok_or_else(|| {
-                ToolExecutionError::invalid_path(format!(
-                    "workspace root `{}` is not exposed by the execution runtime",
-                    self.root_id
-                ))
-            })?;
-        let was_absolute = is_absolute_for(descriptor.path_convention, input);
-        let input = match descriptor.path_convention {
-            PathConvention::Posix if was_absolute => {
-                absolute_path_within_root(input, &root.uri, false)?
-            }
-            PathConvention::Windows if was_absolute => {
-                absolute_path_within_root(input, &root.uri, true)?
-            }
-            PathConvention::Windows => input.replace('\\', "/"),
-            PathConvention::Posix => input.to_owned(),
-        };
-        let base = if was_absolute { "." } else { &self.path };
-        Ok(PathSpec::workspace(
-            self.root_id.clone(),
-            normalize_relative_path(base, &input)?,
-        ))
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -101,47 +58,8 @@ impl ToolExecutionError {
         }
     }
 
-    fn with_details(mut self, details: Value) -> Self {
-        self.details = Some(details);
-        self
-    }
-
-    pub(crate) fn invalid_arguments(tool: &str, message: impl std::fmt::Display) -> Self {
-        Self::new(
-            "invalid_arguments",
-            format!("Invalid arguments for {tool}: {message}"),
-        )
-    }
-
-    pub(crate) fn invalid_path(message: impl Into<String>) -> Self {
+    fn invalid_path(message: impl Into<String>) -> Self {
         Self::new("invalid_path", message)
-    }
-
-    pub(crate) fn missing_capability(capability: &str) -> Self {
-        Self::new(
-            "unsupported_capability",
-            format!("Execution runtime does not support {capability}"),
-        )
-    }
-
-    pub(crate) fn command(message: impl Into<String>, details: Option<Value>) -> Self {
-        let error = Self::new("command_failed", message);
-        match details {
-            Some(details) => error.with_details(details),
-            None => error,
-        }
-    }
-
-    pub(crate) fn cancelled(message: impl Into<String>) -> Self {
-        Self::new("cancelled", message)
-    }
-
-    pub(crate) fn process(message: impl Into<String>) -> Self {
-        Self::new("process_error", message)
-    }
-
-    pub(crate) fn tool(name: &'static str, message: impl Into<String>) -> Self {
-        Self::new(name, message)
     }
 
     fn into_parts(self) -> (&'static str, String, Option<Value>) {
@@ -149,12 +67,45 @@ impl ToolExecutionError {
     }
 }
 
-impl From<execution_contracts::ExecutionError> for ToolExecutionError {
-    fn from(error: execution_contracts::ExecutionError) -> Self {
-        let details = serde_json::to_value(&error).ok();
+impl From<tool_pi_bash::BashToolError> for ToolExecutionError {
+    fn from(error: tool_pi_bash::BashToolError) -> Self {
+        let (name, message, details) = error.into_parts();
         Self {
-            name: "execution_error",
-            message: error.message,
+            name,
+            message,
+            details,
+        }
+    }
+}
+
+impl From<tool_pi_edit::EditToolError> for ToolExecutionError {
+    fn from(error: tool_pi_edit::EditToolError) -> Self {
+        let (name, message, details) = error.into_parts();
+        Self {
+            name,
+            message,
+            details,
+        }
+    }
+}
+
+impl From<tool_pi_read::ReadToolError> for ToolExecutionError {
+    fn from(error: tool_pi_read::ReadToolError) -> Self {
+        let (name, message, details) = error.into_parts();
+        Self {
+            name,
+            message,
+            details,
+        }
+    }
+}
+
+impl From<tool_pi_write::WriteToolError> for ToolExecutionError {
+    fn from(error: tool_pi_write::WriteToolError) -> Self {
+        let (name, message, details) = error.into_parts();
+        Self {
+            name,
+            message,
             details,
         }
     }
@@ -165,26 +116,48 @@ pub struct ToolOutput {
     pub details: Option<Value>,
 }
 
-impl ToolOutput {
-    pub(crate) fn text(content: impl Into<String>) -> Self {
+impl From<tool_pi_bash::BashToolOutput> for ToolOutput {
+    fn from(output: tool_pi_bash::BashToolOutput) -> Self {
         Self {
-            content: vec![text_content(content)],
-            details: None,
+            content: output.content,
+            details: output.details,
         }
     }
+}
 
-    pub(crate) fn with_details(mut self, details: Value) -> Self {
-        self.details = Some(details);
-        self
+impl From<tool_pi_edit::EditToolOutput> for ToolOutput {
+    fn from(output: tool_pi_edit::EditToolOutput) -> Self {
+        Self {
+            content: output.content,
+            details: output.details,
+        }
+    }
+}
+
+impl From<tool_pi_read::ReadToolOutput> for ToolOutput {
+    fn from(output: tool_pi_read::ReadToolOutput) -> Self {
+        Self {
+            content: output.content,
+            details: output.details,
+        }
+    }
+}
+
+impl From<tool_pi_write::WriteToolOutput> for ToolOutput {
+    fn from(output: tool_pi_write::WriteToolOutput) -> Self {
+        Self {
+            content: output.content,
+            details: output.details,
+        }
     }
 }
 
 pub fn default_tool_definitions() -> Vec<ToolDefinition> {
     vec![
-        read::definition(),
-        bash::definition(),
-        edit::definition(),
-        write::definition(),
+        tool_pi_read::definition(),
+        tool_pi_bash::definition(),
+        tool_pi_edit::definition(),
+        tool_pi_write::definition(),
     ]
 }
 
@@ -205,10 +178,10 @@ pub async fn execute_tool_call(
     };
 
     let result = match name.as_str() {
-        "bash" => bash::execute_bash_tool(arguments, context).await,
-        "read" => read::execute_read_tool(arguments, context).await,
-        "write" => write::execute_write_tool(arguments, context).await,
-        "edit" => edit::execute_edit_tool(arguments, context).await,
+        "bash" => execute_bash_tool(arguments, context).await,
+        "read" => execute_read_tool(arguments, context).await,
+        "write" => execute_write_tool(arguments, context).await,
+        "edit" => execute_edit_tool(arguments, context).await,
         _ => Err(ToolExecutionError::new(
             "unknown_tool",
             format!("Unknown tool `{name}`"),
@@ -244,45 +217,71 @@ pub async fn execute_tool_call(
     })
 }
 
-fn function_tool(name: &str, description: &str, parameters: Value) -> ToolDefinition {
-    let Value::Object(parameters) = parameters else {
-        unreachable!("tool parameters are declared as an object")
-    };
-
-    ToolDefinition::Function(FunctionTool {
-        name: name.to_owned(),
-        description: description.to_owned(),
-        parameters,
-        strict: None,
-    })
-}
-
-pub(crate) fn parse_arguments<T: DeserializeOwned>(
-    tool: &str,
+async fn execute_bash_tool(
     arguments: &ToolArguments,
-) -> Result<T, ToolExecutionError> {
-    match arguments {
-        ToolArguments::Object(arguments) => {
-            serde_json::from_value(Value::Object(arguments.clone()))
-        }
-        ToolArguments::String(arguments) => serde_json::from_str(arguments),
-    }
-    .map_err(|error| ToolExecutionError::invalid_arguments(tool, error))
-}
-
-pub(crate) fn resolve_path(
     context: &ToolExecutionContext<'_>,
-    input: &str,
-) -> Result<PathSpec, ToolExecutionError> {
-    context.cwd.resolve(context.runtime.descriptor(), input)
+) -> Result<ToolOutput, ToolExecutionError> {
+    let bash_context = tool_pi_bash::BashToolContext::new(
+        context.runtime,
+        context.operation,
+        context.cwd.root_id().clone(),
+        context.cwd.path(),
+    )?;
+    tool_pi_bash::execute_bash_tool(arguments, &bash_context)
+        .await
+        .map(Into::into)
+        .map_err(Into::into)
 }
 
-pub(crate) fn operation_id(prefix: &str) -> OperationId {
-    OperationId::new(format!("{prefix}-{}", Uuid::now_v7()))
-        .expect("UUID operation identifier is valid")
+async fn execute_edit_tool(
+    arguments: &ToolArguments,
+    context: &ToolExecutionContext<'_>,
+) -> Result<ToolOutput, ToolExecutionError> {
+    let edit_context = tool_pi_edit::EditToolContext::new(
+        context.runtime,
+        context.operation,
+        context.cwd.root_id().clone(),
+        context.cwd.path(),
+    )?;
+    tool_pi_edit::execute_edit_tool(arguments, &edit_context)
+        .await
+        .map(Into::into)
+        .map_err(Into::into)
 }
 
-pub(crate) fn text_content(content: impl Into<String>) -> ContentPart {
+async fn execute_read_tool(
+    arguments: &ToolArguments,
+    context: &ToolExecutionContext<'_>,
+) -> Result<ToolOutput, ToolExecutionError> {
+    let read_context = tool_pi_read::ReadToolContext::new(
+        context.runtime,
+        context.operation,
+        context.cwd.root_id().clone(),
+        context.cwd.path(),
+    )?;
+    tool_pi_read::execute_read_tool(arguments, &read_context)
+        .await
+        .map(Into::into)
+        .map_err(Into::into)
+}
+
+async fn execute_write_tool(
+    arguments: &ToolArguments,
+    context: &ToolExecutionContext<'_>,
+) -> Result<ToolOutput, ToolExecutionError> {
+    let write_context = tool_pi_write::WriteToolContext::new(
+        context.runtime,
+        context.operation,
+        context.cwd.root_id().clone(),
+        context.cwd.path(),
+    )?;
+    tool_pi_write::execute_write_tool(arguments, &write_context)
+        .await
+        .map(Into::into)
+        .map_err(Into::into)
+}
+
+fn text_content(content: impl Into<String>) -> ContentPart {
     ContentPart::Text(TextContent {
         content: content.into(),
         metadata: None,
@@ -323,70 +322,6 @@ fn normalize_relative_path(base: &str, input: &str) -> Result<String, ToolExecut
     } else {
         segments.join("/")
     })
-}
-
-fn absolute_path_within_root(
-    input: &str,
-    root_uri: &str,
-    windows: bool,
-) -> Result<String, ToolExecutionError> {
-    let root_url = Url::parse(root_uri).map_err(|_| {
-        ToolExecutionError::invalid_path("workspace root has an invalid absolute URI")
-    })?;
-    if root_url.scheme() != "file" {
-        return Err(ToolExecutionError::invalid_path(
-            "absolute tool paths require a file-backed workspace root",
-        ));
-    }
-
-    let mut root = if windows {
-        root_url.path().to_owned()
-    } else {
-        root_url
-            .to_file_path()
-            .map_err(|()| {
-                ToolExecutionError::invalid_path(
-                    "workspace root file URI cannot be converted to an absolute path",
-                )
-            })?
-            .to_string_lossy()
-            .into_owned()
-    };
-    root.truncate(root.trim_end_matches('/').len());
-    let mut input = input.replace('\\', "/");
-    if windows {
-        root = root.trim_start_matches('/').to_owned();
-        input = input.trim_start_matches('/').to_owned();
-    }
-    let matches_root = if windows {
-        input.eq_ignore_ascii_case(&root)
-    } else {
-        input == root
-    };
-    if matches_root {
-        return Ok(".".to_owned());
-    }
-    let prefix = format!("{root}/");
-    let within_root = if windows {
-        input
-            .get(..prefix.len())
-            .is_some_and(|value| value.eq_ignore_ascii_case(&prefix))
-    } else {
-        input.starts_with(&prefix)
-    };
-    if !within_root {
-        return Err(ToolExecutionError::invalid_path(
-            "absolute path is outside the active workspace root",
-        ));
-    }
-    Ok(input[prefix.len()..].to_owned())
-}
-
-fn is_absolute_for(convention: PathConvention, path: &str) -> bool {
-    match convention {
-        PathConvention::Posix => path.as_bytes().first().is_some_and(|value| *value == b'/'),
-        PathConvention::Windows => is_windows_absolute(path),
-    }
 }
 
 fn is_windows_absolute(path: &str) -> bool {
