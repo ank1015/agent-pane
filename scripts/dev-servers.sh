@@ -439,6 +439,16 @@ if ! kill -0 "$pi_harness_pid" 2>/dev/null; then
   exit 1
 fi
 
+codex_harness_timezone="$(env_value "$codex_harness_env" "CODEX_HARNESS_TIMEZONE")"
+codex_harness_timezone="${codex_harness_timezone:-${CODEX_HARNESS_TIMEZONE:-${TZ:-}}}"
+if [[ -z "$codex_harness_timezone" && -L /etc/localtime ]]; then
+  localtime_target="$(readlink /etc/localtime)"
+  if [[ "$localtime_target" == *zoneinfo/* ]]; then
+    codex_harness_timezone="${localtime_target#*zoneinfo/}"
+  fi
+fi
+codex_harness_timezone="${codex_harness_timezone:-UTC}"
+
 start_with_env \
   "codex-harness" \
   "$codex_harness_env" \
@@ -451,6 +461,7 @@ start_with_env \
   "CODEX_HARNESS_EXECUTION_GATEWAY_URL=http://127.0.0.1:8790" \
   "CODEX_HARNESS_EXECUTION_GATEWAY_TOKEN=$execution_gateway_api_token" \
   "CODEX_HARNESS_DATABASE_URL=$codex_harness_database_url" \
+  "CODEX_HARNESS_TIMEZONE=$codex_harness_timezone" \
   "RUST_LOG=codex_harness=info"
 codex_harness_pid="$started_pid"
 
