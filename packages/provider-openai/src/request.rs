@@ -1,7 +1,7 @@
 use llm_contracts::{
     AssistantContent, ContentPart, CustomMessage, CustomTool, FunctionTool, GrammarSyntax,
     ImageDetail, ImageSource, LlmError, LlmRequest, Message, TextContent, ToolArguments,
-    ToolDefinition, ToolResultMessage, ToolResultOutcome, Validate,
+    ToolDefinition, ToolResultMessage, Validate,
 };
 use serde_json::{Value, json};
 
@@ -83,6 +83,9 @@ pub(crate) fn build_response_request_for_model(
     for message in &request.messages {
         input.extend(map_message(message, &request.tools)?);
     }
+    if responses_lite {
+        strip_image_details(&mut input);
+    }
 
     body.insert("model".into(), Value::String(model.id.to_owned()));
     if responses_lite {
@@ -117,6 +120,41 @@ pub(crate) fn build_response_request_for_model(
     }
     body.insert("input".into(), Value::Array(input));
     Ok(Value::Object(body))
+}
+
+/// Responses Lite uses a unified image budget and does not accept the legacy
+/// per-image detail hint. Keep the hint in the portable transcript for other
+/// providers, but remove it from every model-input image at this final wire
+/// formatting boundary.
+fn strip_image_details(items: &mut [Value]) {
+    for item in items {
+        let Some(item) = item.as_object_mut() else {
+            continue;
+        };
+        match item.get("type").and_then(Value::as_str) {
+            Some("message") => {
+                strip_content_image_details(item.get_mut("content"));
+            }
+            Some("function_call_output" | "custom_tool_call_output") => {
+                strip_content_image_details(item.get_mut("output"));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn strip_content_image_details(content: Option<&mut Value>) {
+    let Some(content) = content.and_then(Value::as_array_mut) else {
+        return;
+    };
+    for part in content {
+        let Some(part) = part.as_object_mut() else {
+            continue;
+        };
+        if part.get("type").and_then(Value::as_str) == Some("input_image") {
+            part.remove("detail");
+        }
+    }
 }
 
 fn map_message(message: &Message, tools: &[ToolDefinition]) -> Result<Vec<Value>, LlmError> {
@@ -234,13 +272,7 @@ fn map_tool_result(
             })
             .collect::<Vec<_>>()
             .join("\n");
-        Value::String(
-            if matches!(message.outcome, ToolResultOutcome::Error { .. }) {
-                format!("[TOOL ERROR] {text}")
-            } else {
-                text
-            },
-        )
+        Value::String(text)
     } else {
         Value::Array(map_content(&message.content))
     };

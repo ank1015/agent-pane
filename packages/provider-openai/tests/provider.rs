@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use llm_contracts::{
     AssistantContent, AssistantMessage, ContentPart, FunctionTool, ImageContent, ImageDetail,
     ImageSource, LlmRequest, Message, MessageId, ModelId, ModelRef, ProviderId, StopReason,
-    TextContent, Timestamp, ToolArguments, ToolCallId, ToolDefinition, UserMessage,
+    TextContent, Timestamp, ToolArguments, ToolCallId, ToolDefinition, ToolResultError,
+    ToolResultMessage, ToolResultOutcome, UserMessage,
 };
 use provider_openai::{
     OPENAI_MODELS, build_response_request, calculate_usage_cost, convert_response, find_model,
@@ -81,6 +82,68 @@ fn request_is_non_streaming_and_catalog_owned_fields_win() {
         body["input"][0]["content"][1]["image_url"],
         "https://example.com/image.png"
     );
+    assert_eq!(body["input"][0]["content"][1]["detail"], "high");
+}
+
+#[test]
+fn responses_lite_preserves_image_urls_and_omits_detail() {
+    let mut request = request("gpt-5.6-sol");
+    request.messages = vec![Message::User(UserMessage {
+        id: MessageId::new("user-1").expect("valid id"),
+        timestamp: Timestamp(1),
+        content: vec![ContentPart::Image(ImageContent {
+            source: ImageSource::Url(llm_contracts::UrlImageSource {
+                url: "https://example.com/image.png".into(),
+            }),
+            detail: Some(ImageDetail::Original),
+            metadata: None,
+        })],
+    })];
+    request.provider_options.insert(
+        provider_openai::CODEX_RESPONSES_LITE_OPTION.into(),
+        json!(true),
+    );
+
+    let body = build_response_request(&request).expect("valid request");
+    let image = &body["input"][0]["content"][0];
+
+    assert_eq!(image["type"], "input_image");
+    assert_eq!(image["image_url"], "https://example.com/image.png");
+    assert!(image.get("detail").is_none());
+}
+
+#[test]
+fn responses_lite_omits_image_detail_from_native_input_items() {
+    let mut request = request("gpt-5.6-sol");
+    request
+        .messages
+        .push(Message::Custom(llm_contracts::CustomMessage {
+            id: MessageId::new("custom-1").expect("valid id"),
+            timestamp: Timestamp(1),
+            tag: Some(provider_openai::OPENAI_NATIVE_INPUT_TAG.into()),
+            content: Map::from_iter([(
+                "items".into(),
+                json!([{
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-1",
+                    "output": [{
+                        "type": "input_image",
+                        "image_url": "https://example.com/tool-output.png",
+                        "detail": "original"
+                    }]
+                }]),
+            )]),
+        }));
+    request.provider_options.insert(
+        provider_openai::CODEX_RESPONSES_LITE_OPTION.into(),
+        json!(true),
+    );
+
+    let body = build_response_request(&request).expect("valid request");
+    let image = &body["input"][0]["output"][0];
+
+    assert_eq!(image["image_url"], "https://example.com/tool-output.png");
+    assert!(image.get("detail").is_none());
 }
 
 #[test]
@@ -102,6 +165,43 @@ fn request_merges_hosted_and_portable_tools() {
     assert_eq!(body["tools"][0]["type"], "web_search_preview");
     assert_eq!(body["tools"][1]["type"], "function");
     assert_eq!(body["tools"][1]["strict"], Value::Null);
+}
+
+#[test]
+fn failed_tool_result_uses_raw_model_visible_text() {
+    let mut request = request("gpt-5.6-luna");
+    request.tools.push(ToolDefinition::Function(FunctionTool {
+        name: "weather".into(),
+        description: "Get weather".into(),
+        parameters: Map::from_iter([("type".into(), json!("object"))]),
+        output_schema: None,
+        strict: Some(false),
+    }));
+    request
+        .messages
+        .push(Message::ToolResult(ToolResultMessage {
+            id: MessageId::new("tool-result-1").expect("valid id"),
+            tool_name: "weather".into(),
+            tool_call_id: ToolCallId::new("call-1").expect("valid id"),
+            content: vec![ContentPart::Text(TextContent {
+                content: "provider unavailable".into(),
+                metadata: None,
+            })],
+            details: None,
+            timestamp: Timestamp(1),
+            outcome: ToolResultOutcome::Error {
+                error: ToolResultError {
+                    message: "provider unavailable".into(),
+                    name: Some("upstream_error".into()),
+                },
+            },
+        }));
+
+    let body = build_response_request(&request).expect("valid request");
+
+    assert_eq!(body["input"][0]["type"], "function_call_output");
+    assert_eq!(body["input"][0]["call_id"], "call-1");
+    assert_eq!(body["input"][0]["output"], "provider unavailable");
 }
 
 #[test]
