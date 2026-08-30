@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use llm_contracts::{LlmRequest, LlmTransport, ModelId, ModelRef, ProviderId};
+use llm_contracts::{
+    LlmRequest, LlmTransport, ModelId, ModelRef, ProviderId, SearchCommands, SearchRequest,
+    SearchRequestOptions, TimeOperation,
+};
 use provider_chatgpt::{ChatGptConfig, ChatGptProvider};
 use serde_json::{Map, Value, json};
 use tokio::{
@@ -153,6 +156,60 @@ async fn responses_lite_sends_the_native_codex_header() {
             .to_ascii_lowercase()
             .contains("x-openai-internal-codex-responses-lite: true\r\n")
     );
+}
+
+#[tokio::test]
+async fn search_uses_the_chatgpt_codex_endpoint_and_credentials() {
+    let response_body = json!({
+        "encrypted_output": null,
+        "output": "The time is 12:00",
+        "results": []
+    })
+    .to_string();
+    let (base_url, captured) =
+        spawn_server("200 OK", &[], &response_body, "application/json").await;
+    let provider = ChatGptProvider::new(
+        ChatGptConfig::new("oauth-token", "account-123")
+            .expect("valid config")
+            .with_base_url(format!("{base_url}/backend-api"))
+            .expect("valid test URL"),
+    )
+    .expect("valid provider");
+
+    let response = provider
+        .search(
+            SearchRequest {
+                id: "session-1".into(),
+                model: "gpt-5.6-luna".into(),
+                reasoning: None,
+                input: None,
+                commands: Some(SearchCommands {
+                    time: Some(vec![TimeOperation {
+                        utc_offset: "+00:00".into(),
+                    }]),
+                    ..Default::default()
+                }),
+                settings: None,
+                max_output_tokens: Some(1024),
+            },
+            SearchRequestOptions::default(),
+        )
+        .await
+        .expect("successful search");
+    let raw_request = captured.await.expect("mock server completed");
+    let lower = raw_request.to_ascii_lowercase();
+    let body: Value =
+        serde_json::from_str(raw_request.split_once("\r\n\r\n").expect("request body").1)
+            .expect("JSON request");
+
+    assert!(raw_request.starts_with("POST /backend-api/codex/alpha/search HTTP/1.1\r\n"));
+    assert!(lower.contains("authorization: bearer oauth-token\r\n"));
+    assert!(lower.contains("chatgpt-account-id: account-123\r\n"));
+    assert!(lower.contains("originator: agent-pane\r\n"));
+    assert!(lower.contains("accept: application/json\r\n"));
+    assert!(!lower.contains("openai-beta:"));
+    assert_eq!(body["commands"]["time"][0]["utc_offset"], "+00:00");
+    assert_eq!(response.output, "The time is 12:00");
 }
 
 fn sse_body(events: &[Value]) -> String {

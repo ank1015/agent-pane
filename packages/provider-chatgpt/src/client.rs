@@ -2,7 +2,8 @@ use std::time::{Instant, SystemTime};
 
 use async_trait::async_trait;
 use llm_contracts::{
-    AssistantMessage, LlmError, LlmProviderAdapter, LlmRequest, LlmTransport, ProviderId, Validate,
+    AssistantMessage, LlmError, LlmProviderAdapter, LlmRequest, LlmTransport, ProviderId,
+    SearchRequest, SearchRequestOptions, SearchResponse, Validate,
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue, RETRY_AFTER, USER_AGENT};
 
@@ -10,8 +11,8 @@ use crate::{
     CHATGPT_PROVIDER,
     config::ChatGptConfig,
     error::{
-        invalid_config, invalid_model, invalid_request, network_error, normalize_http_error,
-        unix_millis,
+        invalid_config, invalid_model, invalid_request, invalid_response, network_error,
+        normalize_http_error, unix_millis,
     },
     find_model,
     request::build_response_request,
@@ -152,6 +153,72 @@ impl LlmTransport for ChatGptProvider {
         }
         finish(events, model, started)
     }
+
+    async fn search(
+        &self,
+        request: SearchRequest,
+        options: SearchRequestOptions,
+    ) -> Result<SearchResponse, LlmError> {
+        request
+            .validate()
+            .map_err(|error| invalid_request(error.to_string()))?;
+        if find_model(&request.model).is_none() {
+            return Err(invalid_model(&request.model));
+        }
+
+        let mut http_request = self
+            .client
+            .post(search_url(self.config.base_url()))
+            .header(ACCEPT, "application/json")
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, bearer_header(&self.config.access_token)?)
+            .header(
+                "chatgpt-account-id",
+                sensitive_header(&self.config.account_id, "ChatGPT account ID")?,
+            )
+            .header(
+                USER_AGENT,
+                concat!("agent-pane-provider-chatgpt/", env!("CARGO_PKG_VERSION")),
+            )
+            .json(&request);
+        let originator = options.originator.as_deref().unwrap_or(ORIGINATOR);
+        http_request = http_request.header("originator", request_header(originator)?);
+        if let Some(metadata) = options.codex_turn_metadata.as_deref() {
+            http_request = http_request.header("x-codex-turn-metadata", request_header(metadata)?);
+        }
+
+        let response = http_request
+            .send()
+            .await
+            .map_err(|error| network_error(&error))?;
+        let status = response.status();
+        let status_text = status.canonical_reason().unwrap_or_default().to_owned();
+        let retry_after = response
+            .headers()
+            .get(RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .map(ToOwned::to_owned);
+        let response_body = response
+            .text()
+            .await
+            .map_err(|error| network_error(&error))?;
+        if !status.is_success() {
+            return Err(normalize_http_error(
+                status.as_u16(),
+                &status_text,
+                &response_body,
+                retry_after.as_deref(),
+                SystemTime::now(),
+            ));
+        }
+
+        serde_json::from_str(&response_body).map_err(|error| {
+            invalid_response(
+                format!("ChatGPT returned an invalid alpha/search response: {error}"),
+                serde_json::Value::String(response_body),
+            )
+        })
+    }
 }
 
 impl LlmProviderAdapter for ChatGptProvider {
@@ -181,6 +248,19 @@ fn responses_url(base_url: &str) -> String {
     }
 }
 
+fn search_url(base_url: &str) -> String {
+    let normalized = base_url.trim_end_matches('/');
+    if normalized.ends_with("/codex/alpha/search") {
+        normalized.to_owned()
+    } else if let Some(prefix) = normalized.strip_suffix("/codex/responses") {
+        format!("{prefix}/codex/alpha/search")
+    } else if normalized.ends_with("/codex") {
+        format!("{normalized}/alpha/search")
+    } else {
+        format!("{normalized}/codex/alpha/search")
+    }
+}
+
 fn bearer_header(access_token: &str) -> Result<HeaderValue, LlmError> {
     sensitive_header(
         &format!("Bearer {access_token}"),
@@ -193,6 +273,11 @@ fn sensitive_header(value: &str, label: &str) -> Result<HeaderValue, LlmError> {
         .map_err(|_| invalid_config(format!("{label} contains invalid header characters.")))?;
     value.set_sensitive(true);
     Ok(value)
+}
+
+fn request_header(value: &str) -> Result<HeaderValue, LlmError> {
+    HeaderValue::from_str(value)
+        .map_err(|_| invalid_request("search request metadata contains invalid header characters"))
 }
 
 #[cfg(test)]
@@ -208,6 +293,14 @@ mod tests {
         assert_eq!(
             responses_url("https://example.com/codex/"),
             "https://example.com/codex/responses"
+        );
+        assert_eq!(
+            search_url("https://chatgpt.com/backend-api"),
+            "https://chatgpt.com/backend-api/codex/alpha/search"
+        );
+        assert_eq!(
+            search_url("https://example.com/codex/responses"),
+            "https://example.com/codex/alpha/search"
         );
     }
 }

@@ -19,6 +19,11 @@ println!("{}", message.native_message);
 # }
 ```
 
+The transport also implements the Codex provider-backed search operation at
+`POST /backend-api/codex/alpha/search`. It uses the same OAuth access token,
+ChatGPT account ID, timeout, and normalized error behavior as completions while
+returning the non-streaming native search response.
+
 The public operation returns one complete `AssistantMessage`. Internally, the
 ChatGPT backend requires SSE, so every request forces:
 
