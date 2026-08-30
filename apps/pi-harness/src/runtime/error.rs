@@ -1,3 +1,4 @@
+use agent_harness_sdk::ActiveTurnError;
 use execution_gateway_client::ExecutionGatewayClientError;
 
 use crate::{
@@ -6,7 +7,6 @@ use crate::{
         context_formation::ContextFormationError, model_resolver::ModelResolverError,
         tools::ToolExecutionError,
     },
-    server::ActiveTurnError,
 };
 
 use super::{config::PiHarnessConfigError, transcript::TranscriptError};

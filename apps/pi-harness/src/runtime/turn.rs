@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, time::Duration};
 use agent_contracts::{
     HarnessOperation, NewRunMessage, SessionMessage, SessionMessagesAppended, WaitRequest,
 };
+use agent_harness_sdk::{ActiveTurn, HarnessRuntime, TurnOutcome};
 use chrono::Utc;
 use execution_runtime::{ExecutionRuntime, OperationContext};
 use futures_util::future::join_all;
@@ -26,7 +27,6 @@ use crate::{
         system_prompt::generate_system_prompt,
         tools::{ToolExecutionContext, WorkspaceCwd, default_tool_definitions, execute_tool_call},
     },
-    server::ActiveTurn,
 };
 
 use super::{
@@ -335,6 +335,15 @@ impl PiRuntime {
     }
 }
 
+#[async_trait::async_trait]
+impl HarnessRuntime for PiRuntime {
+    type Error = PiRuntimeError;
+
+    async fn execute(&self, turn: &ActiveTurn) -> Result<TurnOutcome, Self::Error> {
+        PiRuntime::execute(self, turn).await
+    }
+}
+
 fn main_request(
     run: &ActiveTurn,
     config: &PiHarnessConfig,
@@ -475,11 +484,4 @@ fn now_ms() -> u64 {
 enum TurnDecision {
     Complete(Uuid),
     Continue,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum TurnOutcome {
-    Command(HarnessOperation),
-    Cancelled,
-    Stale,
 }
