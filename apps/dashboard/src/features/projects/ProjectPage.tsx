@@ -1,20 +1,35 @@
 import {
   ArrowLeft01Icon,
+  ArrowRight01Icon,
   Folder03Icon,
   Globe02Icon,
   ZapIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { Link, NavLink } from 'react-router-dom'
+import { Link, Navigate, NavLink, useLocation } from 'react-router-dom'
+import { useProject } from './project-queries'
 
 const PROJECT_NAVIGATION = [
-  { suffix: '', label: 'Environments', icon: Folder03Icon },
+  { suffix: '/environments', label: 'Environments', icon: Folder03Icon },
   { suffix: '/triggers', label: 'Triggers', icon: ZapIcon },
   { suffix: '/sites', label: 'Sites', icon: Globe02Icon },
 ] as const
 
 export function ProjectPage({ projectId }: { projectId: string }) {
   const projectPath = `/projects/${encodeURIComponent(projectId)}`
+  const environmentsPath = `${projectPath}/environments`
+  const createEnvironmentPath = `${environmentsPath}/create`
+  const { pathname } = useLocation()
+  const isProjectRoot = pathname === projectPath || pathname === `${projectPath}/`
+  const isEnvironmentsPage =
+    pathname === environmentsPath || pathname === `${environmentsPath}/`
+  const isCreateEnvironmentPage =
+    pathname === createEnvironmentPath ||
+    pathname === `${createEnvironmentPath}/`
+
+  if (isProjectRoot) {
+    return <Navigate to={environmentsPath} replace />
+  }
 
   return (
     <div className="cursor-shell machine-detail-shell">
@@ -41,7 +56,6 @@ export function ProjectPage({ projectId }: { projectId: string }) {
         >
           {PROJECT_NAVIGATION.map((item) => (
             <NavLink
-              end
               className={({ isActive }) =>
                 `cursor-nav-item dashboard-nav-item machine-detail-nav-item${
                   isActive ? ' dashboard-nav-item--active' : ''
@@ -65,7 +79,112 @@ export function ProjectPage({ projectId }: { projectId: string }) {
         </nav>
       </aside>
 
-      <main className="cursor-main machine-detail-main" />
+      <main
+        className={`cursor-main machine-detail-main${
+          isCreateEnvironmentPage ? ' project-create-main' : ''
+        }`}
+      >
+        {isCreateEnvironmentPage ? (
+          <CreateProjectEnvironmentPage
+            environmentsPath={environmentsPath}
+          />
+        ) : isEnvironmentsPage ? (
+          <ProjectEnvironments projectId={projectId} />
+        ) : null}
+      </main>
+    </div>
+  )
+}
+
+function ProjectEnvironments({ projectId }: { projectId: string }) {
+  const { data: project, isPending: isProjectPending } = useProject(projectId)
+  const projectName =
+    project?.name ?? (isProjectPending ? 'Loading…' : projectId)
+  const createEnvironmentPath = `/projects/${encodeURIComponent(projectId)}/environments/create`
+
+  return (
+    <div className="cursor-container">
+      <header className="page-header page-header--section">
+        <h1 className="cursor-page-title">Environments</h1>
+      </header>
+
+      <section
+        className="providers-section"
+        aria-labelledby="configured-environments-title"
+      >
+        <div className="providers-section-header">
+          <h2 id="configured-environments-title">
+            {projectName} Configured Environments
+          </h2>
+          <Link
+            className="cursor-button provider-add-button"
+            to={createEnvironmentPath}
+          >
+            Create
+          </Link>
+        </div>
+
+        <div className="providers-table-wrap">
+          <table className="providers-table project-environments-table">
+            <colgroup>
+              <col className="project-environment-name-column" />
+              <col className="project-environment-path-column" />
+              <col className="project-environment-type-column" />
+              <col className="project-environment-snapshot-column" />
+              <col className="project-environment-created-column" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Path</th>
+                <th scope="col">Type</th>
+                <th scope="col">Snapshot ID</th>
+                <th scope="col">Created at</th>
+              </tr>
+            </thead>
+            <tbody aria-live="polite">
+              <tr>
+                <td className="providers-table-message" colSpan={5}>
+                  No environments present
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function CreateProjectEnvironmentPage({
+  environmentsPath,
+}: {
+  environmentsPath: string
+}) {
+  return (
+    <div className="project-environment-create-page">
+      <nav className="project-breadcrumbs" aria-label="Breadcrumb">
+        <ol>
+          <li>
+            <Link to={environmentsPath}>Environments</Link>
+          </li>
+          <li
+            className="project-breadcrumb-separator"
+            role="presentation"
+            aria-hidden="true"
+          >
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              size={16}
+              color="currentColor"
+              strokeWidth={1.5}
+            />
+          </li>
+          <li>
+            <span aria-current="page">Create</span>
+          </li>
+        </ol>
+      </nav>
     </div>
   )
 }

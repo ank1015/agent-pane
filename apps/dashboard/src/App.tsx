@@ -182,6 +182,7 @@ function App() {
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route path="/projects" element={null} />
           <Route path="/projects/:projectId" element={null} />
+          <Route path="/projects/:projectId/environments" element={null} />
           <Route path="/projects/:projectId/*" element={null} />
           <Route path="/harnesses" element={null} />
           <Route path="/machines" element={null} />

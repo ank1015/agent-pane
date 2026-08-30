@@ -248,6 +248,30 @@
   width: 180px;
 }
 
+.project-environments-table {
+  min-width: 900px;
+}
+
+.project-environment-name-column {
+  width: 22%;
+}
+
+.project-environment-path-column {
+  width: auto;
+}
+
+.project-environment-type-column {
+  width: 16%;
+}
+
+.project-environment-snapshot-column {
+  width: 25%;
+}
+
+.project-environment-created-column {
+  width: 150px;
+}
+
 .environment-templates-table {
   min-width: 820px;
 }
@@ -317,7 +341,8 @@
 }
 
 .providers-section,
-.harnesses-section {
+.harnesses-section,
+.projects-section {
   display: flex;
   flex-direction: column;
   gap: 9px;
@@ -412,6 +437,17 @@
   aspect-ratio: 4 / 3;
   overflow: hidden;
   background: var(--cursor-overlay-04);
+}
+
+.project-card-fallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--cursor-text-quaternary);
+  background-image: radial-gradient(rgb(255 255 255 / 7%) 1px, transparent 1.4px);
+  background-position: 7px 7px;
+  background-size: 15px 15px;
 }
 
 .project-card-visual img {
@@ -583,7 +619,8 @@
 }
 
 .providers-section-header,
-.harnesses-section-header {
+.harnesses-section-header,
+.projects-section-header {
   min-height: 28px;
   display: flex;
   align-items: center;
@@ -592,7 +629,8 @@
 }
 
 .providers-section-header h2,
-.harnesses-section-header h2 {
+.harnesses-section-header h2,
+.projects-section-header h2 {
   flex: 1;
   margin: 0;
   color: var(--cursor-text-secondary);
@@ -608,6 +646,24 @@
   font-weight: var(--cursor-weight-regular);
   line-height: var(--cursor-leading-base);
   letter-spacing: normal;
+}
+
+.projects-state {
+  min-height: 148px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cursor-space-10);
+  border-radius: var(--cursor-radius-xl);
+  color: var(--cursor-text-quaternary);
+  background: var(--cursor-surface);
+  box-shadow: var(--cursor-shadow-card);
+  font-size: var(--cursor-font-sm);
+  text-align: center;
+}
+
+.projects-state .cursor-button {
+  min-height: 26px;
 }
 
 .app-dialog {
@@ -680,6 +736,105 @@
   justify-content: flex-end;
   padding: 15px 24px 16px;
   border-top: 1px solid var(--cursor-border-faint);
+}
+
+.add-project-form {
+  display: grid;
+  gap: var(--cursor-space-24);
+}
+
+.add-project-field {
+  display: grid;
+  gap: var(--cursor-space-8);
+  color: var(--cursor-text-secondary);
+  font-size: var(--cursor-font-sm);
+  line-height: var(--cursor-leading-sm);
+}
+
+.add-project-field .cursor-input {
+  height: 34px;
+}
+
+.add-project-field .cursor-input:focus-visible {
+  border-color: var(--cursor-border-strong);
+  box-shadow: none;
+}
+
+.add-project-optional {
+  color: var(--cursor-text-quaternary);
+}
+
+.project-avatar-upload {
+  min-height: 104px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: var(--cursor-space-6);
+  padding: var(--cursor-space-16);
+  border: 1px dashed var(--cursor-border-control);
+  border-radius: var(--cursor-radius-lg);
+  color: var(--cursor-text-secondary);
+  background: var(--cursor-overlay-04);
+  cursor: pointer;
+  transition:
+    border-color var(--cursor-duration-fast) var(--cursor-ease),
+    background-color var(--cursor-duration-fast) var(--cursor-ease);
+}
+
+.project-avatar-upload:hover,
+.add-project-field input:focus-visible + .project-avatar-upload {
+  border-color: var(--cursor-border-strong);
+  background: var(--cursor-overlay-06);
+}
+
+.add-project-field input:focus-visible + .project-avatar-upload {
+  outline: 1px solid color-mix(in oklab, var(--cursor-accent) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.project-avatar-upload small {
+  color: var(--cursor-text-quaternary);
+  font-size: var(--cursor-font-xs);
+}
+
+.project-avatar-selection {
+  min-width: 0;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: var(--cursor-space-10);
+  padding: var(--cursor-space-8);
+  border: 1px solid var(--cursor-border-faint);
+  border-radius: var(--cursor-radius-lg);
+  background: var(--cursor-overlay-04);
+}
+
+.project-avatar-selection img {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  border-radius: var(--cursor-radius-base);
+  object-fit: cover;
+}
+
+.project-avatar-selection > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--cursor-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-avatar-selection .cursor-button {
+  min-height: 28px;
+}
+
+.project-create-error {
+  margin: 0;
+  color: var(--cursor-danger);
+  font-size: var(--cursor-font-sm);
+  line-height: var(--cursor-leading-sm);
 }
 
 .delete-provider-dialog {
@@ -949,6 +1104,73 @@
 .add-environment-back-button {
   min-width: 64px;
   margin-right: auto;
+}
+
+.project-create-main {
+  padding: 0;
+}
+
+.project-environment-create-page {
+  min-height: 100%;
+}
+
+.project-breadcrumbs {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px 0 12px;
+  color: rgb(240 240 240);
+  font-family:
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+.project-breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  color: oklab(0.955134 0.000043571 0.0000191331 / 74%);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+  list-style: none;
+}
+
+.project-breadcrumbs li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-breadcrumbs a {
+  color: inherit;
+  text-decoration: none;
+  transition: color var(--cursor-duration-fast) var(--cursor-ease);
+}
+
+.project-breadcrumbs a:hover {
+  color: rgb(240 240 240);
+}
+
+.project-breadcrumbs a:focus-visible {
+  outline: 1px solid var(--cursor-border-strong);
+  outline-offset: 3px;
+}
+
+.project-breadcrumbs .project-breadcrumb-separator {
+  flex: 0 0 auto;
+  color: oklab(0.955134 0.000043571 0.0000191331 / 66%);
+}
+
+.project-breadcrumbs svg {
+  display: block;
+}
+
+.project-breadcrumbs [aria-current='page'] {
+  color: rgb(240 240 240);
 }
 
 .create-snapshot-dialog {
