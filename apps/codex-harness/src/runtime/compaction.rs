@@ -1,20 +1,29 @@
+use std::collections::HashSet;
+
 use agent_contracts::SessionMessage;
 use llm_contracts::{
-    AssistantContent, AssistantMessage, ContentPart, CustomMessage, LlmError, LlmRequest, Message,
-    MessageId, TextContent, Timestamp, ToolResultError, ToolResultMessage, ToolResultOutcome,
-    Usage, Validate, ValidationError,
+    AssistantContent, AssistantMessage, ContentPart, CustomMessage, ImageDetail, ImageSource,
+    LlmError, LlmRequest, Message, MessageId, TextContent, Timestamp, ToolResultMessage,
+    ToolResultOutcome, Usage, Validate, ValidationError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{CodexEnvironmentSnapshot, CodexHarnessConfig, CodexProvider, form_main_request};
+use super::{CodexHarnessConfig, CodexProvider, form_main_request};
 
 pub const CODEX_COMPACTION_MESSAGE_TAG: &str = "codex.compaction";
 pub const CODEX_COMPACTION_SCHEMA_VERSION: u32 = 1;
 pub const RETAINED_MESSAGE_TOKEN_BUDGET: u64 = 64_000;
 
-const ESTIMATED_IMAGE_TOKENS: u64 = 1_200;
+const APPROX_BYTES_PER_TOKEN: u64 = 4;
+const RESIZED_IMAGE_BYTES_ESTIMATE: u64 = 7_373;
+const EFFECTIVE_CONTEXT_WINDOW_PERCENT: u64 = 95;
+const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
+    "Output exceeded the available model context and was truncated";
+// Must match Codex so prompt-only missing outputs keep stable item IDs across
+// retries and resume.
+const SYNTHETIC_OUTPUT_ID_NAMESPACE: Uuid = Uuid::from_u128(0x90d38d3e_6a5b_4d52_bfe2_2f1e634bfac4);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,6 +41,12 @@ pub struct CodexCompactionMessageContent {
     pub provider: CodexProvider,
     pub trigger: CodexCompactionTrigger,
     pub retained_messages: Vec<Message>,
+    /// Messages delivered for the current turn after the history snapshot that
+    /// was sent to the compaction endpoint. They are installed after the opaque
+    /// compaction item and are deliberately excluded from the 64k retention
+    /// budget and from the compaction request itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_messages: Vec<Message>,
     pub items: Vec<Value>,
     pub active_context_tokens: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,10 +92,10 @@ pub fn create_codex_compaction_message(
 pub fn form_compaction_request(
     config: &CodexHarnessConfig,
     session_id: Uuid,
-    environment: &CodexEnvironmentSnapshot,
     session_messages: &[SessionMessage],
 ) -> Result<LlmRequest, CompactionError> {
-    let mut request = form_main_request(config, session_id, environment, session_messages)?;
+    let mut request = form_main_request(config, session_id, session_messages)?;
+    trim_tool_outputs_for_compaction(&mut request, config.model.profile().context_window);
     request.messages.push(Message::Custom(CustomMessage {
         id: MessageId::new(format!("codex-compaction-trigger-{session_id}"))
             .expect("UUID-derived message ID is valid"),
@@ -89,7 +104,7 @@ pub fn form_compaction_request(
             .expect("static value is an object")
             .clone(),
         tag: Some(native_input_tag(config.provider).to_owned()),
-        timestamp: environment.captured_at,
+        timestamp: latest_message_timestamp(&request.messages).unwrap_or(Timestamp(0)),
     }));
     request
         .validate()
@@ -104,7 +119,8 @@ pub fn checkpoint_from_response(
     id: MessageId,
     timestamp: Timestamp,
     trigger: CodexCompactionTrigger,
-    active_messages: &[Message],
+    compacted_messages: &[Message],
+    pending_messages: &[Message],
     response: &AssistantMessage,
 ) -> Result<CustomMessage, CompactionError> {
     if response.model.provider.as_str() != config.provider.as_str() {
@@ -141,12 +157,18 @@ pub fn checkpoint_from_response(
         return Err(CompactionError::MissingEncryptedContent);
     }
 
-    let retained_messages = select_retained_messages(active_messages);
+    let retained_messages = select_retained_messages(compacted_messages);
     let active_context_tokens = retained_messages
         .iter()
         .map(estimate_message_tokens)
         .sum::<u64>()
-        .saturating_add(estimate_json_tokens(&compaction_items[0]));
+        .saturating_add(estimate_native_item_tokens(&compaction_items[0]))
+        .saturating_add(
+            pending_messages
+                .iter()
+                .map(estimate_message_tokens)
+                .fold(0_u64, u64::saturating_add),
+        );
     create_codex_compaction_message(
         id,
         timestamp,
@@ -155,6 +177,7 @@ pub fn checkpoint_from_response(
             provider: config.provider,
             trigger,
             retained_messages,
+            pending_messages: pending_messages.to_vec(),
             items: compaction_items,
             active_context_tokens,
             usage: response.usage.clone(),
@@ -179,13 +202,13 @@ pub fn plan_compaction(
 ) -> CompactionPlan {
     let estimated_tokens = estimate_request_tokens(request);
     let token_limit = model_context_window.saturating_mul(9) / 10;
+    if has_compacted_for_turn(session_messages, run_id, turn_number) {
+        return CompactionPlan::AlreadyCompactedForTurn {
+            estimated_tokens,
+            token_limit,
+        };
+    }
     if prior_context_overflow {
-        if has_compacted_for_turn(session_messages, run_id, turn_number) {
-            return CompactionPlan::AlreadyCompactedForTurn {
-                estimated_tokens,
-                token_limit,
-            };
-        }
         return CompactionPlan::Compact {
             trigger: CodexCompactionTrigger::ContextOverflow,
             estimated_tokens,
@@ -257,6 +280,7 @@ pub fn normalize_session_messages(
             provider,
             checkpoint.items,
         ));
+        normalized.extend(checkpoint.pending_messages);
         extend_visible(&mut normalized, &messages[checkpoint_index + 1..], provider);
     } else {
         extend_visible(&mut normalized, &messages, provider);
@@ -265,73 +289,159 @@ pub fn normalize_session_messages(
     Ok(normalized)
 }
 
-/// Responses requires every emitted tool call to be followed by exactly one
-/// output before another conversational item. A run can be aborted after its
-/// assistant response commits but before tool execution commits. Preserve the
-/// assistant turn and make that durable history replayable by synthesizing the
-/// model-visible cancellation output that the interrupted execution could not
-/// append to the now-terminal Agent run.
+/// Enforces the Responses call/output invariants on portable history. Missing
+/// outputs are inserted immediately after their assistant call message using
+/// Codex's raw `aborted` payload, and outputs without a call anywhere in active
+/// history are removed.
 fn repair_interrupted_tool_calls(messages: &mut Vec<Message>) {
-    let mut repaired = Vec::with_capacity(messages.len());
-    let mut pending = Vec::<(String, llm_contracts::ToolCallId, Timestamp)>::new();
+    let call_ids = messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::Assistant(assistant) => Some(assistant.content.iter()),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|content| match content {
+            AssistantContent::ToolCall { tool_call_id, .. } => Some(tool_call_id.clone()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
 
+    messages.retain(|message| {
+        !matches!(
+            message,
+            Message::ToolResult(result) if !call_ids.contains(&result.tool_call_id)
+        )
+    });
+
+    let output_ids = messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::ToolResult(result) => Some(result.tool_call_id.clone()),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let mut repaired = Vec::with_capacity(messages.len());
     for message in messages.drain(..) {
-        match &message {
-            Message::ToolResult(result) => {
-                pending.retain(|(_, tool_call_id, _)| tool_call_id != &result.tool_call_id);
-            }
-            Message::Assistant(_) | Message::User(_) | Message::System(_) | Message::Custom(_) => {
-                flush_interrupted_tool_results(&mut repaired, &mut pending);
-            }
-        }
-        if let Message::Assistant(assistant) = &message {
-            pending.extend(assistant.content.iter().filter_map(|content| {
-                let AssistantContent::ToolCall {
+        let Message::Assistant(mut assistant) = message else {
+            repaired.push(message);
+            continue;
+        };
+        let mut missing = assistant
+            .content
+            .iter()
+            .filter_map(|content| match content {
+                AssistantContent::ToolCall {
                     name, tool_call_id, ..
-                } = content
-                else {
-                    return None;
-                };
-                Some((name.clone(), tool_call_id.clone(), assistant.timestamp))
-            }));
-        }
-        repaired.push(message);
+                } if !output_ids.contains(tool_call_id) => {
+                    Some((name.clone(), tool_call_id.clone(), assistant.timestamp))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let missing_ids = missing
+            .iter()
+            .map(|(_, tool_call_id, _)| tool_call_id.clone())
+            .collect::<HashSet<_>>();
+        let inserted = inject_native_aborted_outputs(&mut assistant, &missing_ids);
+        missing.retain(|(_, tool_call_id, _)| !inserted.contains(tool_call_id));
+        repaired.push(Message::Assistant(assistant));
+        repaired.extend(
+            missing
+                .into_iter()
+                .map(|(tool_name, tool_call_id, timestamp)| {
+                    Message::ToolResult(ToolResultMessage {
+                        id: MessageId::new(format!("codex-interrupted-tool-{tool_call_id}"))
+                            .expect("tool-call-derived message ID is valid"),
+                        tool_name,
+                        tool_call_id,
+                        content: vec![ContentPart::Text(TextContent {
+                            content: "aborted".to_owned(),
+                            metadata: None,
+                        })],
+                        details: None,
+                        timestamp,
+                        // Responses does not serialize this portable status. Mark
+                        // it successful so providers that decorate failures still
+                        // emit exactly the raw Codex `aborted` payload.
+                        outcome: ToolResultOutcome::Success,
+                    })
+                }),
+        );
     }
-    flush_interrupted_tool_results(&mut repaired, &mut pending);
     *messages = repaired;
 }
 
-fn flush_interrupted_tool_results(
-    messages: &mut Vec<Message>,
-    pending: &mut Vec<(String, llm_contracts::ToolCallId, Timestamp)>,
-) {
-    messages.extend(
-        pending
-            .drain(..)
-            .map(|(tool_name, tool_call_id, timestamp)| {
-                Message::ToolResult(ToolResultMessage {
-                    id: MessageId::new(format!("codex-interrupted-tool-{tool_call_id}"))
-                        .expect("tool-call-derived message ID is valid"),
-                    tool_name,
-                    tool_call_id,
-                    content: vec![ContentPart::Text(TextContent {
-                        content: "Tool execution was interrupted before a result was committed."
-                            .to_owned(),
-                        metadata: None,
-                    })],
-                    details: None,
-                    timestamp,
-                    outcome: ToolResultOutcome::Error {
-                        error: ToolResultError {
-                            message:
-                                "Tool execution was interrupted before a result was committed."
-                                    .to_owned(),
-                            name: Some("cancelled".to_owned()),
-                        },
-                    },
-                })
-            }),
-    );
+/// Same-provider assistant messages replay their native Responses items. Put a
+/// synthetic output directly after its call in that array, matching Codex's
+/// item-level normalization. The portable fallback below is only needed for
+/// imported/non-native assistant messages whose raw call item is unavailable.
+fn inject_native_aborted_outputs(
+    assistant: &mut AssistantMessage,
+    missing: &HashSet<llm_contracts::ToolCallId>,
+) -> HashSet<llm_contracts::ToolCallId> {
+    if missing.is_empty() {
+        return HashSet::new();
+    }
+    let Some(output) = assistant
+        .native_message
+        .get_mut("output")
+        .and_then(Value::as_array_mut)
+    else {
+        return HashSet::new();
+    };
+
+    let mut inserted = HashSet::new();
+    let original = std::mem::take(output);
+    output.reserve(original.len().saturating_add(missing.len()));
+    for item in original {
+        let synthetic = native_aborted_output(&item, missing);
+        output.push(item);
+        if let Some((tool_call_id, synthetic)) = synthetic {
+            inserted.insert(tool_call_id);
+            output.push(synthetic);
+        }
+    }
+    inserted
+}
+
+fn native_aborted_output(
+    call: &Value,
+    missing: &HashSet<llm_contracts::ToolCallId>,
+) -> Option<(llm_contracts::ToolCallId, Value)> {
+    let kind = call.get("type").and_then(Value::as_str)?;
+    let (output_kind, id_prefix) = match kind {
+        "function_call" | "local_shell_call" => ("function_call_output", "fco"),
+        "custom_tool_call" => ("custom_tool_call_output", "ctco"),
+        _ => return None,
+    };
+    let tool_call_id =
+        llm_contracts::ToolCallId::new(call.get("call_id").and_then(Value::as_str)?.to_owned())
+            .ok()?;
+    if !missing.contains(&tool_call_id) {
+        return None;
+    }
+    let mut synthetic = serde_json::Map::from_iter([
+        ("type".to_owned(), Value::String(output_kind.to_owned())),
+        (
+            "call_id".to_owned(),
+            Value::String(tool_call_id.as_str().to_owned()),
+        ),
+        ("output".to_owned(), Value::String("aborted".to_owned())),
+    ]);
+    if let Some(source_id) = call
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    {
+        let name = format!("{id_prefix}:{source_id}");
+        let suffix = Uuid::new_v5(&SYNTHETIC_OUTPUT_ID_NAMESPACE, name.as_bytes());
+        synthetic.insert(
+            "id".to_owned(),
+            Value::String(format!("{id_prefix}_{suffix}")),
+        );
+    }
+    Some((tool_call_id, Value::Object(synthetic)))
 }
 
 fn latest_checkpoint<'a>(
@@ -387,9 +497,18 @@ fn validate_checkpoint(
     if checkpoint
         .retained_messages
         .iter()
-        .any(|message| !matches!(message, Message::User(_) | Message::System(_)))
+        .any(|message| !matches!(message, Message::User(_)))
     {
         return Err(ContextNormalizationError::InvalidRetainedMessage);
+    }
+    if checkpoint.pending_messages.iter().any(|message| {
+        matches!(
+            message,
+            Message::Custom(custom)
+                if custom.tag.as_deref() == Some(CODEX_COMPACTION_MESSAGE_TAG)
+        )
+    }) {
+        return Err(ContextNormalizationError::InvalidPendingMessage);
     }
     Ok(())
 }
@@ -415,15 +534,21 @@ fn select_retained_messages(messages: &[Message]) -> Vec<Message> {
     let mut remaining = RETAINED_MESSAGE_TOKEN_BUDGET;
     let mut retained = Vec::new();
     for message in messages.iter().rev() {
-        if !matches!(message, Message::User(_) | Message::System(_))
-            || is_ephemeral_environment(message)
-        {
+        let Message::User(user) = message else {
+            continue;
+        };
+        if is_ephemeral_environment(message) {
             continue;
         }
-        let tokens = estimate_message_tokens(message).max(1);
+        let tokens = retained_user_text_tokens(user).max(1);
         if tokens <= remaining {
             retained.push(message.clone());
             remaining = remaining.saturating_sub(tokens);
+        } else if remaining > 0
+            && let Some(truncated) = truncate_retained_user(user, remaining)
+        {
+            retained.push(Message::User(truncated));
+            remaining = 0;
         }
         if remaining == 0 {
             break;
@@ -431,6 +556,56 @@ fn select_retained_messages(messages: &[Message]) -> Vec<Message> {
     }
     retained.reverse();
     retained
+}
+
+fn retained_user_text_tokens(message: &llm_contracts::UserMessage) -> u64 {
+    message
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            ContentPart::Text(text) => Some(estimate_text_tokens(&text.content)),
+            ContentPart::Image(_) => None,
+        })
+        .fold(0_u64, u64::saturating_add)
+}
+
+fn truncate_retained_user(
+    message: &llm_contracts::UserMessage,
+    max_tokens: u64,
+) -> Option<llm_contracts::UserMessage> {
+    let mut remaining = max_tokens;
+    let mut content = Vec::with_capacity(message.content.len());
+    for part in &message.content {
+        match part {
+            ContentPart::Text(text) => {
+                if remaining == 0 {
+                    continue;
+                }
+                let tokens = estimate_text_tokens(&text.content);
+                if tokens <= remaining {
+                    content.push(part.clone());
+                    remaining = remaining.saturating_sub(tokens);
+                } else {
+                    let truncated = truncate_text_to_token_budget(&text.content, remaining);
+                    if !truncated.is_empty() {
+                        content.push(ContentPart::Text(TextContent {
+                            content: truncated,
+                            metadata: text.metadata.clone(),
+                        }));
+                    }
+                    remaining = 0;
+                }
+            }
+            // Images are retained in full and do not consume the remote
+            // compaction text-retention budget.
+            ContentPart::Image(_) => content.push(part.clone()),
+        }
+    }
+    (!content.is_empty()).then(|| llm_contracts::UserMessage {
+        id: message.id.clone(),
+        timestamp: message.timestamp,
+        content,
+    })
 }
 
 fn is_ephemeral_environment(message: &Message) -> bool {
@@ -467,6 +642,62 @@ fn native_input_tag(provider: CodexProvider) -> &'static str {
         CodexProvider::OpenAi => provider_openai::OPENAI_NATIVE_INPUT_TAG,
         CodexProvider::ChatGpt => provider_chatgpt::CHATGPT_NATIVE_INPUT_TAG,
     }
+}
+
+/// Rewrites only the newest contiguous tool-result messages until the
+/// compaction input fits Codex's effective (95%) model context window. The
+/// durable transcript is not mutated; this is a prompt-only safety pass.
+pub(crate) fn trim_tool_outputs_for_compaction(
+    request: &mut LlmRequest,
+    model_context_window: u64,
+) -> usize {
+    let hard_limit = model_context_window.saturating_mul(EFFECTIVE_CONTEXT_WINDOW_PERCENT) / 100;
+    let mut estimated_tokens = estimate_full_history_tokens(request);
+    let mut rewritten = 0;
+
+    for index in (0..request.messages.len()).rev() {
+        if estimated_tokens <= hard_limit {
+            break;
+        }
+        let Message::ToolResult(result) = &request.messages[index] else {
+            // Codex only rewrites the newest contiguous output groups. Once a
+            // non-output group is encountered, older outputs are not touched.
+            break;
+        };
+        let replacement = Message::ToolResult(ToolResultMessage {
+            id: result.id.clone(),
+            tool_name: result.tool_name.clone(),
+            tool_call_id: result.tool_call_id.clone(),
+            content: vec![ContentPart::Text(TextContent {
+                content: CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_owned(),
+                metadata: None,
+            })],
+            details: None,
+            timestamp: result.timestamp,
+            outcome: result.outcome.clone(),
+        });
+        let old_tokens = estimate_message_tokens(&request.messages[index]);
+        let new_tokens = estimate_message_tokens(&replacement);
+        request.messages[index] = replacement;
+        estimated_tokens = estimated_tokens
+            .saturating_sub(old_tokens)
+            .saturating_add(new_tokens);
+        rewritten += 1;
+    }
+
+    rewritten
+}
+
+fn estimate_full_history_tokens(request: &LlmRequest) -> u64 {
+    let instructions = request
+        .instructions
+        .as_deref()
+        .map_or(0, estimate_text_tokens);
+    request
+        .messages
+        .iter()
+        .map(estimate_message_tokens)
+        .fold(instructions, u64::saturating_add)
 }
 
 fn estimate_request_tokens(request: &LlmRequest) -> u64 {
@@ -515,36 +746,281 @@ fn usage_context_tokens(usage: &Usage) -> u64 {
 }
 
 fn estimate_message_tokens(message: &Message) -> u64 {
-    match message {
-        Message::User(message) => message.content.iter().fold(0, |total, part| {
-            total.saturating_add(match part {
-                llm_contracts::ContentPart::Text(text) => estimate_text_tokens(&text.content),
-                llm_contracts::ContentPart::Image(_) => ESTIMATED_IMAGE_TOKENS,
-            })
-        }),
-        Message::System(message) => message.content.iter().fold(0, |total, part| {
-            total.saturating_add(estimate_text_tokens(&part.content))
-        }),
-        Message::ToolResult(message) => message.content.iter().fold(0, |total, part| {
-            total.saturating_add(match part {
-                llm_contracts::ContentPart::Text(text) => estimate_text_tokens(&text.content),
-                llm_contracts::ContentPart::Image(_) => ESTIMATED_IMAGE_TOKENS,
-            })
-        }),
-        Message::Assistant(message) => estimate_json_tokens(&message.native_message),
-        Message::Custom(message) => estimate_json_tokens(&Value::Object(message.content.clone())),
-    }
+    wire_items_for_message(message)
+        .iter()
+        .map(estimate_native_item_tokens)
+        .fold(0_u64, u64::saturating_add)
 }
 
 fn estimate_json_tokens(value: &Value) -> u64 {
-    serde_json::to_string(value).map_or(u64::MAX, |value| estimate_text_tokens(&value))
+    estimate_native_item_tokens(value)
 }
 
 fn estimate_text_tokens(value: &str) -> u64 {
-    u64::try_from(value.chars().count())
-        .unwrap_or(u64::MAX)
-        .saturating_add(3)
-        / 4
+    tokens_from_bytes(u64::try_from(value.len()).unwrap_or(u64::MAX))
+}
+
+fn tokens_from_bytes(bytes: u64) -> u64 {
+    bytes.saturating_add(APPROX_BYTES_PER_TOKEN - 1) / APPROX_BYTES_PER_TOKEN
+}
+
+fn wire_items_for_message(message: &Message) -> Vec<Value> {
+    match message {
+        Message::User(message) => vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": wire_content_parts(&message.content),
+        })],
+        Message::System(message) => vec![json!({
+            "type": "message",
+            "role": "developer",
+            "content": message.content.iter().map(|part| {
+                json!({"type": "input_text", "text": part.content})
+            }).collect::<Vec<_>>(),
+        })],
+        Message::ToolResult(message) => {
+            let output = if message
+                .content
+                .iter()
+                .all(|part| matches!(part, ContentPart::Text(_)))
+            {
+                Value::String(
+                    message
+                        .content
+                        .iter()
+                        .filter_map(|part| match part {
+                            ContentPart::Text(text) => Some(text.content.as_str()),
+                            ContentPart::Image(_) => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                )
+            } else {
+                Value::Array(wire_content_parts(&message.content))
+            };
+            vec![json!({
+                "type": "custom_tool_call_output",
+                "call_id": message.tool_call_id,
+                "output": output,
+            })]
+        }
+        Message::Assistant(message) => message
+            .native_message
+            .get("output")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_else(|| portable_assistant_items(message)),
+        Message::Custom(message) => message
+            .content
+            .get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_else(|| vec![Value::Object(message.content.clone())]),
+    }
+}
+
+fn portable_assistant_items(message: &AssistantMessage) -> Vec<Value> {
+    message
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            AssistantContent::Response { response } if !response.content.is_empty() => {
+                Some(json!({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": response.content,
+                }))
+            }
+            AssistantContent::ToolCall {
+                name,
+                arguments,
+                tool_call_id,
+            } => {
+                let input = match arguments {
+                    llm_contracts::ToolArguments::Object(arguments) => {
+                        serde_json::to_string(arguments).unwrap_or_default()
+                    }
+                    llm_contracts::ToolArguments::String(arguments) => arguments.clone(),
+                };
+                Some(json!({
+                    "type": "custom_tool_call",
+                    "call_id": tool_call_id,
+                    "name": name,
+                    "input": input,
+                }))
+            }
+            AssistantContent::Response { .. } | AssistantContent::Thinking { .. } => None,
+        })
+        .collect()
+}
+
+fn wire_content_parts(content: &[ContentPart]) -> Vec<Value> {
+    content
+        .iter()
+        .map(|part| match part {
+            ContentPart::Text(text) => json!({"type": "input_text", "text": text.content}),
+            ContentPart::Image(image) => {
+                let image_url = match &image.source {
+                    ImageSource::Base64(source) => {
+                        format!("data:{};base64,{}", source.mime_type, source.data)
+                    }
+                    ImageSource::Url(source) => source.url.clone(),
+                };
+                let detail = image.detail.map_or("auto", image_detail_name);
+                json!({
+                    "type": "input_image",
+                    "detail": detail,
+                    "image_url": image_url,
+                })
+            }
+        })
+        .collect()
+}
+
+const fn image_detail_name(detail: ImageDetail) -> &'static str {
+    match detail {
+        ImageDetail::Auto => "auto",
+        ImageDetail::Low => "low",
+        ImageDetail::High => "high",
+        ImageDetail::Original => "original",
+    }
+}
+
+fn estimate_native_item_tokens(item: &Value) -> u64 {
+    let kind = item.get("type").and_then(Value::as_str);
+    if matches!(
+        kind,
+        Some("reasoning" | "compaction" | "compaction_summary" | "context_compaction")
+    ) && let Some(content) = item.get("encrypted_content").and_then(Value::as_str)
+    {
+        let visible_bytes = u64::try_from(content.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(3)
+            / 4;
+        return tokens_from_bytes(visible_bytes.saturating_sub(650));
+    }
+
+    let raw_bytes = serde_json::to_vec(item)
+        .map(|serialized| u64::try_from(serialized.len()).unwrap_or(u64::MAX))
+        .unwrap_or_default();
+    let mut removed_bytes = 0_u64;
+    let mut replacement_bytes = 0_u64;
+    collect_native_payload_adjustments(item, &mut removed_bytes, &mut replacement_bytes);
+    tokens_from_bytes(
+        raw_bytes
+            .saturating_sub(removed_bytes)
+            .saturating_add(replacement_bytes),
+    )
+}
+
+fn collect_native_payload_adjustments(
+    value: &Value,
+    removed_bytes: &mut u64,
+    replacement_bytes: &mut u64,
+) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_native_payload_adjustments(value, removed_bytes, replacement_bytes);
+            }
+        }
+        Value::Object(object) => {
+            if object.get("type").and_then(Value::as_str) == Some("encrypted_content")
+                && let Some(content) = object.get("encrypted_content").and_then(Value::as_str)
+            {
+                let encoded_len = u64::try_from(content.len()).unwrap_or(u64::MAX);
+                *removed_bytes = removed_bytes.saturating_add(encoded_len);
+                *replacement_bytes =
+                    replacement_bytes.saturating_add(encoded_len.saturating_mul(9).div_ceil(16));
+            }
+            if let Some(image_url) = object.get("image_url").and_then(Value::as_str)
+                && let Some(payload) = base64_data_url_payload(image_url, "image/")
+            {
+                *removed_bytes =
+                    removed_bytes.saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
+                *replacement_bytes = replacement_bytes.saturating_add(RESIZED_IMAGE_BYTES_ESTIMATE);
+            }
+            for value in object.values() {
+                collect_native_payload_adjustments(value, removed_bytes, replacement_bytes);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn base64_data_url_payload<'a>(url: &'a str, media_type_prefix: &str) -> Option<&'a str> {
+    if !url
+        .get(.."data:".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+    {
+        return None;
+    }
+    let comma = url.find(',')?;
+    let metadata = &url["data:".len()..comma];
+    let mut parts = metadata.split(';');
+    let mime_type = parts.next().unwrap_or_default();
+    if !mime_type
+        .get(..media_type_prefix.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(media_type_prefix))
+        || !parts.any(|part| part.eq_ignore_ascii_case("base64"))
+    {
+        return None;
+    }
+    Some(&url[comma + 1..])
+}
+
+fn truncate_text_to_token_budget(value: &str, max_tokens: u64) -> String {
+    if value.is_empty() {
+        return String::new();
+    }
+    let max_bytes =
+        usize::try_from(max_tokens.saturating_mul(APPROX_BYTES_PER_TOKEN)).unwrap_or(usize::MAX);
+    if max_tokens > 0 && value.len() <= max_bytes {
+        return value.to_owned();
+    }
+
+    let left_budget = max_bytes / 2;
+    let right_budget = max_bytes.saturating_sub(left_budget);
+    let tail_start = value.len().saturating_sub(right_budget);
+    let mut prefix_end = 0;
+    let mut suffix_start = value.len();
+    let mut suffix_started = false;
+    for (index, character) in value.char_indices() {
+        let character_end = index.saturating_add(character.len_utf8());
+        if character_end <= left_budget {
+            prefix_end = character_end;
+        } else if index >= tail_start && !suffix_started {
+            suffix_start = index;
+            suffix_started = true;
+        }
+    }
+    if suffix_start < prefix_end {
+        suffix_start = prefix_end;
+    }
+    let removed_bytes = value
+        .len()
+        .saturating_sub(prefix_end)
+        .saturating_sub(value.len().saturating_sub(suffix_start));
+    format!(
+        "{}…{} tokens truncated…{}",
+        &value[..prefix_end],
+        tokens_from_bytes(u64::try_from(removed_bytes).unwrap_or(u64::MAX)),
+        &value[suffix_start..]
+    )
+}
+
+fn latest_message_timestamp(messages: &[Message]) -> Option<Timestamp> {
+    messages.last().map(message_timestamp)
+}
+
+fn message_timestamp(message: &Message) -> Timestamp {
+    match message {
+        Message::User(message) => message.timestamp,
+        Message::System(message) => message.timestamp,
+        Message::ToolResult(message) => message.timestamp,
+        Message::Assistant(message) => message.timestamp,
+        Message::Custom(message) => message.timestamp,
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -584,8 +1060,10 @@ pub enum ContextNormalizationError {
     },
     #[error("compaction checkpoint must contain exactly one native compaction item")]
     InvalidCompactionItems,
-    #[error("compaction checkpoint retained history may contain only user/developer messages")]
+    #[error("compaction checkpoint retained history may contain only real user messages")]
     InvalidRetainedMessage,
+    #[error("compaction checkpoint pending history may not contain another compaction checkpoint")]
+    InvalidPendingMessage,
 }
 
 #[cfg(test)]
@@ -593,17 +1071,18 @@ mod tests {
     use agent_contracts::{SessionMessage, SessionMessageDelivery, SessionMessageOrigin};
     use chrono::Utc;
     use llm_contracts::{
-        AssistantContent, AssistantMessage, ContentPart, Message, MessageId, ModelId, ModelRef,
-        ProviderId, StopReason, TextContent, Timestamp, ToolArguments, ToolCallId,
-        ToolResultOutcome, Usage, UserMessage,
+        AssistantContent, AssistantMessage, ContentPart, ImageContent, ImageDetail, ImageSource,
+        Message, MessageId, ModelId, ModelRef, ProviderId, StopReason, SystemMessage, TextContent,
+        Timestamp, ToolArguments, ToolCallId, ToolResultMessage, ToolResultOutcome, UrlImageSource,
+        Usage, UserMessage,
     };
     use serde_json::json;
     use uuid::Uuid;
 
     use super::{
         CODEX_COMPACTION_MESSAGE_TAG, CodexCompactionTrigger, CompactionPlan,
-        checkpoint_from_response, form_compaction_request, normalize_session_messages,
-        plan_compaction,
+        checkpoint_from_response, estimate_native_item_tokens, estimate_text_tokens,
+        form_compaction_request, normalize_session_messages, plan_compaction,
     };
     use crate::runtime::{CodexEnvironmentSnapshot, CodexHarnessConfig, CodexProvider};
 
@@ -614,7 +1093,6 @@ mod tests {
             let request = form_compaction_request(
                 &config(provider),
                 session_id,
-                &environment(),
                 &[session_message(session_id, 1, user("user-1", "Fix it."))],
             )
             .expect("compaction request");
@@ -644,6 +1122,7 @@ mod tests {
             Timestamp(10),
             CodexCompactionTrigger::AutomaticLimit,
             &active,
+            &[],
             &compaction_response("openai"),
         )
         .expect("checkpoint");
@@ -674,7 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_tool_call_gets_protocol_valid_error_before_next_user() {
+    fn interrupted_tool_call_gets_raw_aborted_output_before_next_user() {
         let session_id = Uuid::now_v7();
         let mut interrupted = compaction_response("chatgpt");
         interrupted.id = message_id("interrupted-assistant");
@@ -697,7 +1176,14 @@ mod tests {
         };
         assert_eq!(result.tool_name, "exec");
         assert_eq!(result.tool_call_id.as_str(), "call-interrupted");
-        assert!(matches!(result.outcome, ToolResultOutcome::Error { .. }));
+        assert!(matches!(result.outcome, ToolResultOutcome::Success));
+        assert_eq!(
+            result.content,
+            vec![ContentPart::Text(TextContent {
+                content: "aborted".to_owned(),
+                metadata: None,
+            })]
+        );
 
         let request = llm_contracts::LlmRequest {
             model: crate::runtime::resolve_model_config(&config("chatgpt"), session_id).model,
@@ -710,14 +1196,152 @@ mod tests {
         let body = provider_chatgpt::build_response_request(&request).expect("ChatGPT body");
         assert_eq!(body["input"][1]["type"], json!("custom_tool_call_output"));
         assert_eq!(body["input"][1]["call_id"], json!("call-interrupted"));
+        assert_eq!(body["input"][1]["output"], json!("aborted"));
+    }
+
+    #[test]
+    fn native_missing_output_is_inserted_immediately_after_its_call() {
+        let session_id = Uuid::now_v7();
+        let mut interrupted = compaction_response("openai");
+        interrupted.id = message_id("parallel-assistant");
+        interrupted.stop_reason = StopReason::ToolUse;
+        interrupted.content = vec![
+            AssistantContent::ToolCall {
+                name: "exec".to_owned(),
+                arguments: ToolArguments::String("text('first')".to_owned()),
+                tool_call_id: ToolCallId::new("call-1").expect("tool call ID"),
+            },
+            AssistantContent::ToolCall {
+                name: "exec".to_owned(),
+                arguments: ToolArguments::String("text('second')".to_owned()),
+                tool_call_id: ToolCallId::new("call-2").expect("tool call ID"),
+            },
+        ];
+        interrupted.native_message = json!({
+            "output": [
+                {
+                    "type": "custom_tool_call",
+                    "id": "ctc-server-1",
+                    "call_id": "call-1",
+                    "name": "exec",
+                    "input": "text('first')"
+                },
+                {
+                    "type": "custom_tool_call",
+                    "id": "ctc-server-2",
+                    "call_id": "call-2",
+                    "name": "exec",
+                    "input": "text('second')"
+                }
+            ]
+        });
+        let messages = vec![
+            session_message(session_id, 1, Message::Assistant(interrupted)),
+            session_message(
+                session_id,
+                2,
+                tool_result("result-2", "call-2", "completed"),
+            ),
+            session_message(session_id, 3, user("follow-up", "Continue")),
+        ];
+
+        let normalized = normalize_session_messages(session_id, &messages, CodexProvider::OpenAi)
+            .expect("normalized");
+        assert_eq!(
+            normalized.len(),
+            3,
+            "synthetic output stays in native items"
+        );
+        let Message::Assistant(assistant) = &normalized[0] else {
+            panic!("first message is the assistant")
+        };
+        let output = assistant.native_message["output"]
+            .as_array()
+            .expect("native output");
+        assert_eq!(output[0]["call_id"], json!("call-1"));
+        assert_eq!(output[1]["type"], json!("custom_tool_call_output"));
+        assert_eq!(output[1]["call_id"], json!("call-1"));
+        assert_eq!(output[1]["output"], json!("aborted"));
+        assert!(
+            output[1]["id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("ctco_")),
+            "Codex-compatible synthetic IDs remain stable for prompt caching"
+        );
+        assert_eq!(output[2]["call_id"], json!("call-2"));
+
+        let request = llm_contracts::LlmRequest {
+            model: crate::runtime::resolve_model_config(&config("openai"), session_id).model,
+            instructions: None,
+            messages: normalized,
+            tools: crate::runtime::model_visible_tool_definitions(),
+            provider_options: Default::default(),
+            metadata: Default::default(),
+        };
+        let body = provider_openai::build_response_request(&request).expect("OpenAI body");
+        let input = body["input"].as_array().expect("input");
+        assert_eq!(input[0]["call_id"], json!("call-1"));
+        assert_eq!(input[1]["type"], json!("custom_tool_call_output"));
+        assert_eq!(input[2]["call_id"], json!("call-2"));
+        assert_eq!(input[3]["call_id"], json!("call-2"));
+        assert_eq!(input[3]["output"], json!("completed"));
+    }
+
+    #[test]
+    fn normalization_removes_orphan_tool_outputs() {
+        let session_id = Uuid::now_v7();
+        let messages = vec![
+            session_message(
+                session_id,
+                1,
+                tool_result("orphan-result", "call-orphan", "unmatched output"),
+            ),
+            session_message(session_id, 2, user("follow-up", "Continue")),
+        ];
+
+        let normalized = normalize_session_messages(session_id, &messages, CodexProvider::OpenAi)
+            .expect("normalized");
+        assert_eq!(normalized, vec![user("follow-up", "Continue")]);
+    }
+
+    #[test]
+    fn pending_user_is_installed_after_opaque_compaction_item() {
+        let session_id = Uuid::now_v7();
+        let old = user("old-user", "Old request");
+        let pending = user("pending-user", "Current request");
+        let checkpoint = checkpoint_from_response(
+            &config("openai"),
+            message_id("checkpoint"),
+            Timestamp(10),
+            CodexCompactionTrigger::AutomaticLimit,
+            std::slice::from_ref(&old),
+            std::slice::from_ref(&pending),
+            &compaction_response("openai"),
+        )
+        .expect("checkpoint");
+        let messages = vec![
+            session_message(session_id, 1, old),
+            session_message(session_id, 2, pending),
+            session_message(session_id, 3, Message::Custom(checkpoint)),
+        ];
+
+        let normalized = normalize_session_messages(session_id, &messages, CodexProvider::OpenAi)
+            .expect("normalized");
+        assert_eq!(normalized.len(), 3);
+        assert!(
+            matches!(&normalized[0], Message::User(message) if message.id.as_str() == "old-user")
+        );
+        assert!(matches!(&normalized[1], Message::Custom(_)));
+        assert!(
+            matches!(&normalized[2], Message::User(message) if message.id.as_str() == "pending-user")
+        );
     }
 
     #[test]
     fn prior_overflow_compacts_once_at_the_next_sampling_boundary() {
         let session_id = Uuid::now_v7();
         let run_id = Uuid::now_v7();
-        let request = form_compaction_request(&config("openai"), session_id, &environment(), &[])
-            .expect("request");
+        let request = form_compaction_request(&config("openai"), session_id, &[]).expect("request");
         assert!(matches!(
             plan_compaction(&request, &[], 272_000, true, run_id, 2),
             CompactionPlan::Compact {
@@ -735,6 +1359,7 @@ mod tests {
                     message_id("checkpoint"),
                     Timestamp(1),
                     CodexCompactionTrigger::ContextOverflow,
+                    &[],
                     &[],
                     &compaction_response("openai"),
                 )
@@ -754,8 +1379,7 @@ mod tests {
         let session_id = Uuid::now_v7();
         let run_id = Uuid::now_v7();
         let mut request =
-            form_compaction_request(&config("openai"), session_id, &environment(), &[])
-                .expect("request");
+            form_compaction_request(&config("openai"), session_id, &[]).expect("request");
         let mut response = compaction_response("openai");
         response.usage = Some(Usage {
             input: Some(200_000),
@@ -783,6 +1407,7 @@ mod tests {
             Timestamp(1),
             CodexCompactionTrigger::AutomaticLimit,
             &[user("user", "Keep me")],
+            &[],
             &compaction_response("chatgpt"),
         )
         .expect("checkpoint");
@@ -805,6 +1430,7 @@ mod tests {
             Timestamp(2),
             CodexCompactionTrigger::AutomaticLimit,
             &[environment, user("user", "Keep me")],
+            &[],
             &compaction_response("openai"),
         )
         .expect("checkpoint");
@@ -813,6 +1439,165 @@ mod tests {
             .expect("retained messages");
         assert_eq!(retained.len(), 1);
         assert_eq!(retained[0]["id"], json!("user"));
+    }
+
+    #[test]
+    fn checkpoint_retains_only_real_users_and_truncates_newest_boundary() {
+        let huge = "x".repeat(300_000);
+        let checkpoint = checkpoint_from_response(
+            &config("openai"),
+            message_id("checkpoint"),
+            Timestamp(2),
+            CodexCompactionTrigger::AutomaticLimit,
+            &[
+                user(
+                    "older-user",
+                    "This older message must not leapfrog the boundary",
+                ),
+                system("developer", "Drop developer context"),
+                user("newest-user", &huge),
+            ],
+            &[],
+            &compaction_response("openai"),
+        )
+        .expect("checkpoint");
+        let retained = checkpoint.content["retained_messages"]
+            .as_array()
+            .expect("retained messages");
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0]["id"], json!("newest-user"));
+        let retained_text = retained[0]["content"][0]["content"]
+            .as_str()
+            .expect("retained text");
+        assert!(retained_text.contains("tokens truncated"));
+        assert!(retained_text.len() < huge.len());
+    }
+
+    #[test]
+    fn checkpoint_preserves_url_images_without_charging_the_text_budget() {
+        let huge = "x".repeat(300_000);
+        let image = ContentPart::Image(ImageContent {
+            source: ImageSource::Url(UrlImageSource {
+                url: "https://example.com/input.png".to_owned(),
+            }),
+            detail: Some(ImageDetail::High),
+            metadata: None,
+        });
+        let mixed = Message::User(UserMessage {
+            id: message_id("mixed-user"),
+            timestamp: Timestamp(1),
+            content: vec![
+                ContentPart::Text(TextContent {
+                    content: huge,
+                    metadata: None,
+                }),
+                image.clone(),
+            ],
+        });
+        let checkpoint = checkpoint_from_response(
+            &config("openai"),
+            message_id("checkpoint"),
+            Timestamp(2),
+            CodexCompactionTrigger::AutomaticLimit,
+            &[mixed],
+            &[],
+            &compaction_response("openai"),
+        )
+        .expect("checkpoint");
+        let retained = checkpoint.content["retained_messages"]
+            .as_array()
+            .expect("retained messages");
+        let retained_message: Message =
+            serde_json::from_value(retained[0].clone()).expect("retained message");
+        let Message::User(retained_user) = retained_message else {
+            panic!("retained user")
+        };
+        assert_eq!(retained_user.content.last(), Some(&image));
+    }
+
+    #[test]
+    fn pre_compaction_rewrites_oversized_recent_tool_output() {
+        let session_id = Uuid::now_v7();
+        let call = tool_call_assistant("assistant-call", "call-large");
+        let output = tool_result("result-large", "call-large", &"z".repeat(1_100_000));
+        let request = form_compaction_request(
+            &config("openai"),
+            session_id,
+            &[
+                session_message(session_id, 1, call),
+                session_message(session_id, 2, output),
+            ],
+        )
+        .expect("compaction request");
+        let result = request
+            .messages
+            .iter()
+            .find_map(|message| match message {
+                Message::ToolResult(result) => Some(result),
+                _ => None,
+            })
+            .expect("tool result");
+        assert_eq!(
+            result.content,
+            vec![ContentPart::Text(TextContent {
+                content: super::CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_owned(),
+                metadata: None,
+            })]
+        );
+    }
+
+    #[test]
+    fn estimator_uses_utf8_bytes_and_discounts_opaque_reasoning() {
+        assert_eq!(estimate_text_tokens("éééé"), 2);
+        let encrypted = "A".repeat(1_868);
+        let expected_visible_bytes = (1_868_u64 * 3 / 4).saturating_sub(650);
+        assert_eq!(
+            estimate_native_item_tokens(&json!({
+                "type": "reasoning",
+                "encrypted_content": encrypted,
+                "summary": [],
+            })),
+            expected_visible_bytes.div_ceil(4)
+        );
+    }
+
+    #[test]
+    fn automatic_redelivery_does_not_compact_twice() {
+        let session_id = Uuid::now_v7();
+        let run_id = Uuid::now_v7();
+        let mut request =
+            form_compaction_request(&config("openai"), session_id, &[]).expect("request");
+        let mut response = compaction_response("openai");
+        response.usage = Some(Usage {
+            input: Some(244_800),
+            output: None,
+            cache_read: None,
+            cache_write: None,
+            cost: None,
+        });
+        request.messages.push(Message::Assistant(response));
+        let mut checkpoint = session_message(
+            session_id,
+            1,
+            Message::Custom(
+                checkpoint_from_response(
+                    &config("openai"),
+                    message_id("checkpoint"),
+                    Timestamp(1),
+                    CodexCompactionTrigger::AutomaticLimit,
+                    &[],
+                    &[],
+                    &compaction_response("openai"),
+                )
+                .expect("checkpoint"),
+            ),
+        );
+        checkpoint.run_id = Some(run_id);
+        checkpoint.turn_number = Some(3);
+        assert!(matches!(
+            plan_compaction(&request, &[checkpoint], 272_000, false, run_id, 3),
+            CompactionPlan::AlreadyCompactedForTurn { .. }
+        ));
     }
 
     fn config(provider: &str) -> CodexHarnessConfig {
@@ -887,6 +1672,52 @@ mod tests {
                 content: content.to_owned(),
                 metadata: None,
             })],
+        })
+    }
+
+    fn system(id: &str, content: &str) -> Message {
+        Message::System(SystemMessage {
+            id: message_id(id),
+            timestamp: Timestamp(1),
+            content: vec![TextContent {
+                content: content.to_owned(),
+                metadata: None,
+            }],
+        })
+    }
+
+    fn tool_call_assistant(id: &str, call_id: &str) -> Message {
+        let mut response = compaction_response("openai");
+        response.id = message_id(id);
+        response.stop_reason = StopReason::ToolUse;
+        response.content = vec![AssistantContent::ToolCall {
+            name: "exec".to_owned(),
+            arguments: ToolArguments::String("text('done')".to_owned()),
+            tool_call_id: ToolCallId::new(call_id).expect("tool call ID"),
+        }];
+        response.native_message = json!({
+            "output": [{
+                "type": "custom_tool_call",
+                "call_id": call_id,
+                "name": "exec",
+                "input": "text('done')"
+            }]
+        });
+        Message::Assistant(response)
+    }
+
+    fn tool_result(id: &str, call_id: &str, content: &str) -> Message {
+        Message::ToolResult(ToolResultMessage {
+            id: message_id(id),
+            tool_name: "exec".to_owned(),
+            tool_call_id: ToolCallId::new(call_id).expect("tool call ID"),
+            content: vec![ContentPart::Text(TextContent {
+                content: content.to_owned(),
+                metadata: None,
+            })],
+            details: None,
+            timestamp: Timestamp(1),
+            outcome: ToolResultOutcome::Success,
         })
     }
 
