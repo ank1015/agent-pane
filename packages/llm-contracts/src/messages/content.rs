@@ -106,8 +106,12 @@ fn validate_image(image: &ImageContent, issues: &mut Vec<ValidationIssue>) {
             }
         }
         ImageSource::Url(source) => match url::Url::parse(&source.url) {
-            Ok(url) if url.has_host() => {}
-            _ => issue(issues, "source.url", "must be a fully qualified URL"),
+            Ok(url) if url.has_host() && matches!(url.scheme(), "http" | "https") => {}
+            _ => issue(
+                issues,
+                "source.url",
+                "must be a fully qualified HTTP or HTTPS URL",
+            ),
         },
     }
 }

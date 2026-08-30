@@ -126,6 +126,32 @@ fn request_rejects_invalid_image_url() {
     assert!(request.validate().is_err());
 }
 
+#[test]
+fn request_rejects_non_http_image_url() {
+    let request: LlmRequest = serde_json::from_value(json!({
+        "model": {
+            "provider": "example_provider",
+            "id": "example-model"
+        },
+        "messages": [{
+            "role": "user",
+            "id": "message-1",
+            "timestamp": 1,
+            "content": [{
+                "type": "image",
+                "source": {
+                    "type": "url",
+                    "url": "ftp://example.com/image.png"
+                }
+            }]
+        }]
+    }))
+    .expect("structurally valid request");
+
+    let error = request.validate().expect_err("FTP image URLs must fail");
+    assert!(error.to_string().contains("HTTP or HTTPS"));
+}
+
 #[derive(Deserialize, JsonSchema)]
 #[allow(dead_code)]
 struct WeatherArguments {
