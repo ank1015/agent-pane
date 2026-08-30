@@ -93,6 +93,7 @@ fn request_merges_hosted_and_portable_tools() {
         name: "weather".into(),
         description: "Get weather".into(),
         parameters: Map::from_iter([("type".into(), json!("object"))]),
+        output_schema: None,
         strict: None,
     }));
 

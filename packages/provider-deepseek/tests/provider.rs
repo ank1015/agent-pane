@@ -201,6 +201,7 @@ fn tool_requests_add_missing_reasoning_content_to_assistant_history() {
         name: "weather".into(),
         description: "Get weather".into(),
         parameters: Map::from_iter([("type".into(), json!("object"))]),
+        output_schema: None,
         strict: None,
     }));
     request.messages = vec![Message::Assistant(AssistantMessage {
@@ -243,6 +244,7 @@ fn maps_function_tools_and_response_content_usage_and_cost() {
         name: "weather".into(),
         description: "Get weather".into(),
         parameters: Map::from_iter([("type".into(), json!("object"))]),
+        output_schema: None,
         strict: Some(true),
     }));
     let body = build_chat_completion_request(&request).expect("valid tool");

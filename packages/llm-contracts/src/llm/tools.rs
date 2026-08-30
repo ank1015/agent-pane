@@ -13,6 +13,10 @@ pub struct FunctionTool {
     pub name: String,
     pub description: String,
     pub parameters: JsonObject,
+    /// Optional schema describing the value returned to code-mode or other
+    /// harness-owned tool consumers. Providers may ignore this metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<JsonObject>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict: Option<bool>,
 }
@@ -43,6 +47,7 @@ impl FunctionTool {
             name: name.into(),
             description: description.into(),
             parameters,
+            output_schema: None,
             strict: None,
         };
         ToolDefinition::Function(tool.clone()).validate()?;

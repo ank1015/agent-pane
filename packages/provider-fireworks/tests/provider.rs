@@ -150,6 +150,7 @@ fn request_maps_function_tools_and_rejects_unpriced_or_unsupported_modes() {
         name: "weather".into(),
         description: "Get weather".into(),
         parameters: Map::from_iter([("type".into(), json!("object"))]),
+        output_schema: None,
         strict: Some(true),
     }));
 

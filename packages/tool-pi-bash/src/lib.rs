@@ -549,6 +549,7 @@ fn function_tool(name: &str, description: &str, parameters: Value) -> ToolDefini
         name: name.to_owned(),
         description: description.to_owned(),
         parameters,
+        output_schema: None,
         strict: None,
     })
 }

@@ -148,6 +148,7 @@ fn native_tools_are_merged_with_portable_function_tools() {
         name: "weather".into(),
         description: "Get weather".into(),
         parameters: Map::from_iter([("type".into(), json!("object"))]),
+        output_schema: None,
         strict: Some(true),
     }));
     request.provider_options.insert(
