@@ -1,9 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use execution_contracts::{ExecutionId, MachineId, WorkspaceRootId};
+use execution_contracts::{
+    ExecutionId, ExecutionState, InspectExecutionRequest, MachineId, TerminateExecutionRequest,
+    WorkspaceRootId,
+};
 use execution_local::{LocalExecutionRuntime, LocalRuntimeConfig, LocalWorkspaceRoot};
-use execution_runtime::OperationContext;
+use execution_runtime::{ExecutionRuntime, OperationContext};
 use llm_contracts::{ContentPart, ToolArguments, Validate as _};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
@@ -156,6 +159,50 @@ fn exports_two_valid_codex_definitions() {
     }
 }
 
+#[test]
+fn exports_the_codex_unified_exec_output_schema() {
+    let definitions = definitions();
+    for definition in definitions {
+        let llm_contracts::ToolDefinition::Function(tool) = definition else {
+            panic!("unified exec tools must be function tools")
+        };
+        assert_eq!(
+            Value::Object(tool.output_schema.expect("unified exec output schema")),
+            json!({
+                "type": "object",
+                "properties": {
+                    "chunk_id": {
+                        "type": "string",
+                        "description": "Chunk identifier included when the response reports one."
+                    },
+                    "wall_time_seconds": {
+                        "type": "number",
+                        "description": "Elapsed wall time spent waiting for output in seconds."
+                    },
+                    "exit_code": {
+                        "type": "number",
+                        "description": "Process exit code when the command finished during this call."
+                    },
+                    "session_id": {
+                        "type": "number",
+                        "description": "Session identifier to pass to write_stdin when the process is still running."
+                    },
+                    "original_token_count": {
+                        "type": "number",
+                        "description": "Approximate token count before output truncation."
+                    },
+                    "output": {
+                        "type": "string",
+                        "description": "Command output text, possibly truncated."
+                    }
+                },
+                "required": ["wall_time_seconds", "output"],
+                "additionalProperties": false
+            })
+        );
+    }
+}
+
 #[tokio::test]
 async fn completed_nonzero_command_is_a_successful_tool_output() {
     let fixture = Fixture::new().await;
@@ -233,7 +280,7 @@ async fn running_command_returns_session_and_poll_does_not_replay_output() {
 }
 
 #[tokio::test]
-async fn cancelling_initial_collection_terminates_the_unpublished_process() {
+async fn cancelling_initial_collection_preserves_the_started_background_process() {
     let fixture = Fixture::new().await;
     let operation = OperationContext::new();
     let context = fixture.context(&operation, "cancelled-command");
@@ -258,10 +305,42 @@ async fn cancelling_initial_collection_terminates_the_unpublished_process() {
     }
     let error = execution.await.expect_err("cancelled command");
     assert_eq!(error.name(), "cancelled");
-    assert!(
-        fixture.sessions.sessions.lock().await.is_empty(),
-        "an unpublished cancelled session must not remain addressable"
-    );
+    let session = fixture
+        .sessions
+        .sessions
+        .lock()
+        .await
+        .values()
+        .next()
+        .cloned()
+        .expect("started process must remain in the session store");
+    let cleanup = OperationContext::new();
+    let runtime = fixture
+        .runtime
+        .process_runtime()
+        .expect("local process runtime");
+    let status = runtime
+        .inspect(
+            &cleanup,
+            InspectExecutionRequest {
+                execution_id: session.execution_id().clone(),
+            },
+        )
+        .await
+        .expect("inspect preserved process");
+    assert!(matches!(
+        status.state,
+        ExecutionState::Queued | ExecutionState::Starting | ExecutionState::Running
+    ));
+    runtime
+        .terminate(
+            &cleanup,
+            TerminateExecutionRequest {
+                execution_id: session.execution_id().clone(),
+            },
+        )
+        .await
+        .expect("clean up preserved test process");
 }
 
 #[tokio::test]
@@ -404,4 +483,4 @@ where
     T::try_from(value.to_owned()).expect("valid identifier")
 }
 
-use serde_json::Value;
+use serde_json::{Value, json};

@@ -6,9 +6,9 @@ use execution_contracts::{
     ExecutionErrorCode, ExecutionId, ExecutionPersistence, ExecutionPolicy, ExecutionState,
     InspectExecutionRequest, NetworkMode, OperationId, ProcessEventKind, ProcessInputStatus,
     ProcessOutputPolicy, ProcessSignal, SandboxMode, SignalExecutionRequest, StartExecutionRequest,
-    StdinMode, TerminateExecutionRequest, WriteProcessInputRequest,
+    StdinMode, WriteProcessInputRequest,
 };
-use execution_runtime::{OperationContext, ProcessRuntime};
+use execution_runtime::ProcessRuntime;
 use futures_util::StreamExt as _;
 use llm_contracts::ToolArguments;
 use serde::{Serialize, de::DeserializeOwned};
@@ -173,12 +173,11 @@ pub async fn execute_exec_command(
     let collected = match collected {
         Ok(collected) => collected,
         Err(error) => {
-            if error.name() == "cancelled" {
-                // The model has never received this session ID, so leaving the
-                // process alive would create an unreachable orphan. Use a
-                // fresh operation because the turn-scoped one is cancelled.
-                terminate_unpublished_session(runtime, context, &session).await;
-            } else {
+            // Codex publishes the process into its session store before the
+            // initial yield and intentionally leaves it running when the outer
+            // turn is cancelled. Preserve both the process and its mapping;
+            // process-lifetime cleanup remains the session owner's responsibility.
+            if error.name() != "cancelled" {
                 cleanup_terminal_session(runtime, context, &session).await;
             }
             return Err(error);
@@ -542,23 +541,6 @@ async fn cleanup_terminal_session(
     {
         let _ = remove_session(context, session).await;
     }
-}
-
-async fn terminate_unpublished_session(
-    runtime: &dyn ProcessRuntime,
-    context: &CodexExecToolContext<'_>,
-    session: &CodexExecSession,
-) {
-    let cleanup_operation = OperationContext::new();
-    let _ = runtime
-        .terminate(
-            &cleanup_operation,
-            TerminateExecutionRequest {
-                execution_id: session.execution_id().clone(),
-            },
-        )
-        .await;
-    let _ = remove_session(context, session).await;
 }
 
 fn is_terminal_state(state: ExecutionState) -> bool {

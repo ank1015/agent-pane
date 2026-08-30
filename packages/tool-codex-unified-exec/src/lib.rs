@@ -385,14 +385,32 @@ fn function_tool(name: &str, description: &str, parameters: Value) -> ToolDefini
             json!({
                 "type": "object",
                 "properties": {
-                    "chunk_id": { "type": "string" },
-                    "exit_code": { "type": "number" },
-                    "original_token_count": { "type": "number" },
-                    "output": { "type": "string" },
-                    "session_id": { "type": "number" },
-                    "wall_time_seconds": { "type": "number" }
+                    "chunk_id": {
+                        "type": "string",
+                        "description": "Chunk identifier included when the response reports one."
+                    },
+                    "wall_time_seconds": {
+                        "type": "number",
+                        "description": "Elapsed wall time spent waiting for output in seconds."
+                    },
+                    "exit_code": {
+                        "type": "number",
+                        "description": "Process exit code when the command finished during this call."
+                    },
+                    "session_id": {
+                        "type": "number",
+                        "description": "Session identifier to pass to write_stdin when the process is still running."
+                    },
+                    "original_token_count": {
+                        "type": "number",
+                        "description": "Approximate token count before output truncation."
+                    },
+                    "output": {
+                        "type": "string",
+                        "description": "Command output text, possibly truncated."
+                    }
                 },
-                "required": ["output", "wall_time_seconds"],
+                "required": ["wall_time_seconds", "output"],
                 "additionalProperties": false
             })
             .as_object()
