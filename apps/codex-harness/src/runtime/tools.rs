@@ -8,10 +8,9 @@ use llm_contracts::{
     ToolArguments, ToolDefinition, ToolResultError, ToolResultMessage, ToolResultOutcome,
 };
 use serde_json::{Value, json};
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use super::CodexExecutionTarget;
+use super::{CodexExecutionTarget, tool_admission::ToolAdmissionGate};
 
 /// Machine and cancellation inputs shared by the stateless Codex tools.
 pub struct StatelessToolContext<'a> {
@@ -21,27 +20,42 @@ pub struct StatelessToolContext<'a> {
 }
 
 /// Executes tools that do not require durable harness-owned state.
-///
-/// The gate mirrors Codex's tool-call scheduler: `view_image` is parallel-safe,
-/// while `apply_patch` takes exclusive admission so filesystem mutations cannot
-/// race another nested tool call.
 #[derive(Default)]
-pub struct StatelessToolExecutor {
-    parallel_gate: RwLock<()>,
-}
+pub struct StatelessToolExecutor;
 
 impl StatelessToolExecutor {
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            parallel_gate: RwLock::const_new(()),
-        }
+        Self
     }
 
     /// Executes one direct assistant tool call and converts every tool failure
     /// into a model-visible error result. Passing non-tool assistant content is
     /// a harness programming error.
     pub async fn execute_tool_call(
+        &self,
+        call: &AssistantContent,
+        context: &StatelessToolContext<'_>,
+    ) -> Result<ToolResultMessage, StatelessToolDispatchError> {
+        let admission = ToolAdmissionGate::default();
+        self.execute_tool_call_with_admission(call, context, &admission)
+            .await
+    }
+
+    async fn execute_tool_call_with_admission(
+        &self,
+        call: &AssistantContent,
+        context: &StatelessToolContext<'_>,
+        admission: &ToolAdmissionGate,
+    ) -> Result<ToolResultMessage, StatelessToolDispatchError> {
+        let AssistantContent::ToolCall { name, .. } = call else {
+            return Err(StatelessToolDispatchError::NotAToolCall);
+        };
+        let _admission = admission.acquire(name).await;
+        self.execute_tool_call_admitted(call, context).await
+    }
+
+    pub(super) async fn execute_tool_call_admitted(
         &self,
         call: &AssistantContent,
         context: &StatelessToolContext<'_>,
@@ -55,7 +69,7 @@ impl StatelessToolExecutor {
             return Err(StatelessToolDispatchError::NotAToolCall);
         };
 
-        let result = self.execute(name, arguments, context).await;
+        let result = execute_without_gate(name, arguments, context).await;
         let (content, details, outcome) = result.into_transcript_parts();
         Ok(ToolResultMessage {
             id: MessageId::new(format!("tool-result-{}", Uuid::now_v7()))
@@ -77,11 +91,12 @@ impl StatelessToolExecutor {
         content: &[AssistantContent],
         context: &StatelessToolContext<'_>,
     ) -> Result<Vec<ToolResultMessage>, StatelessToolDispatchError> {
+        let admission = ToolAdmissionGate::default();
         try_join_all(
             content
                 .iter()
                 .filter(|item| matches!(item, AssistantContent::ToolCall { .. }))
-                .map(|item| self.execute_tool_call(item, context)),
+                .map(|item| self.execute_tool_call_with_admission(item, context, &admission)),
         )
         .await
     }
@@ -93,6 +108,21 @@ impl StatelessToolExecutor {
         invocation: &CodeModeNestedToolCall,
         context: &StatelessToolContext<'_>,
     ) -> Result<Value, String> {
+        let admission = ToolAdmissionGate::default();
+        let _admission = if invocation.tool_name.namespace.is_some() {
+            admission.acquire_exclusive().await
+        } else {
+            admission.acquire(&invocation.tool_name.name).await
+        };
+        self.execute_nested_tool_call_admitted(invocation, context)
+            .await
+    }
+
+    pub(super) async fn execute_nested_tool_call_admitted(
+        &self,
+        invocation: &CodeModeNestedToolCall,
+        context: &StatelessToolContext<'_>,
+    ) -> Result<Value, String> {
         if invocation.tool_name.namespace.is_some() {
             return Err(format!(
                 "unknown nested tool `{}`",
@@ -100,30 +130,11 @@ impl StatelessToolExecutor {
             ));
         }
         let arguments = nested_arguments(invocation)?;
-        match self
-            .execute(&invocation.tool_name.name, &arguments, context)
-            .await
-        {
+        match execute_without_gate(&invocation.tool_name.name, &arguments, context).await {
             StatelessToolResult::Success(output) => {
                 nested_success_value(&invocation.tool_name.name, &output)
             }
             StatelessToolResult::Error(error) => Err(error.message),
-        }
-    }
-
-    async fn execute(
-        &self,
-        name: &str,
-        arguments: &ToolArguments,
-        context: &StatelessToolContext<'_>,
-    ) -> StatelessToolResult {
-        let supports_parallel = name == tool_codex_view_image::TOOL_NAME;
-        if supports_parallel {
-            let _admission = self.parallel_gate.read().await;
-            execute_without_gate(name, arguments, context).await
-        } else {
-            let _admission = self.parallel_gate.write().await;
-            execute_without_gate(name, arguments, context).await
         }
     }
 }
@@ -338,13 +349,6 @@ pub fn model_visible_tool_definitions() -> Vec<ToolDefinition> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    use std::time::Duration;
-
     use codex_code_mode_runtime::{CellId, CodeModeNestedToolCall, CodeModeToolKind, ToolName};
     use execution_contracts::{MachineId, WorkspaceRootId};
     use execution_local::{LocalExecutionRuntime, LocalRuntimeConfig, LocalWorkspaceRoot};
@@ -352,6 +356,7 @@ mod tests {
     use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
     use llm_contracts::{AssistantContent, ToolArguments, ToolCallId, ToolResultOutcome};
     use serde_json::{Value, json};
+    use std::io::Cursor;
 
     use super::{
         StatelessToolContext, StatelessToolExecutor, default_nested_tool_definitions,
@@ -492,7 +497,7 @@ mod tests {
             result["image_url"]
                 .as_str()
                 .expect("image URL")
-                .starts_with("data:image/png;base64,")
+                .starts_with("data:application/octet-stream;base64,")
         );
     }
 
@@ -527,28 +532,6 @@ mod tests {
                 .expect_err("invalid patch")
                 .contains("apply_patch verification failed")
         );
-    }
-
-    #[tokio::test]
-    async fn parallel_safe_admission_overlaps_readers() {
-        let executor = StatelessToolExecutor::new();
-        let active = Arc::new(AtomicUsize::new(0));
-        let maximum = Arc::new(AtomicUsize::new(0));
-        let run = || {
-            let executor = &executor;
-            let active = Arc::clone(&active);
-            let maximum = Arc::clone(&maximum);
-            async move {
-                let _admission = executor.parallel_gate.read().await;
-                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-                maximum.fetch_max(current, Ordering::SeqCst);
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                active.fetch_sub(1, Ordering::SeqCst);
-            }
-        };
-
-        tokio::join!(run(), run());
-        assert_eq!(maximum.load(Ordering::SeqCst), 2);
     }
 
     struct Fixture {

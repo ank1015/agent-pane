@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Weak},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use codex_code_mode_runtime::{
@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use super::{
     CodexExecutionTarget, StatelessToolContext, StatelessToolExecutor,
-    default_nested_tool_definitions,
+    default_nested_tool_definitions, tool_admission::ToolAdmissionGate,
 };
 use crate::persistence::CodexToolStateBackend;
 
@@ -41,6 +41,14 @@ pub struct CodexToolExecutor {
     state: Arc<dyn CodexToolStateBackend>,
     stateless: Arc<StatelessToolExecutor>,
     delegates: Arc<Mutex<HashMap<Uuid, Weak<SessionNestedToolDelegate>>>>,
+}
+
+/// Codex uses separate request-scoped runtimes for top-level and code-mode
+/// nested calls. Keeping both gates in one batch makes that split explicit.
+#[derive(Default)]
+struct ToolAdmissionBatch {
+    top_level: ToolAdmissionGate,
+    nested: ToolAdmissionGate,
 }
 
 #[async_trait::async_trait]
@@ -69,6 +77,17 @@ impl CodexToolExecutor {
         call: &AssistantContent,
         context: &CodexToolExecutionContext,
     ) -> Result<ToolResultMessage, CodexToolDispatchError> {
+        let admission = ToolAdmissionBatch::default();
+        self.execute_tool_call_in_batch(call, context, &admission)
+            .await
+    }
+
+    async fn execute_tool_call_in_batch(
+        &self,
+        call: &AssistantContent,
+        context: &CodexToolExecutionContext,
+        admission: &ToolAdmissionBatch,
+    ) -> Result<ToolResultMessage, CodexToolDispatchError> {
         let AssistantContent::ToolCall {
             name,
             arguments,
@@ -77,32 +96,63 @@ impl CodexToolExecutor {
         else {
             return Err(CodexToolDispatchError::NotAToolCall);
         };
+        let started = Instant::now();
+        let execution = async {
+            let _admission = admission.top_level.acquire(name).await;
 
-        if matches!(
-            name.as_str(),
-            tool_codex_apply_patch::TOOL_NAME | tool_codex_view_image::TOOL_NAME
-        ) {
-            return self
-                .stateless
-                .execute_tool_call(call, &stateless_context(context))
-                .await
-                .map_err(|_| CodexToolDispatchError::NotAToolCall);
-        }
+            if matches!(
+                name.as_str(),
+                tool_codex_apply_patch::TOOL_NAME | tool_codex_view_image::TOOL_NAME
+            ) {
+                return self
+                    .stateless
+                    .execute_tool_call_admitted(call, &stateless_context(context))
+                    .await
+                    .map_err(|_| CodexToolDispatchError::NotAToolCall);
+            }
 
-        let result = match name.as_str() {
-            tool_codex_unified_exec::EXEC_COMMAND_TOOL_NAME
-            | tool_codex_unified_exec::WRITE_STDIN_TOOL_NAME => {
-                self.execute_unified(name, arguments, tool_call_id.as_str(), context)
+            let result = match name.as_str() {
+                tool_codex_unified_exec::EXEC_COMMAND_TOOL_NAME
+                | tool_codex_unified_exec::WRITE_STDIN_TOOL_NAME => {
+                    self.execute_unified(name, arguments, tool_call_id.as_str(), context)
+                        .await
+                }
+                tool_codex_code_mode::EXEC_TOOL_NAME | tool_codex_code_mode::WAIT_TOOL_NAME => {
+                    self.execute_code_mode(
+                        name,
+                        arguments,
+                        tool_call_id.as_str(),
+                        context,
+                        &admission.nested,
+                    )
                     .await
-            }
-            tool_codex_code_mode::EXEC_TOOL_NAME | tool_codex_code_mode::WAIT_TOOL_NAME => {
-                self.execute_code_mode(name, arguments, tool_call_id.as_str(), context)
-                    .await
-            }
-            _ => DispatchResult::error("unknown_tool", format!("Unknown tool `{name}`"), None),
+                }
+                _ => DispatchResult::error("unknown_tool", format!("Unknown tool `{name}`"), None),
+            };
+
+            Ok(result.into_message(name.clone(), tool_call_id.clone()))
         };
+        tokio::pin!(execution);
 
-        Ok(result.into_message(name.clone(), tool_call_id.clone()))
+        tokio::select! {
+            biased;
+            result = &mut execution => match result {
+                Ok(result)
+                    if context.operation.is_cancelled()
+                        && is_cancellation_origin(&result) =>
+                {
+                    Ok(user_aborted_tool_result(
+                        name,
+                        tool_call_id.clone(),
+                        started.elapsed(),
+                    ))
+                }
+                result => result,
+            },
+            () = context.operation.cancelled() => {
+                Ok(user_aborted_tool_result(name, tool_call_id.clone(), started.elapsed()))
+            }
+        }
     }
 
     /// Executes a batch concurrently while preserving assistant call order.
@@ -111,11 +161,12 @@ impl CodexToolExecutor {
         content: &[AssistantContent],
         context: &CodexToolExecutionContext,
     ) -> Result<Vec<ToolResultMessage>, CodexToolDispatchError> {
+        let admission = ToolAdmissionBatch::default();
         try_join_all(
             content
                 .iter()
                 .filter(|item| matches!(item, AssistantContent::ToolCall { .. }))
-                .map(|item| self.execute_tool_call(item, context)),
+                .map(|item| self.execute_tool_call_in_batch(item, context, &admission)),
         )
         .await
     }
@@ -143,9 +194,10 @@ impl CodexToolExecutor {
         arguments: &ToolArguments,
         tool_call_id: &str,
         context: &CodexToolExecutionContext,
+        nested_admission: &ToolAdmissionGate,
     ) -> DispatchResult {
         let delegate = self.delegate(context.agent_session_id).await;
-        delegate.bind(context).await;
+        delegate.bind(context, nested_admission.clone()).await;
         let session = self
             .state
             .code_mode_session(context.agent_session_id, delegate.clone())
@@ -242,6 +294,7 @@ struct NestedTurnBinding {
     runtime: Arc<dyn ExecutionRuntime>,
     execution: CodexExecutionTarget,
     operation: OperationContext,
+    admission: ToolAdmissionGate,
 }
 
 struct SessionNestedToolDelegate {
@@ -267,11 +320,12 @@ impl SessionNestedToolDelegate {
         }
     }
 
-    async fn bind(&self, context: &CodexToolExecutionContext) {
+    async fn bind(&self, context: &CodexToolExecutionContext, admission: ToolAdmissionGate) {
         *self.binding.write().await = Some(NestedTurnBinding {
             runtime: Arc::clone(&context.runtime),
             execution: context.execution.clone(),
             operation: context.operation.clone(),
+            admission,
         });
     }
 
@@ -288,18 +342,34 @@ impl SessionNestedToolDelegate {
         invocation: CodeModeNestedToolCall,
         cancellation_token: CancellationToken,
     ) -> Result<Value, String> {
-        if invocation.tool_name.namespace.is_some() {
-            return Err(format!(
-                "unknown nested tool `{}`",
-                invocation.tool_name.name
-            ));
-        }
         if cancellation_token.is_cancelled() {
             return Err("code mode nested tool call cancelled".to_owned());
         }
         let Some(binding) = self.binding.read().await.clone() else {
             return Err("code mode nested tool dispatcher has no active turn".to_owned());
         };
+        let admission = binding.admission.clone();
+        let admission_future = async {
+            if invocation.tool_name.namespace.is_some() {
+                admission.acquire_exclusive().await
+            } else {
+                admission.acquire(&invocation.tool_name.name).await
+            }
+        };
+        tokio::pin!(admission_future);
+        let _admission = tokio::select! {
+            biased;
+            admission = &mut admission_future => admission,
+            () = cancellation_token.cancelled() => {
+                return Err("code mode nested tool call cancelled".to_owned());
+            }
+        };
+        if invocation.tool_name.namespace.is_some() {
+            return Err(format!(
+                "unknown nested tool `{}`",
+                invocation.tool_name.name
+            ));
+        }
         let operation = binding.operation.child();
         let cancelled_operation = operation.clone();
         let cancellation_watcher = tokio::spawn(async move {
@@ -315,7 +385,7 @@ impl SessionNestedToolDelegate {
         let result = match invocation.tool_name.name.as_str() {
             tool_codex_apply_patch::TOOL_NAME | tool_codex_view_image::TOOL_NAME => {
                 self.stateless
-                    .execute_nested_tool_call(&invocation, &stateless_context(&context))
+                    .execute_nested_tool_call_admitted(&invocation, &stateless_context(&context))
                     .await
             }
             tool_codex_unified_exec::EXEC_COMMAND_TOOL_NAME
@@ -534,6 +604,47 @@ fn text_content(content: impl Into<String>) -> ContentPart {
     })
 }
 
+fn user_aborted_tool_result(
+    tool_name: &str,
+    tool_call_id: llm_contracts::ToolCallId,
+    elapsed: Duration,
+) -> ToolResultMessage {
+    let seconds = elapsed.as_secs_f32().max(0.1);
+    let message = if tool_name == tool_codex_unified_exec::EXEC_COMMAND_TOOL_NAME {
+        format!("Wall time: {seconds:.1} seconds\naborted by user")
+    } else {
+        format!("aborted by user after {seconds:.1}s")
+    };
+    ToolResultMessage {
+        id: MessageId::new(format!("codex-user-aborted-tool-{tool_call_id}"))
+            .expect("tool-call-derived result ID is valid"),
+        tool_name: tool_name.to_owned(),
+        tool_call_id,
+        content: vec![text_content(message)],
+        details: None,
+        timestamp: Timestamp(now_ms()),
+        // Codex emits aborted outputs without a `success: false` wire flag.
+        // Success also prevents provider adapters from decorating the payload.
+        outcome: ToolResultOutcome::Success,
+    }
+}
+
+fn is_cancellation_origin(result: &ToolResultMessage) -> bool {
+    let ToolResultOutcome::Error { error } = &result.outcome else {
+        return false;
+    };
+    if error.name.as_deref() == Some("cancelled") {
+        return true;
+    }
+    error.name.as_deref() == Some("execution_error")
+        && result
+            .details
+            .as_ref()
+            .and_then(|details| details.get("code"))
+            .and_then(Value::as_str)
+            == Some("cancelled")
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -544,11 +655,12 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
     use async_trait::async_trait;
     use codex_code_mode_runtime::{
-        CodeModeSession, CodeModeSessionDelegate, InMemoryCodeModeStateStore,
+        CellId, CodeModeNestedToolCall, CodeModeSession, CodeModeSessionDelegate, CodeModeToolKind,
+        InMemoryCodeModeStateStore, ToolName,
     };
     use execution_contracts::{ExecutionId, MachineId, WorkspaceRootId};
     use execution_local::{LocalExecutionRuntime, LocalRuntimeConfig, LocalWorkspaceRoot};
@@ -557,12 +669,16 @@ mod tests {
         AssistantContent, ContentPart, ToolArguments, ToolCallId, ToolResultOutcome,
     };
     use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
     use tool_codex_unified_exec::{
         CodexExecSession, CodexExecSessionStore, CodexExecSessionStoreError,
     };
     use uuid::Uuid;
 
-    use super::{CodexToolExecutionContext, CodexToolExecutor};
+    use super::{
+        CodexToolExecutionContext, CodexToolExecutor, DispatchResult, ToolAdmissionBatch,
+        ToolAdmissionGate, is_cancellation_origin, user_aborted_tool_result,
+    };
     use crate::{
         persistence::{CodeModeSessionFuture, CodexToolStateBackend, LiveCodeModeRegistry},
         runtime::CodexExecutionTarget,
@@ -727,6 +843,365 @@ store("answer", 42);"#
         assert!(text(&result.content).contains("boom"));
     }
 
+    #[tokio::test]
+    async fn request_scoped_top_level_gate_is_separate_from_nested_worker_gate() {
+        let fixture = Fixture::new().await;
+        let project = fixture.project_path();
+        let calls = vec![
+            call(
+                "exec",
+                ToolArguments::String(
+                    r#"const result = await tools.exec_command({
+    cmd: "touch nested-started; while [ ! -f nested-release ]; do sleep 0.01; done",
+    login: false,
+    yield_time_ms: 5000
+});
+text(result.output);"#
+                        .to_owned(),
+                ),
+                "exclusive-code-mode",
+            ),
+            call(
+                "exec_command",
+                object_arguments(serde_json::json!({
+                    "cmd": "touch same-batch-direct",
+                    "login": false
+                })),
+                "same-batch-parallel",
+            ),
+        ];
+        let executor = fixture.executor.clone();
+        let context = fixture.context(OperationContext::new());
+        let first_batch =
+            tokio::spawn(async move { executor.execute_tool_calls(&calls, &context).await });
+
+        assert!(
+            wait_for_paths(&[project.join("nested-started")], Duration::from_secs(2)).await,
+            "nested exec must use a separate gate from its exclusive outer exec"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !project.join("same-batch-direct").exists(),
+            "exclusive top-level exec must block a parallel-safe top-level call in its batch"
+        );
+
+        let other_calls = [call(
+            "exec_command",
+            object_arguments(serde_json::json!({
+                "cmd": "touch other-batch-direct",
+                "login": false
+            })),
+            "other-batch-parallel",
+        )];
+        let other_context = fixture.context(OperationContext::new());
+        let other_batch = fixture
+            .executor
+            .execute_tool_calls(&other_calls, &other_context);
+        tokio::time::timeout(Duration::from_secs(2), other_batch)
+            .await
+            .expect("a different sampling batch must not share top-level admission")
+            .expect("other batch result");
+        assert!(project.join("other-batch-direct").exists());
+        assert!(!project.join("same-batch-direct").exists());
+
+        tokio::fs::write(project.join("nested-release"), b"")
+            .await
+            .expect("release nested command");
+        let results = tokio::time::timeout(Duration::from_secs(5), first_batch)
+            .await
+            .expect("first batch should finish after release")
+            .expect("first batch task")
+            .expect("first batch results");
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.tool_call_id.as_str())
+                .collect::<Vec<_>>(),
+            ["exclusive-code-mode", "same-batch-parallel"]
+        );
+        assert!(project.join("same-batch-direct").exists());
+    }
+
+    #[tokio::test]
+    async fn nested_parallel_safe_calls_share_reader_admission() {
+        let fixture = Fixture::new().await;
+        let project = fixture.project_path();
+        let executor = fixture.executor.clone();
+        let context = fixture.context(OperationContext::new());
+        let call = call(
+            "exec",
+            ToolArguments::String(
+                r#"const first = tools.exec_command({
+    cmd: "touch nested-first; while [ ! -f nested-readers-release ]; do sleep 0.01; done",
+    login: false,
+    yield_time_ms: 5000
+});
+const second = tools.exec_command({
+    cmd: "touch nested-second; while [ ! -f nested-readers-release ]; do sleep 0.01; done",
+    login: false,
+    yield_time_ms: 5000
+});
+const results = await Promise.all([first, second]);
+text(results.map(result => result.output).join(""));"#
+                    .to_owned(),
+            ),
+            "nested-readers",
+        );
+        let running =
+            tokio::spawn(async move { executor.execute_tool_call(&call, &context).await });
+
+        let both_started = wait_for_paths(
+            &[project.join("nested-first"), project.join("nested-second")],
+            Duration::from_secs(2),
+        )
+        .await;
+        tokio::fs::write(project.join("nested-readers-release"), b"")
+            .await
+            .expect("release nested readers");
+        let result = tokio::time::timeout(Duration::from_secs(5), running)
+            .await
+            .expect("nested reader script should finish")
+            .expect("nested reader task")
+            .expect("nested reader result");
+
+        assert!(both_started, "parallel-safe nested calls should overlap");
+        assert_eq!(result.outcome, ToolResultOutcome::Success);
+    }
+
+    #[tokio::test]
+    async fn running_unified_cancellation_uses_scheduler_abort_result() {
+        let fixture = Fixture::new().await;
+        let project = fixture.project_path();
+        let operation = OperationContext::new();
+        let executor = fixture.executor.clone();
+        let context = fixture.context(operation.clone());
+        let call = call(
+            "exec_command",
+            object_arguments(serde_json::json!({
+                "cmd": "touch running-unified-started; while [ ! -f running-unified-release ]; do sleep 0.01; done",
+                "login": false,
+                "yield_time_ms": 5_000
+            })),
+            "running-unified",
+        );
+        let running =
+            tokio::spawn(async move { executor.execute_tool_call(&call, &context).await });
+
+        assert!(
+            wait_for_paths(
+                &[project.join("running-unified-started")],
+                Duration::from_secs(2),
+            )
+            .await,
+            "command should be running before cancellation"
+        );
+        operation.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(1), running)
+            .await
+            .expect("running command should observe cancellation")
+            .expect("running command task")
+            .expect("running command result");
+        tokio::fs::write(project.join("running-unified-release"), b"")
+            .await
+            .expect("release running command");
+
+        assert_eq!(result.outcome, ToolResultOutcome::Success);
+        let output = text(&result.content);
+        assert!(output.starts_with("Wall time: "));
+        assert!(output.ends_with(" seconds\naborted by user"));
+        assert!(!output.contains("unified exec interaction was cancelled"));
+        assert!(result.details.is_none());
+    }
+
+    #[tokio::test]
+    async fn mixed_batch_retains_completion_and_aborts_only_running_call_in_order() {
+        let fixture = Fixture::new().await;
+        let project = fixture.project_path();
+        let operation = OperationContext::new();
+        let executor = fixture.executor.clone();
+        let context = fixture.context(operation.clone());
+        let calls = vec![
+            call(
+                "exec_command",
+                object_arguments(serde_json::json!({
+                    "cmd": "printf completed; touch mixed-completed",
+                    "login": false,
+                    "yield_time_ms": 5_000
+                })),
+                "completed-call",
+            ),
+            call(
+                "exec_command",
+                object_arguments(serde_json::json!({
+                    "cmd": "sleep 0.3; touch mixed-running; while [ ! -f mixed-release ]; do sleep 0.01; done",
+                    "login": false,
+                    "yield_time_ms": 5_000
+                })),
+                "running-call",
+            ),
+        ];
+        let running =
+            tokio::spawn(async move { executor.execute_tool_calls(&calls, &context).await });
+
+        assert!(
+            wait_for_paths(
+                &[
+                    project.join("mixed-completed"),
+                    project.join("mixed-running"),
+                ],
+                Duration::from_secs(2),
+            )
+            .await,
+            "one call should finish before the other is cancelled"
+        );
+        operation.cancel();
+        let results = tokio::time::timeout(Duration::from_secs(1), running)
+            .await
+            .expect("mixed batch should observe cancellation")
+            .expect("mixed batch task")
+            .expect("mixed batch results");
+        tokio::fs::write(project.join("mixed-release"), b"")
+            .await
+            .expect("release running command");
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.tool_call_id.as_str())
+                .collect::<Vec<_>>(),
+            ["completed-call", "running-call"]
+        );
+        assert_eq!(results[0].outcome, ToolResultOutcome::Success);
+        assert!(text(&results[0].content).contains("completed"));
+        assert!(!text(&results[0].content).contains("aborted by user"));
+        assert_eq!(results[1].outcome, ToolResultOutcome::Success);
+        assert!(text(&results[1].content).starts_with("Wall time: "));
+        assert!(text(&results[1].content).ends_with(" seconds\naborted by user"));
+    }
+
+    #[tokio::test]
+    async fn namespaced_known_tool_uses_exclusive_nested_admission() {
+        let fixture = Fixture::new().await;
+        let admission = ToolAdmissionGate::default();
+        let delegate = fixture.executor.delegate(fixture.agent_session_id).await;
+        let context = fixture.context(OperationContext::new());
+        delegate.bind(&context, admission.clone()).await;
+        let reader = admission.acquire("exec_command").await;
+        let invocation = CodeModeNestedToolCall {
+            cell_id: CellId::new("cell-1"),
+            runtime_tool_call_id: "namespaced-call".to_owned(),
+            tool_name: ToolName {
+                name: "exec_command".to_owned(),
+                namespace: Some("unexpected".to_owned()),
+            },
+            tool_kind: CodeModeToolKind::Function,
+            input: Some(serde_json::json!({"cmd": "printf should-not-run"})),
+        };
+        let invocation = delegate.invoke(invocation, CancellationToken::new());
+        tokio::pin!(invocation);
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), &mut invocation)
+                .await
+                .is_err(),
+            "a namespaced unknown must wait for exclusive admission"
+        );
+        drop(reader);
+        let error = tokio::time::timeout(Duration::from_secs(1), &mut invocation)
+            .await
+            .expect("unknown call should finish after exclusive admission")
+            .expect_err("namespaced call must remain unknown");
+        assert_eq!(error, "unknown nested tool `exec_command`");
+    }
+
+    #[tokio::test]
+    async fn queued_call_is_aborted_without_waiting_for_admission() {
+        let fixture = Fixture::new().await;
+        let project = fixture.project_path();
+        let operation = OperationContext::new();
+        let context = fixture.context(operation.clone());
+        let admission = Arc::new(ToolAdmissionBatch::default());
+        let task_admission = Arc::clone(&admission);
+        let exclusive = admission.top_level.acquire("exec").await;
+        let executor = fixture.executor.clone();
+        let call = call(
+            "exec_command",
+            object_arguments(serde_json::json!({
+                "cmd": "touch should-not-run-after-cancellation",
+                "login": false
+            })),
+            "queued-exec",
+        );
+        let running = tokio::spawn(async move {
+            executor
+                .execute_tool_call_in_batch(&call, &context, &task_admission)
+                .await
+        });
+
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        operation.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(1), running)
+            .await
+            .expect("queued call should stop when its operation is cancelled")
+            .expect("queued call task")
+            .expect("queued call result");
+
+        assert_eq!(result.outcome, ToolResultOutcome::Success);
+        let output = text(&result.content);
+        assert!(output.starts_with("Wall time: "));
+        assert!(output.ends_with(" seconds\naborted by user"));
+        assert!(result.details.is_none());
+        drop(exclusive);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!project.join("should-not-run-after-cancellation").exists());
+    }
+
+    #[test]
+    fn aborted_results_match_codex_text_and_portable_status() {
+        let exec = user_aborted_tool_result(
+            "exec_command",
+            ToolCallId::new("exec-id").expect("tool call ID"),
+            Duration::from_millis(2_340),
+        );
+        assert_eq!(
+            text(&exec.content),
+            "Wall time: 2.3 seconds\naborted by user"
+        );
+        assert_eq!(exec.outcome, ToolResultOutcome::Success);
+        assert!(exec.details.is_none());
+
+        let wait = user_aborted_tool_result(
+            "wait",
+            ToolCallId::new("wait-id").expect("tool call ID"),
+            Duration::from_millis(2_340),
+        );
+        assert_eq!(text(&wait.content), "aborted by user after 2.3s");
+        assert_eq!(wait.outcome, ToolResultOutcome::Success);
+        assert!(wait.details.is_none());
+
+        let execution_cancelled = DispatchResult::error(
+            "execution_error",
+            "transport cancelled".to_owned(),
+            Some(serde_json::json!({"code": "cancelled"})),
+        )
+        .into_message(
+            "apply_patch".to_owned(),
+            ToolCallId::new("patch-id").expect("tool call ID"),
+        );
+        assert!(is_cancellation_origin(&execution_cancelled));
+
+        let genuine_error = DispatchResult::error(
+            "execution_error",
+            "not found".to_owned(),
+            Some(serde_json::json!({"code": "not_found"})),
+        )
+        .into_message(
+            "view_image".to_owned(),
+            ToolCallId::new("image-id").expect("tool call ID"),
+        );
+        assert!(!is_cancellation_origin(&genuine_error));
+    }
+
     struct Fixture {
         _directory: tempfile::TempDir,
         runtime: Arc<LocalExecutionRuntime>,
@@ -784,6 +1259,23 @@ store("answer", 42);"#
                 execution: self.execution.clone(),
                 operation,
             }
+        }
+
+        fn project_path(&self) -> std::path::PathBuf {
+            self._directory.path().join("workspace/project")
+        }
+    }
+
+    async fn wait_for_paths(paths: &[impl AsRef<Path>], timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if paths.iter().all(|path| path.as_ref().exists()) {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }
 

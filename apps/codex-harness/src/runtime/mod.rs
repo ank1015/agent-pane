@@ -7,6 +7,7 @@ mod model_client;
 mod model_resolver;
 mod request;
 mod stateful_tools;
+mod tool_admission;
 mod tools;
 mod transcript;
 mod turn;
