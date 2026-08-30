@@ -57,7 +57,7 @@ cd apps/dashboard
 pnpm install
 pnpm dev
 
-# Run the dashboard backend (Agent and both gateways must also be running)
+# Run the dashboard backend (PostgreSQL, Agent, and both gateways must also be running)
 cargo run -p platform
 
 # Run the Pi harness server (Agent, NATS, and both gateways must be running)

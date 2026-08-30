@@ -304,10 +304,12 @@ if [[ "$use_docker_infrastructure" == "1" ]]; then
   wait_for_postgres
   wait_for_url "NATS" "http://127.0.0.1:$nats_monitor_port/healthz"
   ensure_database agent
+  ensure_database platform
   ensure_database llm_gateway
   ensure_database execution_gateway
   ensure_database codex_harness
   agent_database_url="postgres://postgres:postgres@127.0.0.1:$postgres_port/agent"
+  platform_database_url="postgres://postgres:postgres@127.0.0.1:$postgres_port/platform"
   llm_gateway_database_url="postgres://postgres:postgres@127.0.0.1:$postgres_port/llm_gateway"
   execution_gateway_database_url="postgres://postgres:postgres@127.0.0.1:$postgres_port/execution_gateway"
   codex_harness_database_url="postgres://postgres:postgres@127.0.0.1:$postgres_port/codex_harness"
@@ -315,6 +317,8 @@ if [[ "$use_docker_infrastructure" == "1" ]]; then
 else
   agent_database_url="${AGENT_DATABASE_URL:-$(env_value "$agent_env" AGENT_DATABASE_URL)}"
   agent_database_url="${agent_database_url:-postgresql://localhost/agent}"
+  platform_database_url="${PLATFORM_DATABASE_URL:-$(env_value "$platform_env" PLATFORM_DATABASE_URL)}"
+  platform_database_url="${platform_database_url:-postgresql://localhost/platform}"
   llm_gateway_database_url="${DATABASE_URL:-$(env_value "$llm_gateway_env" DATABASE_URL)}"
   execution_gateway_database_url="${EXECUTION_GATEWAY_DATABASE_URL:-$(env_value "$execution_gateway_env" EXECUTION_GATEWAY_DATABASE_URL)}"
   codex_harness_database_url="${CODEX_HARNESS_DATABASE_URL:-$(env_value "$codex_harness_env" CODEX_HARNESS_DATABASE_URL)}"
@@ -388,6 +392,7 @@ start_with_env \
   "platform" \
   "$platform_env" \
   "$repo_root/target/debug/platform" \
+  "PLATFORM_DATABASE_URL=$platform_database_url" \
   "PLATFORM_LLM_GATEWAY_ADMIN_TOKEN=$llm_gateway_admin_token" \
   "PLATFORM_EXECUTION_GATEWAY_CONTROL_TOKEN=$execution_gateway_control_token" \
   "PLATFORM_AGENT_CONTROL_TOKEN=$agent_control_token"
