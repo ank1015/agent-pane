@@ -14,6 +14,7 @@ platform_env="$repo_root/apps/platform/.env"
 execution_gateway_env="$repo_root/apps/execution-gateway/.env"
 agent_env="$repo_root/apps/agent/.env"
 pi_harness_env="$repo_root/apps/pi-harness/.env"
+codex_harness_env="$repo_root/apps/codex-harness/.env"
 dashboard_dir="$repo_root/apps/dashboard"
 machine_daemon_config="${MACHINE_DAEMON_CONFIG:-$repo_root/apps/machine-daemon/machine-daemon.local.json}"
 use_docker_infrastructure="${DEV_SERVERS_USE_DOCKER_INFRASTRUCTURE:-1}"
@@ -305,15 +306,19 @@ if [[ "$use_docker_infrastructure" == "1" ]]; then
   ensure_database agent
   ensure_database llm_gateway
   ensure_database execution_gateway
+  ensure_database codex_harness
   agent_database_url="postgres://postgres:postgres@127.0.0.1:$postgres_port/agent"
   llm_gateway_database_url="postgres://postgres:postgres@127.0.0.1:$postgres_port/llm_gateway"
   execution_gateway_database_url="postgres://postgres:postgres@127.0.0.1:$postgres_port/execution_gateway"
+  codex_harness_database_url="postgres://postgres:postgres@127.0.0.1:$postgres_port/codex_harness"
   nats_url="nats://127.0.0.1:$nats_port"
 else
   agent_database_url="${AGENT_DATABASE_URL:-$(env_value "$agent_env" AGENT_DATABASE_URL)}"
   agent_database_url="${agent_database_url:-postgresql://localhost/agent}"
   llm_gateway_database_url="${DATABASE_URL:-$(env_value "$llm_gateway_env" DATABASE_URL)}"
   execution_gateway_database_url="${EXECUTION_GATEWAY_DATABASE_URL:-$(env_value "$execution_gateway_env" EXECUTION_GATEWAY_DATABASE_URL)}"
+  codex_harness_database_url="${CODEX_HARNESS_DATABASE_URL:-$(env_value "$codex_harness_env" CODEX_HARNESS_DATABASE_URL)}"
+  codex_harness_database_url="${codex_harness_database_url:-postgresql://localhost/codex_harness}"
   nats_url="${AGENT_NATS_URL:-$(env_value "$agent_env" AGENT_NATS_URL)}"
   nats_url="${nats_url:-nats://127.0.0.1:4222}"
 fi
@@ -339,7 +344,8 @@ cargo build \
   -p execution-gateway \
   -p machine-daemon \
   -p agent \
-  -p pi-harness
+  -p pi-harness \
+  -p codex-harness
 
 if [[ "$start_dashboard" == "1" ]]; then
   require_command pnpm
@@ -433,6 +439,27 @@ if ! kill -0 "$pi_harness_pid" 2>/dev/null; then
   exit 1
 fi
 
+start_with_env \
+  "codex-harness" \
+  "$codex_harness_env" \
+  "$repo_root/target/debug/codex-harness" \
+  "CODEX_HARNESS_AGENT_URL=http://127.0.0.1:8780" \
+  "CODEX_HARNESS_AGENT_TOKEN=$agent_harness_token" \
+  "CODEX_HARNESS_AGENT_CONTROL_TOKEN=$agent_control_token" \
+  "CODEX_HARNESS_NATS_URL=$nats_url" \
+  "CODEX_HARNESS_LLM_GATEWAY_URL=http://127.0.0.1:3000" \
+  "CODEX_HARNESS_EXECUTION_GATEWAY_URL=http://127.0.0.1:8790" \
+  "CODEX_HARNESS_EXECUTION_GATEWAY_TOKEN=$execution_gateway_api_token" \
+  "CODEX_HARNESS_DATABASE_URL=$codex_harness_database_url" \
+  "RUST_LOG=codex_harness=info"
+codex_harness_pid="$started_pid"
+
+sleep 0.25
+if ! kill -0 "$codex_harness_pid" 2>/dev/null; then
+  echo "codex-harness stopped during startup." >&2
+  exit 1
+fi
+
 dashboard_pid=""
 if [[ "$start_dashboard" == "1" ]]; then
   start_server \
@@ -457,6 +484,7 @@ echo "platform:          http://127.0.0.1:3100 (pid $platform_pid)"
 echo "execution-gateway: http://127.0.0.1:8790 (pid $execution_gateway_pid)"
 echo "agent:             http://127.0.0.1:8780 (pid $agent_pid)"
 echo "pi-harness:        NATS server, 20 concurrent turns (pid $pi_harness_pid)"
+echo "codex-harness:     NATS server, 20 concurrent turns (pid $codex_harness_pid)"
 if [[ -n "$machine_daemon_pid" ]]; then
   echo "machine-daemon:    connected (pid $machine_daemon_pid)"
 else
@@ -466,6 +494,7 @@ if [[ -n "$dashboard_pid" ]]; then
   echo "dashboard:         http://127.0.0.1:5173 (pid $dashboard_pid)"
 fi
 echo "Pi revision:       pi / pi-2026-08-27-nats-server"
+echo "Codex revision:    codex / codex-2026-08-30-runtime-v1"
 echo "oauth callback:    http://localhost:1455/auth/callback"
 echo "Press Ctrl-C to stop the stack. Docker data volumes are preserved."
 
