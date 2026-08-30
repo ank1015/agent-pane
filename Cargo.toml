@@ -23,22 +23,30 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 credential-vault = { path = "packages/credential-vault", version = "0.1.0" }
 dotenvy = "0.15"
+deno_core_icudata = "0.77.0"
 execution-contracts = { path = "packages/execution-contracts", version = "0.1.0" }
 execution-gateway-client = { path = "packages/execution-gateway-client", version = "0.1.0" }
 execution-local = { path = "packages/execution-local", version = "0.1.0" }
 execution-protocol = { path = "packages/execution-protocol", version = "0.1.0" }
 execution-runtime = { path = "packages/execution-runtime", version = "0.1.0" }
 futures-core = "0.3"
+futures = { version = "0.3", default-features = false }
 futures-util = "0.3"
 globset = "0.4"
 httpdate = "1.0"
 ignore = "0.4"
+image = { version = "0.25.9", default-features = false }
 jsonschema = { version = "0.50", default-features = false }
 llm-contracts = { path = "packages/llm-contracts", version = "0.1.0" }
 tool-pi-read = { path = "packages/tool-pi-read", version = "0.1.0" }
 tool-pi-edit = { path = "packages/tool-pi-edit", version = "0.1.0" }
 tool-pi-bash = { path = "packages/tool-pi-bash", version = "0.1.0" }
 tool-pi-write = { path = "packages/tool-pi-write", version = "0.1.0" }
+tool-codex-view-image = { path = "packages/tool-codex-view-image", version = "0.1.0" }
+tool-codex-apply-patch = { path = "packages/tool-codex-apply-patch", version = "0.1.0" }
+tool-codex-unified-exec = { path = "packages/tool-codex-unified-exec", version = "0.1.0" }
+tool-codex-code-mode = { path = "packages/tool-codex-code-mode", version = "0.1.0" }
+codex-code-mode-runtime = { path = "packages/codex-code-mode-runtime", version = "0.1.0" }
 provider-anthropic = { path = "packages/provider-anthropic", version = "0.1.0" }
 provider-chatgpt = { path = "packages/provider-chatgpt", version = "0.1.0" }
 provider-deepseek = { path = "packages/provider-deepseek", version = "0.1.0" }
@@ -64,6 +72,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2.5"
 uuid = { version = "1.0", features = ["serde", "v7"] }
+v8 = "=150.4.0"
 zeroize = { version = "1.8", features = ["derive"] }
 
 [workspace.lints.rust]
