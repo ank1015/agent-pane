@@ -14,7 +14,7 @@ pub use config::{
     AgentControlServiceConfig, AgentServiceConfig, BrokerConfig, HarnessServerConfig,
 };
 pub use registry::{
-    CreateHarnessRequest, HarnessRegistryClient, HarnessRegistryError,
+    CreateHarnessRequest, HarnessProvider, HarnessRegistryClient, HarnessRegistryError,
     RegisterHarnessRevisionRequest, UpdateHarnessRequest,
 };
 pub use runtime::{HarnessRuntime, TurnOutcome};
