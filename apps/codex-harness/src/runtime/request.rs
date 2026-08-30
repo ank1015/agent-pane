@@ -5,36 +5,24 @@ use llm_contracts::{LlmRequest, Validate, ValidationError};
 use uuid::Uuid;
 
 use super::{
-    CodexEnvironmentSnapshot, CodexHarnessConfig, ContextNormalizationError, generate_instructions,
+    CodexHarnessConfig, ContextNormalizationError, generate_instructions,
     model_visible_tool_definitions, normalize_session_messages, resolve_model_config,
 };
+use crate::runtime::environment::reorder_environment_messages;
+use crate::runtime::image_preparation::prepare_tool_result_images;
 
 /// Deterministically forms one primary Codex model request. All machine- and
-/// clock-dependent values must already be frozen in `environment`.
+/// Environment/world-state messages must already be persisted in the canonical
+/// transcript. Their internal placement anchors are resolved here.
 pub fn form_main_request(
     config: &CodexHarnessConfig,
     session_id: Uuid,
-    environment: &CodexEnvironmentSnapshot,
     session_messages: &[SessionMessage],
 ) -> Result<LlmRequest, ContextFormationError> {
     let model = resolve_model_config(config, session_id);
     let mut messages = normalize_session_messages(session_id, session_messages, config.provider)?;
-    let latest_compaction = messages.iter().rposition(is_native_compaction);
-    let environment_index = latest_compaction.map_or_else(
-        || {
-            messages
-                .iter()
-                .rposition(|message| matches!(message, llm_contracts::Message::User(_)))
-                .unwrap_or(messages.len())
-        },
-        |compaction_index| {
-            messages[compaction_index + 1..]
-                .iter()
-                .rposition(|message| matches!(message, llm_contracts::Message::User(_)))
-                .map_or(compaction_index, |relative| compaction_index + 1 + relative)
-        },
-    );
-    messages.insert(environment_index, environment.as_message(session_id));
+    reorder_environment_messages(&mut messages);
+    prepare_tool_result_images(&mut messages);
     let request = LlmRequest {
         model: model.model,
         instructions: Some(generate_instructions(
@@ -50,24 +38,6 @@ pub fn form_main_request(
         .validate()
         .map_err(ContextFormationError::InvalidRequest)?;
     Ok(request)
-}
-
-fn is_native_compaction(message: &llm_contracts::Message) -> bool {
-    let llm_contracts::Message::Custom(message) = message else {
-        return false;
-    };
-    message
-        .content
-        .get("items")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|items| {
-            items.iter().any(|item| {
-                matches!(
-                    item.get("type").and_then(serde_json::Value::as_str),
-                    Some("compaction" | "compaction_summary")
-                )
-            })
-        })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -89,6 +59,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::form_main_request;
+    use crate::runtime::environment::CodexEnvironmentPlacement;
     use crate::runtime::{
         BASE_INSTRUCTIONS, CODEX_COMPACTION_SCHEMA_VERSION, CodexCompactionMessageContent,
         CodexCompactionTrigger, CodexEnvironmentSnapshot, CodexHarnessConfig, CodexProvider,
@@ -176,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn reinjects_environment_immediately_before_compaction_checkpoint() {
+    fn restores_persisted_environment_immediately_before_compaction_checkpoint() {
         let session_id = Uuid::now_v7();
         let config = CodexHarnessConfig::from_resolved(&resolved("openai", "gpt-5.6-sol"))
             .expect("valid config");
@@ -205,6 +176,7 @@ mod tests {
                 provider: CodexProvider::OpenAi,
                 trigger: CodexCompactionTrigger::AutomaticLimit,
                 retained_messages: vec![retained_user],
+                pending_messages: Vec::new(),
                 items: vec![json!({
                     "type": "compaction",
                     "encrypted_content": "opaque"
@@ -214,7 +186,7 @@ mod tests {
             },
         )
         .expect("checkpoint");
-        let messages = vec![SessionMessage {
+        let mut messages = vec![SessionMessage {
             session_message_id: Uuid::now_v7(),
             session_id,
             revision: 1,
@@ -226,8 +198,30 @@ mod tests {
             created_at: Utc::now(),
             committed_at: Utc::now(),
         }];
-        let request =
-            form_main_request(&config, session_id, &environment, &messages).expect("main request");
+        let environment_session_message_id = Uuid::now_v7();
+        messages.push(SessionMessage {
+            session_message_id: environment_session_message_id,
+            session_id,
+            revision: 2,
+            message: environment
+                .as_persisted_message(
+                    MessageId::new(format!(
+                        "codex-environment-{environment_session_message_id}"
+                    ))
+                    .expect("message ID"),
+                    CodexEnvironmentPlacement::BeforeCompaction,
+                    None,
+                    true,
+                )
+                .expect("environment message"),
+            origin: SessionMessageOrigin::Harness,
+            delivery: SessionMessageDelivery::Immediate,
+            run_id: Some(Uuid::now_v7()),
+            turn_number: Some(1),
+            created_at: Utc::now(),
+            committed_at: Utc::now(),
+        });
+        let request = form_main_request(&config, session_id, &messages).expect("main request");
         let body = provider_openai::build_response_request(&request).expect("OpenAI request");
         let input = body["input"].as_array().expect("input");
         let compaction_index = input
@@ -254,12 +248,13 @@ mod tests {
             Timestamp(1),
         )
         .expect("environment");
-        let messages = vec![SessionMessage {
+        let user_id = MessageId::new("user-1").expect("message ID");
+        let mut messages = vec![SessionMessage {
             session_message_id: Uuid::now_v7(),
             session_id,
             revision: 1,
             message: Message::User(UserMessage {
-                id: MessageId::new("user-1").expect("message ID"),
+                id: user_id.clone(),
                 timestamp: Timestamp(2),
                 content: vec![ContentPart::Text(TextContent {
                     content: "Fix it.".to_owned(),
@@ -273,7 +268,32 @@ mod tests {
             created_at: Utc::now(),
             committed_at: Utc::now(),
         }];
-        form_main_request(&config, session_id, &environment, &messages).expect("request")
+        let environment_session_message_id = Uuid::now_v7();
+        messages.push(SessionMessage {
+            session_message_id: environment_session_message_id,
+            session_id,
+            revision: 2,
+            message: environment
+                .as_persisted_message(
+                    MessageId::new(format!(
+                        "codex-environment-{environment_session_message_id}"
+                    ))
+                    .expect("message ID"),
+                    CodexEnvironmentPlacement::BeforeMessage {
+                        message_id: user_id,
+                    },
+                    None,
+                    true,
+                )
+                .expect("environment message"),
+            origin: SessionMessageOrigin::Harness,
+            delivery: SessionMessageDelivery::Immediate,
+            run_id: Some(Uuid::now_v7()),
+            turn_number: Some(1),
+            created_at: Utc::now(),
+            committed_at: Utc::now(),
+        });
+        form_main_request(&config, session_id, &messages).expect("request")
     }
 
     fn resolved(provider: &str, model: &str) -> JsonObject {
