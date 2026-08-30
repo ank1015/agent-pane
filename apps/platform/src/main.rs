@@ -2,6 +2,7 @@ use std::error::Error;
 
 use platform::{
     config::AppConfig,
+    db::Database,
     providers::chatgpt_oauth::{ChatGptLoginService, callback_router},
     router,
     upstream::{
@@ -18,6 +19,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     init_tracing();
 
     let config = AppConfig::from_env()?;
+    let database = Database::connect(&config.database).await?;
+    database.migrate().await?;
     let gateway = LlmGatewayClient::new(
         config.llm_gateway_url.clone(),
         &config.llm_gateway_admin_token,
@@ -58,6 +61,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let platform_server = axum::serve(
         listener,
         router(
+            database,
             gateway,
             execution_gateway,
             agent,

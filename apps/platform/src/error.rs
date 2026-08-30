@@ -6,6 +6,7 @@ use axum::{
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::projects::ProjectError;
 use crate::upstream::agent::AgentError;
 use crate::upstream::execution_gateway::ExecutionGatewayError;
 use crate::upstream::llm_gateway::LlmGatewayError;
@@ -16,6 +17,7 @@ pub enum ApiError {
     Agent(AgentError),
     ExecutionGateway(ExecutionGatewayError),
     LlmGateway(LlmGatewayError),
+    Project(ProjectError),
 }
 
 impl ApiError {
@@ -42,6 +44,12 @@ impl From<ExecutionGatewayError> for ApiError {
     }
 }
 
+impl From<ProjectError> for ApiError {
+    fn from(error: ProjectError) -> Self {
+        Self::Project(error)
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let response = match self {
@@ -50,6 +58,27 @@ impl IntoResponse for ApiError {
                 Json(ErrorResponse::new("invalid_request", message)),
             )
                 .into_response(),
+            Self::Project(ProjectError::InvalidRequest(message)) => (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new("invalid_request", message)),
+            )
+                .into_response(),
+            Self::Project(ProjectError::NotFound) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new("project_not_found", "project not found")),
+            )
+                .into_response(),
+            Self::Project(error @ ProjectError::Database(_)) => {
+                tracing::error!(%error, "project database operation failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse::new(
+                        "project_store_unavailable",
+                        "the project store is unavailable",
+                    )),
+                )
+                    .into_response()
+            }
             Self::Agent(AgentError::Rejected { status, body }) => {
                 (status, Json(body)).into_response()
             }

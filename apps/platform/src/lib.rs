@@ -1,9 +1,11 @@
 //! Agent Pane dashboard backend.
 
 pub mod config;
+pub mod db;
 pub mod error;
 pub mod harnesses;
 pub mod machines;
+pub mod projects;
 pub mod providers;
 pub mod upstream;
 
@@ -16,6 +18,7 @@ use axum::{
 };
 use serde::Serialize;
 
+use db::Database;
 use providers::{ProviderService, chatgpt_oauth::ChatGptLoginService};
 use upstream::{
     agent::AgentClient, execution_gateway::ExecutionGatewayClient, llm_gateway::LlmGatewayClient,
@@ -23,12 +26,14 @@ use upstream::{
 
 #[derive(Clone)]
 struct AppState {
+    database: Database,
     llm_gateway: LlmGatewayClient,
     execution_gateway: ExecutionGatewayClient,
     agent: AgentClient,
 }
 
 pub fn router(
+    database: Database,
     gateway: LlmGatewayClient,
     execution_gateway: ExecutionGatewayClient,
     agent: AgentClient,
@@ -36,6 +41,7 @@ pub fn router(
     max_request_bytes: usize,
 ) -> Router {
     let state = AppState {
+        database: database.clone(),
         llm_gateway: gateway.clone(),
         execution_gateway: execution_gateway.clone(),
         agent: agent.clone(),
@@ -52,6 +58,9 @@ pub fn router(
             execution_gateway,
         )))
         .merge(harnesses::router(harnesses::HarnessService::new(agent)))
+        .merge(projects::router(projects::ProjectService::new(
+            database.pool().clone(),
+        )))
         .layer(DefaultBodyLimit::max(max_request_bytes))
         .with_state(state)
 }
@@ -61,14 +70,20 @@ async fn health() -> Json<HealthResponse> {
 }
 
 async fn readiness(axum::extract::State(state): axum::extract::State<AppState>) -> Response {
-    let (llm_gateway, execution_gateway, agent) = tokio::join!(
+    let (database, llm_gateway, execution_gateway, agent) = tokio::join!(
+        state.database.health_check(),
         state.llm_gateway.ready(),
         state.execution_gateway.ready(),
         state.agent.ready()
     );
-    match (llm_gateway, execution_gateway, agent) {
-        (Ok(()), Ok(()), Ok(())) => Json(HealthResponse { status: "ready" }).into_response(),
-        (llm_gateway, execution_gateway, agent) => {
+    match (database, llm_gateway, execution_gateway, agent) {
+        (Ok(()), Ok(()), Ok(()), Ok(())) => {
+            Json(HealthResponse { status: "ready" }).into_response()
+        }
+        (database, llm_gateway, execution_gateway, agent) => {
+            if let Err(error) = database {
+                tracing::warn!(%error, "platform database readiness check failed");
+            }
             if let Err(error) = llm_gateway {
                 tracing::warn!(%error, "llm gateway readiness check failed");
             }
