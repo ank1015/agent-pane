@@ -627,6 +627,7 @@ dependencies = [
  "tool-codex-code-mode",
  "tool-codex-unified-exec",
  "tool-codex-view-image",
+ "tool-codex-web-search",
  "tracing",
  "tracing-subscriber",
  "url",

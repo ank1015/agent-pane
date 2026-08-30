@@ -1,6 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use codex_code_mode_runtime::{CodeModeNestedToolCall, CodeModeToolKind};
+use codex_code_mode_runtime::{
+    CodeModeNestedToolCall, CodeModeToolKind, ToolDefinition as RuntimeToolDefinition,
+};
 use execution_runtime::{ExecutionRuntime, OperationContext};
 use futures_util::future::try_join_all;
 use llm_contracts::{
@@ -341,10 +343,26 @@ pub fn default_nested_tool_definitions() -> Vec<ToolDefinition> {
     tools
 }
 
+/// Runtime definitions installed into code mode. Web search remains
+/// namespaced as `web.run`, which V8 exposes as `tools.web__run`.
+#[must_use]
+pub fn code_mode_nested_tool_definitions(web_search_enabled: bool) -> Vec<RuntimeToolDefinition> {
+    let mut tools =
+        tool_codex_code_mode::collect_runtime_tool_definitions(&default_nested_tool_definitions());
+    if web_search_enabled {
+        tools.push(tool_codex_web_search::definition());
+    }
+    tools.sort_by(|left, right| left.name.cmp(&right.name));
+    tools.dedup_by(|left, right| left.name == right.name);
+    tools
+}
+
 /// Sol, Terra, and Luna are code-mode-only in the inspected Codex catalog.
 #[must_use]
-pub fn model_visible_tool_definitions() -> Vec<ToolDefinition> {
-    tool_codex_code_mode::definitions(&default_nested_tool_definitions())
+pub fn model_visible_tool_definitions(web_search_enabled: bool) -> Vec<ToolDefinition> {
+    tool_codex_code_mode::definitions_from_runtime_tools(&code_mode_nested_tool_definitions(
+        web_search_enabled,
+    ))
 }
 
 #[cfg(test)]
@@ -359,8 +377,8 @@ mod tests {
     use std::io::Cursor;
 
     use super::{
-        StatelessToolContext, StatelessToolExecutor, default_nested_tool_definitions,
-        model_visible_tool_definitions,
+        StatelessToolContext, StatelessToolExecutor, code_mode_nested_tool_definitions,
+        default_nested_tool_definitions, model_visible_tool_definitions,
     };
     use crate::runtime::CodexExecutionTarget;
 
@@ -374,7 +392,7 @@ mod tests {
             ["apply_patch", "exec_command", "write_stdin", "view_image"]
         );
 
-        let visible = model_visible_tool_definitions();
+        let visible = model_visible_tool_definitions(false);
         assert_eq!(
             visible.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
             ["exec", "wait"]
@@ -386,6 +404,29 @@ mod tests {
         for name in ["apply_patch", "exec_command", "write_stdin", "view_image"] {
             assert!(description.contains(name), "missing {name} declaration");
         }
+        assert!(!description.contains("tools.web__run"));
+    }
+
+    #[test]
+    fn enabled_web_search_is_namespaced_in_runtime_and_exec_prompt() {
+        let nested = code_mode_nested_tool_definitions(true);
+        let web = nested
+            .iter()
+            .find(|tool| tool.name == tool_codex_web_search::CODE_MODE_TOOL_NAME)
+            .expect("web.run definition");
+        assert_eq!(web.tool_name.namespace.as_deref(), Some("web"));
+        assert_eq!(web.tool_name.name, "run");
+        assert_eq!(web.description, tool_codex_web_search::WEB_RUN_DESCRIPTION);
+
+        let visible = model_visible_tool_definitions(true);
+        let description = match &visible[0] {
+            llm_contracts::ToolDefinition::Custom(tool) => &tool.description,
+            _ => panic!("exec is a custom tool"),
+        };
+        assert!(description.contains("## web"));
+        assert!(description.contains("### `web__run`"));
+        assert!(description.contains("Tools in the web namespace."));
+        assert!(description.contains(tool_codex_web_search::WEB_RUN_DESCRIPTION.trim()));
     }
 
     #[tokio::test]

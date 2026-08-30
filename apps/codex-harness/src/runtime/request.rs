@@ -30,7 +30,7 @@ pub fn form_main_request(
             config.is_replaced,
         )),
         messages,
-        tools: model_visible_tool_definitions(),
+        tools: model_visible_tool_definitions(config.web_search_enabled),
         provider_options: model.provider_options,
         metadata: BTreeMap::new(),
     };

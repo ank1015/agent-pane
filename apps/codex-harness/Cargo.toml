@@ -34,6 +34,7 @@ tool-codex-apply-patch.workspace = true
 tool-codex-code-mode.workspace = true
 tool-codex-unified-exec.workspace = true
 tool-codex-view-image.workspace = true
+tool-codex-web-search.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true

@@ -1189,7 +1189,7 @@ mod tests {
             model: crate::runtime::resolve_model_config(&config("chatgpt"), session_id).model,
             instructions: None,
             messages: normalized,
-            tools: crate::runtime::model_visible_tool_definitions(),
+            tools: crate::runtime::model_visible_tool_definitions(false),
             provider_options: Default::default(),
             metadata: Default::default(),
         };
@@ -1274,7 +1274,7 @@ mod tests {
             model: crate::runtime::resolve_model_config(&config("openai"), session_id).model,
             instructions: None,
             messages: normalized,
-            tools: crate::runtime::model_visible_tool_definitions(),
+            tools: crate::runtime::model_visible_tool_definitions(false),
             provider_options: Default::default(),
             metadata: Default::default(),
         };
