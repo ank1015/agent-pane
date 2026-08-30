@@ -1,0 +1,5 @@
+This package contains an adapted version of OpenAI Codex's code-mode runtime.
+
+Source: https://github.com/openai/codex
+Revision: 536f86e5cc9ec1ff38457d099bf320b9d08eeeba
+Original license: Apache License 2.0
