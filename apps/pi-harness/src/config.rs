@@ -1,5 +1,8 @@
-use std::{env, fmt, num::ParseIntError, time::Duration};
+use std::{env, num::ParseIntError, time::Duration};
 
+pub use agent_harness_sdk::{
+    AgentControlServiceConfig, AgentServiceConfig, BrokerConfig, HarnessServerConfig,
+};
 use execution_gateway_client::ExecutionGatewayConfig;
 use url::Url;
 use uuid::Uuid;
@@ -19,20 +22,18 @@ pub struct HarnessConfig {
     pub execution_gateway: ExecutionGatewayConfig,
 }
 
-#[derive(Clone, Debug)]
-pub struct BrokerConfig {
-    pub url: String,
-    pub command_result_timeout: Duration,
-    pub command_max_retries: u32,
-    pub command_retry_base: Duration,
-    pub command_retry_max: Duration,
-    pub delivery_retry_delay: Duration,
-    pub progress_interval: Duration,
-}
-
 impl HarnessConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         Self::from_lookup(|name| env::var(name).ok())
+    }
+
+    #[must_use]
+    pub fn server_config(&self) -> HarnessServerConfig {
+        HarnessServerConfig {
+            max_concurrent_turns: self.max_concurrent_turns,
+            broker: self.broker.clone(),
+            agent: self.agent.clone(),
+        }
     }
 
     fn from_lookup<F>(mut lookup: F) -> Result<Self, ConfigError>
@@ -150,41 +151,10 @@ impl HarnessConfig {
     }
 }
 
-#[derive(Clone)]
-pub struct AgentServiceConfig {
-    pub base_url: Url,
-    pub harness_token: String,
-    pub request_timeout: Duration,
-}
-#[derive(Clone)]
-pub struct AgentControlServiceConfig {
-    pub base_url: Url,
-    pub control_token: String,
-    pub request_timeout: Duration,
-}
 #[derive(Clone, Debug)]
 pub struct LlmGatewayServiceConfig {
     pub base_url: Url,
     pub request_timeout: Duration,
-}
-
-impl fmt::Debug for AgentServiceConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AgentServiceConfig")
-            .field("base_url", &self.base_url)
-            .field("harness_token", &"[REDACTED]")
-            .field("request_timeout", &self.request_timeout)
-            .finish()
-    }
-}
-impl fmt::Debug for AgentControlServiceConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AgentControlServiceConfig")
-            .field("base_url", &self.base_url)
-            .field("control_token", &"[REDACTED]")
-            .field("request_timeout", &self.request_timeout)
-            .finish()
-    }
 }
 
 fn required(name: &'static str, value: Option<String>) -> Result<String, ConfigError> {

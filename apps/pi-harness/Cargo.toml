@@ -8,8 +8,9 @@ license.workspace = true
 
 [dependencies]
 agent-contracts.workspace = true
+agent-harness-sdk.workspace = true
 async-nats.workspace = true
-base64.workspace = true
+async-trait.workspace = true
 chrono.workspace = true
 dotenvy.workspace = true
 execution-contracts.workspace = true
