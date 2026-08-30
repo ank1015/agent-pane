@@ -1,7 +1,10 @@
 use std::{future::Future, time::Duration};
 
 use execution_runtime::OperationContext;
-use llm_contracts::{AssistantMessage, LlmError, LlmRequest};
+use llm_contracts::{
+    AssistantMessage, LlmError, LlmRequest, ProviderId, SearchRequest, SearchRequestOptions,
+    SearchResponse,
+};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -15,16 +18,22 @@ use crate::config::LlmGatewayServiceConfig;
 pub struct LlmGatewayClient {
     http: reqwest::Client,
     complete_url: Url,
+    search_url: Url,
 }
 
 impl LlmGatewayClient {
     pub fn new(config: LlmGatewayServiceConfig) -> Result<Self, LlmGatewayClientError> {
         let complete_url = endpoint(&config.base_url, &["v1", "complete"])?;
+        let search_url = endpoint(&config.base_url, &["v1", "search"])?;
         let http = reqwest::Client::builder()
             .timeout(config.request_timeout)
             .build()
             .map_err(LlmGatewayClientError::BuildClient)?;
-        Ok(Self { http, complete_url })
+        Ok(Self {
+            http,
+            complete_url,
+            search_url,
+        })
     }
 
     pub async fn complete(
@@ -60,6 +69,46 @@ impl LlmGatewayClient {
             .map_err(LlmGatewayClientError::InvalidResponse)?;
         Ok(response.message)
     }
+
+    /// Executes one Codex standalone web-search request through the shared
+    /// gateway. Search is deliberately not routed through the completion API.
+    pub async fn search(
+        &self,
+        account_id: Option<Uuid>,
+        provider: &ProviderId,
+        request: &SearchRequest,
+        request_options: &SearchRequestOptions,
+        operation: &OperationContext,
+    ) -> Result<SearchResponse, LlmGatewayClientError> {
+        let response = await_operation(
+            operation,
+            self.http
+                .post(self.search_url.clone())
+                .json(&SearchGatewayRequest {
+                    account_id,
+                    provider,
+                    request,
+                    request_options,
+                })
+                .send(),
+        )
+        .await?;
+        let status = response.status();
+        let body = await_operation(operation, response.bytes()).await?;
+        if !status.is_success() {
+            let error = serde_json::from_slice::<ErrorEnvelope>(&body)
+                .ok()
+                .map(|response| response.error);
+            return Err(LlmGatewayClientError::Rejected {
+                status,
+                error,
+                body: String::from_utf8_lossy(&body).into_owned(),
+            });
+        }
+        let response = serde_json::from_slice::<SearchGatewayResponse>(&body)
+            .map_err(LlmGatewayClientError::InvalidResponse)?;
+        Ok(response.response)
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
@@ -80,7 +129,7 @@ impl LlmGatewayError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum LlmGatewayClientError {
-    #[error("could not construct the LLM gateway completion URL")]
+    #[error("could not construct an LLM gateway endpoint URL")]
     InvalidUrl,
     #[error("could not build the LLM gateway HTTP client")]
     BuildClient(#[source] reqwest::Error),
@@ -109,6 +158,19 @@ struct CompleteRequest<'a> {
 #[derive(Deserialize)]
 struct CompleteResponse {
     message: AssistantMessage,
+}
+
+#[derive(Serialize)]
+struct SearchGatewayRequest<'a> {
+    account_id: Option<Uuid>,
+    provider: &'a ProviderId,
+    request: &'a SearchRequest,
+    request_options: &'a SearchRequestOptions,
+}
+
+#[derive(Deserialize)]
+struct SearchGatewayResponse {
+    response: SearchResponse,
 }
 
 #[derive(Deserialize)]
