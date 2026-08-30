@@ -1,8 +1,10 @@
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
-pub use agent_contracts::{HarnessRevision, HarnessRevisionStatus};
+pub use agent_contracts::{HarnessProvider, HarnessRevision, HarnessRevisionStatus};
 
 pub type JsonObject = Map<String, Value>;
 
@@ -12,6 +14,7 @@ pub struct Harness {
     pub slug: String,
     pub display_name: String,
     pub description: Option<String>,
+    pub supported_providers: Vec<HarnessProvider>,
     pub enabled: bool,
     pub active_revision_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -37,6 +40,8 @@ pub struct CreateHarness {
     pub slug: String,
     pub display_name: String,
     pub description: Option<String>,
+    #[serde(default)]
+    pub supported_providers: Vec<HarnessProvider>,
 }
 
 impl CreateHarness {
@@ -48,6 +53,7 @@ impl CreateHarness {
         if let Some(description) = &self.description {
             validate_trimmed(&mut issues, "description", description, 1, 2_000);
         }
+        validate_supported_providers(&mut issues, &self.supported_providers);
         finish(issues)
     }
 }
@@ -58,12 +64,16 @@ pub struct UpdateHarness {
     pub display_name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_description")]
     pub description: Option<Option<String>>,
+    pub supported_providers: Option<Vec<HarnessProvider>>,
 }
 
 impl UpdateHarness {
     pub(super) fn validate(&self) -> Result<(), ValidationError> {
         let mut issues = Vec::new();
-        if self.display_name.is_none() && self.description.is_none() {
+        if self.display_name.is_none()
+            && self.description.is_none()
+            && self.supported_providers.is_none()
+        {
             issue(&mut issues, "$", "must update at least one field");
         }
         if let Some(display_name) = &self.display_name {
@@ -71,6 +81,9 @@ impl UpdateHarness {
         }
         if let Some(Some(description)) = &self.description {
             validate_trimmed(&mut issues, "description", description, 1, 2_000);
+        }
+        if let Some(supported_providers) = &self.supported_providers {
+            validate_supported_providers(&mut issues, supported_providers);
         }
         finish(issues)
     }
@@ -209,6 +222,43 @@ fn validate_trimmed(
     }
 }
 
+fn validate_supported_providers(
+    issues: &mut Vec<ValidationIssue>,
+    supported_providers: &[HarnessProvider],
+) {
+    let mut provider_ids = HashSet::new();
+    for (provider_index, provider) in supported_providers.iter().enumerate() {
+        let provider_path = format!("supported_providers[{provider_index}]");
+        validate_id(
+            issues,
+            &format!("{provider_path}.provider_id"),
+            provider.provider_id.as_str(),
+        );
+        if !provider_ids.insert(provider.provider_id.as_str()) {
+            issue(
+                issues,
+                &format!("{provider_path}.provider_id"),
+                "must be unique",
+            );
+        }
+        if provider.model_ids.is_empty() {
+            issue(
+                issues,
+                &format!("{provider_path}.model_ids"),
+                "must contain at least one model id",
+            );
+        }
+        let mut model_ids = HashSet::new();
+        for (model_index, model_id) in provider.model_ids.iter().enumerate() {
+            let model_path = format!("{provider_path}.model_ids[{model_index}]");
+            validate_id(issues, &model_path, model_id.as_str());
+            if !model_ids.insert(model_id.as_str()) {
+                issue(issues, &model_path, "must be unique within the provider");
+            }
+        }
+    }
+}
+
 fn issue(issues: &mut Vec<ValidationIssue>, path: &str, message: impl Into<String>) {
     issues.push(ValidationIssue {
         path: path.to_owned(),
@@ -246,6 +296,7 @@ mod tests {
             slug: "coding-agent-2".to_owned(),
             display_name: "Coding agent".to_owned(),
             description: None,
+            supported_providers: Vec::new(),
         };
         assert!(valid.validate().is_ok());
 
@@ -264,5 +315,36 @@ mod tests {
 
         assert_eq!(absent.description, None);
         assert_eq!(clear.description, Some(None));
+    }
+
+    #[test]
+    fn validates_supported_provider_catalogs() {
+        let duplicate: CreateHarness = serde_json::from_value(json!({
+            "harness_id": "harness-1",
+            "slug": "coding-agent",
+            "display_name": "Coding agent",
+            "supported_providers": [
+                {"provider_id": "openai", "model_ids": ["gpt-5", "gpt-5"]},
+                {"provider_id": "openai", "model_ids": ["gpt-5-mini"]}
+            ]
+        }))
+        .expect("provider catalog");
+
+        let error = duplicate.validate().expect_err("duplicate catalog");
+        assert_eq!(error.issues.len(), 2);
+        assert_eq!(error.issues[0].path, "supported_providers[0].model_ids[1]");
+        assert_eq!(error.issues[1].path, "supported_providers[1].provider_id");
+
+        let empty_models: UpdateHarness = serde_json::from_value(json!({
+            "supported_providers": [{"provider_id": "openai", "model_ids": []}]
+        }))
+        .expect("provider update");
+        assert!(empty_models.validate().is_err());
+
+        let clear: UpdateHarness = serde_json::from_value(json!({
+            "supported_providers": []
+        }))
+        .expect("clear providers");
+        assert!(clear.validate().is_ok());
     }
 }

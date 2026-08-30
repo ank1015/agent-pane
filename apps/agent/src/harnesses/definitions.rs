@@ -1,3 +1,4 @@
+use sqlx::types::Json;
 use sqlx::{Postgres, QueryBuilder};
 
 use super::{
@@ -15,8 +16,9 @@ pub(super) async fn create(
 ) -> Result<CreateOutcome<Harness>, HarnessError> {
     command.validate()?;
     let query = format!(
-        "insert into harnesses (harness_id, slug, display_name, description) \
-         values ($1, $2, $3, $4) \
+        "insert into harnesses \
+             (harness_id, slug, display_name, description, supported_providers) \
+         values ($1, $2, $3, $4, $5) \
          on conflict (harness_id) do nothing \
          returning {HARNESS_COLUMNS}"
     );
@@ -25,6 +27,7 @@ pub(super) async fn create(
         .bind(&command.slug)
         .bind(&command.display_name)
         .bind(&command.description)
+        .bind(Json(&command.supported_providers))
         .fetch_optional(database.pool())
         .await;
 
@@ -116,10 +119,13 @@ pub(super) async fn update(
     command.validate()?;
     let update_description = command.description.is_some();
     let description = command.description.flatten();
+    let update_supported_providers = command.supported_providers.is_some();
+    let supported_providers = command.supported_providers.unwrap_or_default();
     let query = format!(
         "update harnesses \
          set display_name = coalesce($2, display_name), \
-             description = case when $3 then $4 else description end \
+             description = case when $3 then $4 else description end, \
+             supported_providers = case when $5 then $6 else supported_providers end \
          where harness_id = $1 \
          returning {HARNESS_COLUMNS}"
     );
@@ -128,6 +134,8 @@ pub(super) async fn update(
         .bind(command.display_name)
         .bind(update_description)
         .bind(description)
+        .bind(update_supported_providers)
+        .bind(Json(supported_providers))
         .fetch_optional(database.pool())
         .await?
         .map(Into::into)

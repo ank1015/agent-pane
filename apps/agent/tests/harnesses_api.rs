@@ -41,7 +41,10 @@ async fn harness_crud_supports_safe_retries_and_filters() {
         "harness_id": harness_id,
         "slug": slug,
         "display_name": "API harness",
-        "description": "Original description"
+        "description": "Original description",
+        "supported_providers": [
+            {"provider_id": "openai", "model_ids": ["gpt-5.6-sol", "gpt-5.6-terra"]}
+        ]
     });
 
     let first = app
@@ -54,6 +57,10 @@ async fn harness_crud_supports_safe_retries_and_filters() {
     let first_body = first.json::<Value>().await.expect("created harness body");
     assert_eq!(first_body["enabled"], false);
     assert_eq!(first_body["active_revision_id"], Value::Null);
+    assert_eq!(
+        first_body["supported_providers"],
+        create["supported_providers"]
+    );
     assert!(first_body["created_at"].is_string());
     assert!(first_body["updated_at"].is_string());
 
@@ -95,7 +102,13 @@ async fn harness_crud_supports_safe_retries_and_filters() {
 
     let updated = app
         .control(Method::PATCH, &format!("/v1/harnesses/{harness_id}"))
-        .json(&json!({ "display_name": "Renamed harness", "description": null }))
+        .json(&json!({
+            "display_name": "Renamed harness",
+            "description": null,
+            "supported_providers": [
+                {"provider_id": "anthropic", "model_ids": ["claude-opus-4-1"]}
+            ]
+        }))
         .send()
         .await
         .expect("update harness");
@@ -103,6 +116,10 @@ async fn harness_crud_supports_safe_retries_and_filters() {
     let updated = updated.json::<Value>().await.expect("updated harness body");
     assert_eq!(updated["display_name"], "Renamed harness");
     assert_eq!(updated["description"], Value::Null);
+    assert_eq!(
+        updated["supported_providers"][0]["provider_id"],
+        "anthropic"
+    );
     assert!(updated["updated_at"].is_string());
 
     let filtered = app

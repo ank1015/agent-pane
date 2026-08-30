@@ -1,9 +1,11 @@
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, types::Json};
 
-use super::{Harness, HarnessError, HarnessRevision, HarnessRevisionStatus, JsonObject};
+use super::{
+    Harness, HarnessError, HarnessProvider, HarnessRevision, HarnessRevisionStatus, JsonObject,
+};
 
-pub(super) const HARNESS_COLUMNS: &str = "harness_id, slug, display_name, description, enabled, active_revision_id, created_at, updated_at";
+pub(super) const HARNESS_COLUMNS: &str = "harness_id, slug, display_name, description, supported_providers, enabled, active_revision_id, created_at, updated_at";
 
 pub(super) const REVISION_COLUMNS: &str = "r.harness_revision_id, r.harness_id, r.revision, r.contract_version, \
      r.default_config, r.config_schema, r.first_activated_at, r.retired_at, r.created_at, \
@@ -15,6 +17,7 @@ pub(super) struct HarnessRow {
     pub slug: String,
     pub display_name: String,
     pub description: Option<String>,
+    pub supported_providers: Json<Vec<HarnessProvider>>,
     pub enabled: bool,
     pub active_revision_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -28,6 +31,7 @@ impl From<HarnessRow> for Harness {
             slug: row.slug,
             display_name: row.display_name,
             description: row.description,
+            supported_providers: row.supported_providers.0,
             enabled: row.enabled,
             active_revision_id: row.active_revision_id,
             created_at: row.created_at,
