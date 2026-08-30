@@ -10,6 +10,7 @@ license = "MIT AND Apache-2.0"
 agent-contracts.workspace = true
 agent-harness-sdk.workspace = true
 async-trait.workspace = true
+base64.workspace = true
 codex-code-mode-runtime.workspace = true
 chrono.workspace = true
 dotenvy.workspace = true
@@ -17,6 +18,7 @@ execution-contracts.workspace = true
 execution-gateway-client.workspace = true
 execution-runtime.workspace = true
 futures-util.workspace = true
+image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
 llm-contracts.workspace = true
 provider-chatgpt.workspace = true
 provider-openai.workspace = true
@@ -41,7 +43,6 @@ uuid.workspace = true
 async-nats.workspace = true
 axum.workspace = true
 execution-local.workspace = true
-image = { workspace = true, features = ["png"] }
 tempfile = "3.0"
 
 [lints]

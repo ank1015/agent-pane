@@ -1,6 +1,7 @@
 mod compaction;
 mod config;
 mod environment;
+mod image_preparation;
 mod instructions;
 mod model;
 mod model_client;
