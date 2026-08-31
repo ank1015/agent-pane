@@ -49,7 +49,13 @@ All routes below require `EXECUTION_GATEWAY_API_TOKEN` as a bearer token:
 
 - `GET /v1/machines`
 - `GET /v1/machines/{machine_id}`
+- `POST /v1/machines/{machine_id}/snapshots`
 - `POST /v1/machines/{machine_id}/operations`
+- `POST /v1/environments`
+- `PATCH /v1/environments/{environment_id}`
+- `POST /v1/sandbox-environment-templates`
+- `PATCH /v1/sandbox-environment-templates/{template_id}`
+- `GET /v1/projects/{project_id}/environments`
 - `GET /v1/environments/{environment_id}`
 - `POST /v1/environments/{environment_id}/operations`
 - `GET /v1/operations/{operation_id}`
@@ -89,6 +95,8 @@ an environment does not require the machine to be online or the path to exist.
 The control-plane API requires `EXECUTION_GATEWAY_CONTROL_TOKEN`:
 
 - `GET /v1/control/environments?machine_id={machine_id}`
+- `GET /v1/control/environments?project_id={project_id}`
+- `GET /v1/control/projects/{project_id}/environments`
 - `POST /v1/control/environments`
 - `GET /v1/control/environments/{environment_id}`
 - `DELETE /v1/control/environments/{environment_id}`
@@ -97,11 +105,20 @@ Create requests have this shape:
 
 ```json
 {
+  "project_id": "project-id",
   "machine_id": "machine-id",
+  "name": "Example",
   "workspace_root_id": "workspace",
   "path": "projects/example"
 }
 ```
+
+The project endpoint returns machine environments and sandbox templates in one
+list. Each item contains `id`, `name`, `host_name`, `path`, `type`,
+`created_at`, and, for templates, `snapshot_id`. `type` is either `env` or
+`template`; `snapshot_id` is omitted for machine environments. `host_name` is
+the machine display name for an `env` and the sandbox account name for a
+`template`.
 
 Deleting an environment is a soft deletion so existing operation provenance is
 retained. Deleting a machine also soft-deletes its active environments.
@@ -145,7 +162,7 @@ a snapshot currently removes only the gateway record.
 
 A sandbox environment template combines a fixed snapshot with a working
 directory beneath the provider's writable workspace root and an optional
-creation script. The API represents that root as `/`, so `/project` resolves to
+creation script. The operational API uses workspace-root-relative paths, so `project` resolves to
 `/home/user/project` on E2B, `/home/daytona/project` on Daytona,
 `/blaxel/project` on Blaxel, and `/home/tl-user/project` on Tensorlake.
 Materializing a template creates a fresh provider sandbox from the snapshot,
@@ -155,7 +172,7 @@ template in parallel.
 
 The control-plane API requires `EXECUTION_GATEWAY_CONTROL_TOKEN`:
 
-- `GET /v1/control/sandbox-environment-templates`
+- `GET /v1/control/sandbox-environment-templates?project_id={project_id}`
 - `POST /v1/control/sandbox-environment-templates`
 - `GET /v1/control/sandbox-environment-templates/{template_id}`
 - `PATCH /v1/control/sandbox-environment-templates/{template_id}`
@@ -167,6 +184,7 @@ Create requests have this shape:
 
 ```json
 {
+  "project_id": "project-id",
   "name": "TypeScript workspace",
   "snapshot_id": "snapshot-id",
   "cwd": "/workspace/project",
@@ -179,6 +197,14 @@ its provider sandbox. Deleting a persistent-machine environment remains a
 metadata-only soft deletion.
 
 ## Sandbox accounts
+
+The execution API exposes minimal account discovery through
+`GET /v1/sandbox-accounts` using `EXECUTION_GATEWAY_API_TOKEN`. Its response is
+limited to account ID, account name, and provider name.
+
+`POST /v1/sandbox-accounts/{account_id}/sandboxes` uses the same API token to
+create a base sandbox. Supplying `snapshot_id` in the request body creates the
+sandbox from that account's saved snapshot instead.
 
 The control-plane sandbox account API requires
 `EXECUTION_GATEWAY_CONTROL_TOKEN`:
