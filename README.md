@@ -70,7 +70,7 @@ cargo run -p codex-harness
 ./scripts/dev-servers.sh
 ```
 
-The script starts PostgreSQL, NATS, all Rust services, `pi-harness`, and the
+The script starts PostgreSQL, NATS, all Rust services, `pi-harness`, `environment-harness`, and the
 dashboard. When its local config exists, the machine daemon is automatically
 registered with the execution gateway and connected. Set
 `DEV_SERVERS_KEEP_INFRASTRUCTURE=1` to leave PostgreSQL and NATS running after

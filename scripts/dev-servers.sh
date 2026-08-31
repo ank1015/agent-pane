@@ -14,6 +14,7 @@ platform_env="$repo_root/apps/platform/.env"
 execution_gateway_env="$repo_root/apps/execution-gateway/.env"
 agent_env="$repo_root/apps/agent/.env"
 pi_harness_env="$repo_root/apps/pi-harness/.env"
+environment_harness_env="$repo_root/apps/environment-harness/.env"
 codex_harness_env="$repo_root/apps/codex-harness/.env"
 dashboard_dir="$repo_root/apps/dashboard"
 machine_daemon_config="${MACHINE_DAEMON_CONFIG:-$repo_root/apps/machine-daemon/machine-daemon.local.json}"
@@ -349,6 +350,7 @@ cargo build \
   -p machine-daemon \
   -p agent \
   -p pi-harness \
+  -p environment-harness \
   -p codex-harness
 
 if [[ "$start_dashboard" == "1" ]]; then
@@ -444,6 +446,26 @@ if ! kill -0 "$pi_harness_pid" 2>/dev/null; then
   exit 1
 fi
 
+start_with_env \
+  "environment-harness" \
+  "$environment_harness_env" \
+  "$repo_root/target/debug/environment-harness" \
+  "ENVIRONMENT_HARNESS_AGENT_URL=http://127.0.0.1:8780" \
+  "ENVIRONMENT_HARNESS_AGENT_TOKEN=$agent_harness_token" \
+  "ENVIRONMENT_HARNESS_AGENT_CONTROL_TOKEN=$agent_control_token" \
+  "ENVIRONMENT_HARNESS_NATS_URL=$nats_url" \
+  "ENVIRONMENT_HARNESS_LLM_GATEWAY_URL=http://127.0.0.1:3000" \
+  "ENVIRONMENT_HARNESS_EXECUTION_GATEWAY_URL=http://127.0.0.1:8790" \
+  "ENVIRONMENT_HARNESS_EXECUTION_GATEWAY_TOKEN=$execution_gateway_api_token" \
+  "RUST_LOG=environment_harness=info"
+environment_harness_pid="$started_pid"
+
+sleep 0.25
+if ! kill -0 "$environment_harness_pid" 2>/dev/null; then
+  echo "environment-harness stopped during startup." >&2
+  exit 1
+fi
+
 codex_harness_timezone="$(env_value "$codex_harness_env" "CODEX_HARNESS_TIMEZONE")"
 codex_harness_timezone="${codex_harness_timezone:-${CODEX_HARNESS_TIMEZONE:-${TZ:-}}}"
 if [[ -z "$codex_harness_timezone" && -L /etc/localtime ]]; then
@@ -500,6 +522,7 @@ echo "platform:          http://127.0.0.1:3100 (pid $platform_pid)"
 echo "execution-gateway: http://127.0.0.1:8790 (pid $execution_gateway_pid)"
 echo "agent:             http://127.0.0.1:8780 (pid $agent_pid)"
 echo "pi-harness:        NATS server, 20 concurrent turns (pid $pi_harness_pid)"
+echo "environment-harness: NATS server, 20 concurrent turns (pid $environment_harness_pid)"
 echo "codex-harness:     NATS server, 20 concurrent turns (pid $codex_harness_pid)"
 if [[ -n "$machine_daemon_pid" ]]; then
   echo "machine-daemon:    connected (pid $machine_daemon_pid)"
@@ -510,6 +533,7 @@ if [[ -n "$dashboard_pid" ]]; then
   echo "dashboard:         http://127.0.0.1:5173 (pid $dashboard_pid)"
 fi
 echo "Pi revision:       pi / pi-2026-08-27-nats-server"
+echo "Environment revision: environment / environment-2026-08-31-fixed-prompt"
 echo "Codex revision:    codex / codex-2026-08-30-runtime-v1"
 echo "oauth callback:    http://localhost:1455/auth/callback"
 echo "Press Ctrl-C to stop the stack. Docker data volumes are preserved."
