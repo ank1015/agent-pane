@@ -1,4 +1,6 @@
-use agent_contracts::{HARNESS_PROTOCOL_VERSION, TurnRequested, turn_subject};
+use agent_contracts::{
+    HARNESS_PROTOCOL_VERSION, RunEventData, RunStatus, TurnRequested, turn_subject,
+};
 use chrono::Utc;
 use llm_contracts::Validate as _;
 use sqlx::{Postgres, Transaction, types::Json};
@@ -6,7 +8,7 @@ use uuid::Uuid;
 
 use super::{
     CreateOutcome, ExecutionError, ExecutionPolicy, Run, RunAccepted, RunContextRow, RunRow,
-    RunStatus, StartRun, configuration, constraint, outbox,
+    StartRun, configuration, constraint, events, outbox,
     records::{
         COMMITTED_MESSAGE_COLUMNS, CommittedMessageRow, RUN_COLUMNS, positive_u32, positive_u64,
     },
@@ -108,6 +110,18 @@ pub(super) async fn start(
         Err(error) => return Err(error.into()),
     };
 
+    events::append_agent(
+        &mut tx,
+        request.run_id,
+        Some(1),
+        run.state_version,
+        run.status,
+        Uuid::now_v7(),
+        run.activated_at,
+        RunEventData::RunStarted,
+    )
+    .await?;
+
     let context = load_context(&mut tx, request.run_id, true).await?;
     enqueue_turn(&mut tx, &context, None).await?;
     tx.commit().await?;
@@ -195,7 +209,21 @@ pub(super) async fn enqueue_turn(
         })?,
         resume,
     };
-    outbox::enqueue(tx, event_id, &turn_subject(&context.harness_slug), &event).await
+    outbox::enqueue(tx, event_id, &turn_subject(&context.harness_slug), &event).await?;
+    events::append_agent(
+        tx,
+        context.run_id,
+        Some(positive_u32("runs.current_turn", context.current_turn)?),
+        positive_u64("runs.state_version", context.state_version)?,
+        RunStatus::from_db(&context.status).ok_or_else(|| {
+            ExecutionError::InvalidStoredData(format!("runs.status: {}", context.status))
+        })?,
+        event_id,
+        event.emitted_at,
+        RunEventData::TurnRequested,
+    )
+    .await?;
+    Ok(())
 }
 
 pub(super) fn require_active(
