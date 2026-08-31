@@ -7,6 +7,7 @@ use axum::{
 use execution_contracts::{EnvironmentId, PathSpec, Validate};
 use execution_protocol::{
     CreateEnvironmentRequest, CreateOperationRequest, Environment, OperationRecord,
+    ProjectEnvironment, UpdateEnvironmentRequest,
 };
 use serde::Deserialize;
 use uuid::Uuid;
@@ -18,6 +19,7 @@ use crate::{
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
+        .route("/v1/environments", post(create_api_environment))
         .route(
             "/v1/control/environments",
             get(list_environments).post(create_environment),
@@ -25,14 +27,34 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/v1/control/environments/{environment_id}",
             get(get_control_environment)
-                .patch(update_environment_name)
+                .patch(update_control_environment_name)
                 .delete(delete_environment),
         )
-        .route("/v1/environments/{environment_id}", get(get_environment))
+        .route(
+            "/v1/control/projects/{project_id}/environments",
+            get(list_project_environments),
+        )
+        .route(
+            "/v1/projects/{project_id}/environments",
+            get(list_api_project_environments),
+        )
+        .route(
+            "/v1/environments/{environment_id}",
+            get(get_environment).patch(update_api_environment),
+        )
         .route(
             "/v1/environments/{environment_id}/operations",
             post(create_environment_operation),
         )
+}
+
+async fn create_api_environment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateEnvironmentRequest>,
+) -> Result<(StatusCode, Json<Environment>), ApiError> {
+    require(&headers, &state.api_token)?;
+    create_environment_record(&state, request).await
 }
 
 async fn create_environment(
@@ -41,6 +63,13 @@ async fn create_environment(
     Json(request): Json<CreateEnvironmentRequest>,
 ) -> Result<(StatusCode, Json<Environment>), ApiError> {
     require(&headers, &state.control_token)?;
+    create_environment_record(&state, request).await
+}
+
+async fn create_environment_record(
+    state: &AppState,
+    request: CreateEnvironmentRequest,
+) -> Result<(StatusCode, Json<Environment>), ApiError> {
     let name = request.name.trim();
     if name.is_empty() {
         return Err(ApiError::bad("environment name must not be empty"));
@@ -64,13 +93,14 @@ async fn create_environment(
             request.machine_id.as_str()
         )));
     }
-    let path = normalize_path(&request)?;
+    let path = normalize_workspace_path(&request.path, &request.workspace_root_id)?;
     let environment_id =
         EnvironmentId::new(Uuid::now_v7().to_string()).expect("UUID environment ID is valid");
     let environment = match state
         .database
         .create_environment(
             &environment_id,
+            request.project_id,
             &request.machine_id,
             name,
             &request.workspace_root_id,
@@ -93,6 +123,7 @@ async fn create_environment(
 #[derive(Deserialize)]
 struct EnvironmentQuery {
     machine_id: Option<String>,
+    project_id: Option<Uuid>,
 }
 
 async fn list_environments(
@@ -103,7 +134,37 @@ async fn list_environments(
     require(&headers, &state.control_token)?;
     state
         .database
-        .environments(query.machine_id.as_deref())
+        .environments(query.machine_id.as_deref(), query.project_id)
+        .await
+        .map(Json)
+        .map_err(ApiError::database)
+}
+
+async fn list_project_environments(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Vec<ProjectEnvironment>>, ApiError> {
+    require(&headers, &state.control_token)?;
+    project_environments(&state, project_id).await
+}
+
+async fn list_api_project_environments(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Vec<ProjectEnvironment>>, ApiError> {
+    require(&headers, &state.api_token)?;
+    project_environments(&state, project_id).await
+}
+
+async fn project_environments(
+    state: &AppState,
+    project_id: Uuid,
+) -> Result<Json<Vec<ProjectEnvironment>>, ApiError> {
+    state
+        .database
+        .project_environments(project_id)
         .await
         .map(Json)
         .map_err(ApiError::database)
@@ -133,7 +194,7 @@ struct UpdateEnvironmentNameRequest {
     name: String,
 }
 
-async fn update_environment_name(
+async fn update_control_environment_name(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(environment_id): Path<String>,
@@ -151,6 +212,91 @@ async fn update_environment_name(
         .map_err(ApiError::database)?
         .map(Json)
         .ok_or_else(ApiError::not_found)
+}
+
+async fn update_api_environment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(environment_id): Path<String>,
+    Json(request): Json<UpdateEnvironmentRequest>,
+) -> Result<Json<ProjectEnvironment>, ApiError> {
+    require(&headers, &state.api_token)?;
+    if request.machine_id.is_none()
+        && request.workspace_root_id.is_none()
+        && request.name.is_none()
+        && request.path.is_none()
+    {
+        return Err(ApiError::bad("at least one field must be supplied"));
+    }
+    if request.machine_id.is_some() != request.workspace_root_id.is_some() {
+        return Err(ApiError::bad(
+            "machine_id and workspace_root_id must be supplied together",
+        ));
+    }
+    let current = find_environment(&state, &environment_id).await?;
+    if current.project_id != request.project_id {
+        return Err(ApiError::not_found());
+    }
+    let name = request.name.as_deref().map(str::trim);
+    if name.is_some_and(str::is_empty) {
+        return Err(ApiError::bad("environment name must not be empty"));
+    }
+    let machine_id = request.machine_id.as_ref().unwrap_or(&current.machine_id);
+    let workspace_root_id = request
+        .workspace_root_id
+        .as_ref()
+        .unwrap_or(&current.workspace_root_id);
+    let machine = state
+        .database
+        .machine(machine_id.as_str())
+        .await
+        .map_err(ApiError::database)?
+        .ok_or_else(ApiError::not_found)?;
+    if !machine
+        .summary
+        .descriptor
+        .workspace_roots
+        .iter()
+        .any(|root| root.id == *workspace_root_id)
+    {
+        return Err(ApiError::bad(format!(
+            "workspace root {:?} is not exposed by machine {:?}",
+            workspace_root_id.as_str(),
+            machine_id.as_str()
+        )));
+    }
+    let path = request
+        .path
+        .as_deref()
+        .map(|path| normalize_workspace_path(path, workspace_root_id))
+        .transpose()?;
+    match state
+        .database
+        .update_environment(
+            &environment_id,
+            request.project_id,
+            request.machine_id.as_ref(),
+            name,
+            request.workspace_root_id.as_ref(),
+            path.as_deref(),
+        )
+        .await
+    {
+        Ok(Some(_)) => state
+            .database
+            .project_environments(request.project_id)
+            .await
+            .map_err(ApiError::database)?
+            .into_iter()
+            .find(|environment| environment.id == environment_id)
+            .map(Json)
+            .ok_or_else(ApiError::not_found),
+        Ok(None) => Err(ApiError::not_found()),
+        Err(error) if is_unique_violation(&error) => Err(ApiError::conflict(
+            "an active environment already exists at this machine location",
+        )),
+        Err(error) => Err(ApiError::database(error)),
+    }
 }
 
 async fn delete_environment(
@@ -206,12 +352,14 @@ async fn find_environment(state: &AppState, environment_id: &str) -> Result<Envi
         .ok_or_else(ApiError::not_found)
 }
 
-fn normalize_path(request: &CreateEnvironmentRequest) -> Result<String, ApiError> {
-    PathSpec::workspace(request.workspace_root_id.clone(), request.path.clone())
+pub(crate) fn normalize_workspace_path(
+    path: &str,
+    workspace_root_id: &execution_contracts::WorkspaceRootId,
+) -> Result<String, ApiError> {
+    PathSpec::workspace(workspace_root_id.clone(), path.to_owned())
         .validate()
         .map_err(|error| ApiError::bad(error.to_string()))?;
-    let parts = request
-        .path
+    let parts = path
         .split('/')
         .filter(|part| !part.is_empty() && *part != ".")
         .collect::<Vec<_>>();
