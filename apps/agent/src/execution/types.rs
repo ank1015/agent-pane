@@ -6,9 +6,9 @@ use uuid::Uuid;
 use super::ExecutionError;
 
 pub use agent_contracts::{
-    AppendSessionMessages, NewRunMessage, Run, RunAbort, RunStatus, RunWait, SessionMessage,
-    SessionMessageDelivery, SessionMessageOrigin, SessionMessagesAppended, WaitResolutionSource,
-    WaitStatus,
+    AppendSessionMessages, NewRunMessage, Run, RunAbort, RunEventListQuery, RunStatus, RunWait,
+    SessionMessage, SessionMessageDelivery, SessionMessageOrigin, SessionMessagesAppended,
+    WaitResolutionSource, WaitStatus,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

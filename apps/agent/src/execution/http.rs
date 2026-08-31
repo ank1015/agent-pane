@@ -1,28 +1,37 @@
+use std::{collections::VecDeque, convert::Infallible, time::Duration};
+
 use axum::{
     Json, Router,
     extract::{
         Path, Query, State,
         rejection::{JsonRejection, PathRejection, QueryRejection},
     },
-    http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
-    response::{IntoResponse, Response},
+    http::{HeaderMap, HeaderValue, StatusCode, header::CACHE_CONTROL},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{get, post},
 };
-use serde::Serialize;
+use futures_util::stream;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use super::{
     AbortListQuery, AppendSessionMessages, ExecutionError, HarnessMessageListQuery,
-    QueueRunMessage, QueuedRunMessageListQuery, RequestRunAbort, ResolveRunWait, StartRun,
-    WaitListQuery, aborts, messages, runs, waits,
+    QueueRunMessage, QueuedRunMessageListQuery, RequestRunAbort, ResolveRunWait, RunEventListQuery,
+    StartRun, WaitListQuery, aborts, events, messages, runs, waits,
 };
-use crate::{api_error::ApiError, app::AppState};
+use crate::{api_error::ApiError, app::AppState, db::Database};
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/sessions/{session_id}/runs", post(start_run))
         .route("/v1/runs/{run_id}", get(get_run))
+        .route("/v1/runs/{run_id}/events", get(list_run_events))
+        .route("/v1/runs/{run_id}/events/stream", get(stream_run_events))
         .route(
             "/v1/runs/{run_id}/messages",
             get(list_queued_messages).post(queue_message),
@@ -78,6 +87,155 @@ async fn get_run(
         StatusCode::OK,
         runs::get(state.database(), uuid_path("run_id", path)?).await?,
     ))
+}
+async fn list_run_events(
+    State(state): State<AppState>,
+    path: Result<Path<String>, PathRejection>,
+    query: Result<Query<RunEventListQuery>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    Ok(json_response(
+        StatusCode::OK,
+        events::list(
+            state.database(),
+            uuid_path("run_id", path)?,
+            query_body(query)?,
+        )
+        .await?,
+    ))
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunEventStreamQuery {
+    after_sequence: Option<u64>,
+}
+
+async fn stream_run_events(
+    State(state): State<AppState>,
+    path: Result<Path<String>, PathRejection>,
+    headers: HeaderMap,
+    query: Result<Query<RunEventStreamQuery>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    let run_id = uuid_path("run_id", path)?;
+    runs::get(state.database(), run_id).await?;
+    let query = query_body(query)?;
+    let after_sequence = match headers.get("last-event-id") {
+        Some(value) => value
+            .to_str()
+            .map_err(|_| ApiError::invalid_request("Last-Event-ID must be an integer"))?
+            .parse::<u64>()
+            .map_err(|_| ApiError::invalid_request("Last-Event-ID must be an integer"))?,
+        None => query.after_sequence.unwrap_or(0),
+    };
+    i64::try_from(after_sequence).map_err(|_| ExecutionError::InvalidRunEventAfterSequence)?;
+    let stream = stream::unfold(
+        RunEventStreamState {
+            database: state.database().clone(),
+            notifications: state.database().subscribe_run_events(),
+            run_id,
+            after_sequence,
+            pending: VecDeque::new(),
+            done: false,
+        },
+        next_stream_event,
+    );
+    let mut response = Sse::new(stream)
+        .keep_alive(
+            KeepAlive::new()
+                .interval(Duration::from_secs(15))
+                .text("keep-alive"),
+        )
+        .into_response();
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
+    Ok(response)
+}
+
+struct RunEventStreamState {
+    database: Database,
+    notifications: broadcast::Receiver<Uuid>,
+    run_id: Uuid,
+    after_sequence: u64,
+    pending: VecDeque<agent_contracts::RunEvent>,
+    done: bool,
+}
+
+async fn next_stream_event(
+    mut state: RunEventStreamState,
+) -> Option<(Result<Event, Infallible>, RunEventStreamState)> {
+    loop {
+        if state.done {
+            return None;
+        }
+        if let Some(run_event) = state.pending.pop_front() {
+            state.after_sequence = run_event.sequence;
+            state.done = run_event.terminal();
+            let data = match serde_json::to_string(&run_event) {
+                Ok(data) => data,
+                Err(error) => {
+                    tracing::error!(%error, run_id = %state.run_id, "could not serialize run event for SSE");
+                    return None;
+                }
+            };
+            let event = Event::default()
+                .id(run_event.sequence.to_string())
+                .event(run_event.sse_name())
+                .data(data);
+            return Some((Ok(event), state));
+        }
+
+        let page = match events::list(
+            &state.database,
+            state.run_id,
+            RunEventListQuery {
+                after_sequence: Some(state.after_sequence),
+                limit: Some(500),
+            },
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(error) => {
+                tracing::warn!(%error, run_id = %state.run_id, "run event SSE query failed");
+                return None;
+            }
+        };
+        if !page.items.is_empty() {
+            state.pending.extend(page.items);
+            continue;
+        }
+        match runs::get(&state.database, state.run_id).await {
+            Ok(run)
+                if matches!(
+                    run.status,
+                    agent_contracts::RunStatus::Aborted
+                        | agent_contracts::RunStatus::Completed
+                        | agent_contracts::RunStatus::Failed
+                ) =>
+            {
+                return None;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, run_id = %state.run_id, "could not inspect run while streaming events");
+                return None;
+            }
+        }
+
+        loop {
+            match tokio::time::timeout(Duration::from_secs(2), state.notifications.recv()).await {
+                Ok(Ok(notified_run)) if notified_run == state.run_id => break,
+                Ok(Ok(_)) => {}
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) | Err(_) => break,
+                Ok(Err(broadcast::error::RecvError::Closed)) => break,
+            }
+        }
+    }
 }
 async fn queue_message(
     State(state): State<AppState>,
@@ -307,6 +465,8 @@ impl From<ExecutionError> for ApiError {
             ExecutionError::InvalidMessagePageSize
             | ExecutionError::InvalidQueuedMessagePageSize
             | ExecutionError::InvalidQueuedMessageAfterSequence
+            | ExecutionError::InvalidRunEventPageSize
+            | ExecutionError::InvalidRunEventAfterSequence
             | ExecutionError::InvalidWaitPageSize
             | ExecutionError::InvalidWaitCursor
             | ExecutionError::InvalidAbortPageSize
