@@ -18,7 +18,7 @@ Agent provisions three JetStream streams on startup:
 | Stream | Subjects | Purpose |
 | --- | --- | --- |
 | `AGENT_HARNESS_WORK` | `agent.harness.*.turn.requested.v1` | Per-harness turn work |
-| `AGENT_COMMANDS` | `agent.run.*.command.v1` | Harness lifecycle commands |
+| `AGENT_COMMANDS` | `agent.run.*.command.v1`, `agent.run.*.event.v1` | Ordered per-run harness inputs |
 | `AGENT_HARNESS_EVENTS` | results and cancellations | Command outcomes and best-effort abort notifications |
 
 Delivery is at least once. Agent uses a transactional PostgreSQL outbox for
@@ -36,9 +36,47 @@ POST /v1/harness/runs/{run_id}/messages
 
 All harness lifecycle transitions travel through NATS.
 
+Harnesses may also publish fenced, non-authoritative observations on
+`agent.run.{run_id}.event.v1`. Agent consumes commands and observations through
+the same ordered stream, persists accepted observations in `run_events`, and
+exposes the canonical event log through:
+
+```text
+GET /v1/runs/{run_id}/events
+GET /v1/runs/{run_id}/events/stream
+```
+
+The stream endpoint is SSE. It replays events after `Last-Event-ID` (or the
+`after_sequence` query parameter), remains open while the run is active or
+waiting, and closes after `completed`, `failed`, or `aborted`.
+
+Agent owns only the small lifecycle vocabulary: `run.started`,
+`turn.requested`, `turn.ended`, `run.waiting`, `run.resumed`, and the terminal
+run events. A harness emits `turn.started` and optional named `progress` events
+such as model or tool-call boundaries. Harness observations are fenced by the
+current `turn_number` and `expected_state_version`; stale observations are
+acknowledged but not added to the log.
+
+Each SSE frame uses the per-run sequence as its `id`, the dotted event name as
+its `event`, and the complete `RunEvent` JSON object as its `data`. Connecting
+mid-turn therefore returns all events after the supplied sequence, then waits
+for new ones. A client can resume without gaps after a disconnect:
+
+```sh
+curl -N \
+  -H "Authorization: Bearer $AGENT_CONTROL_TOKEN" \
+  -H "Last-Event-ID: 12" \
+  http://127.0.0.1:8080/v1/runs/$RUN_ID/events/stream
+```
+
+`run_events` in PostgreSQL is the durable source of truth. Inserts issue a
+transactional PostgreSQL notification after commit so every Agent instance can
+wake its local SSE clients; streams also periodically re-read the log to recover
+from missed notifications. No Redis or separate event database is required.
+
 ## State model
 
-The schema contains nine application tables:
+The schema contains ten application tables:
 
 ```text
 harnesses
@@ -48,7 +86,8 @@ sessions
 ├── session_messages
 └── runs
     ├── run_waits
-    └── run_aborts
+    ├── run_aborts
+    └── run_events
 
 broker_outbox
 broker_inbox

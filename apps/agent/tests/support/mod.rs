@@ -11,6 +11,7 @@ use serde_json::Value;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::time::Duration;
 use tokio::{net::TcpListener, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 pub const CONTROL_TOKEN: &str = "agent-control-token-that-is-long-enough";
@@ -20,6 +21,8 @@ pub struct TestApp {
     pub client: Client,
     pub base_url: String,
     pub pool: PgPool,
+    shutdown: CancellationToken,
+    run_event_listener: Option<JoinHandle<()>>,
     server: JoinHandle<()>,
 }
 impl TestApp {
@@ -36,6 +39,10 @@ impl TestApp {
 }
 impl Drop for TestApp {
     fn drop(&mut self) {
+        self.shutdown.cancel();
+        if let Some(listener) = &self.run_event_listener {
+            listener.abort();
+        }
         self.server.abort();
     }
 }
@@ -49,18 +56,30 @@ pub async fn test_app() -> TestApp {
         .await
         .expect("test database connection");
     agent::migrate(&pool).await.expect("agent migrations");
-    spawn(pool).await
+    spawn(pool, true).await
 }
 pub async fn lazy_test_app() -> TestApp {
     let pool = PgPoolOptions::new()
         .acquire_timeout(Duration::from_millis(50))
         .connect_lazy("postgres://postgres:postgres@127.0.0.1:1/agent")
         .expect("lazy test pool");
-    spawn(pool).await
+    spawn(pool, false).await
 }
-async fn spawn(pool: PgPool) -> TestApp {
+async fn spawn(pool: PgPool, listen_for_run_events: bool) -> TestApp {
+    let database = Database::from_pool(pool.clone());
+    let shutdown = CancellationToken::new();
+    let run_event_listener = if listen_for_run_events {
+        Some(
+            database
+                .spawn_run_event_listener(shutdown.clone())
+                .await
+                .expect("run event listener"),
+        )
+    } else {
+        None
+    };
     let state = AppState::new(
-        Database::from_pool(pool.clone()),
+        database,
         ControlToken::new(CONTROL_TOKEN).unwrap(),
         HarnessToken::new(HARNESS_TOKEN).unwrap(),
         ExecutionPolicy::default(),
@@ -76,6 +95,8 @@ async fn spawn(pool: PgPool) -> TestApp {
         client: Client::new(),
         base_url: format!("http://{address}"),
         pool,
+        shutdown,
+        run_event_listener,
         server,
     }
 }
