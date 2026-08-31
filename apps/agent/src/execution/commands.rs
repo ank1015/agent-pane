@@ -1,6 +1,7 @@
 use agent_contracts::{
     AppliedHarnessCommand, HARNESS_PROTOCOL_VERSION, HarnessCommand, HarnessCommandOutcome,
-    HarnessCommandResult, HarnessOperation, RejectedHarnessCommand, RunStatus, result_subject,
+    HarnessCommandResult, HarnessOperation, RejectedHarnessCommand, RunEventData, RunStatus,
+    TurnEndReason, result_subject,
 };
 use chrono::Utc;
 use llm_contracts::Validate as _;
@@ -9,7 +10,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{FromRow, Postgres, Transaction, types::Json};
 use uuid::Uuid;
 
-use super::{ExecutionError, constraint, outbox, records::positive_u64, runs};
+use super::{ExecutionError, constraint, events, outbox, records::positive_u64, runs};
 use crate::db::Database;
 
 #[derive(FromRow)]
@@ -150,7 +151,76 @@ async fn apply_operation(
                 .bind(command.run_id).execute(&mut **tx).await?;
         }
     }
-    applied_state(tx, command.run_id).await
+    let applied = applied_state(tx, command.run_id).await?;
+    let occurred_at = Utc::now();
+    let reason = match &command.operation {
+        HarnessOperation::Complete { .. } => TurnEndReason::Completed,
+        HarnessOperation::Continue => TurnEndReason::Continued,
+        HarnessOperation::Fail { .. } => TurnEndReason::Failed,
+        HarnessOperation::Wait(_) => TurnEndReason::Waiting,
+    };
+    events::append_agent(
+        tx,
+        command.run_id,
+        Some(command.turn_number),
+        applied.run_state_version,
+        applied.run_status,
+        Uuid::now_v7(),
+        occurred_at,
+        RunEventData::TurnEnded { reason },
+    )
+    .await?;
+    match &command.operation {
+        HarnessOperation::Complete { final_message_id } => {
+            events::append_agent(
+                tx,
+                command.run_id,
+                Some(command.turn_number),
+                applied.run_state_version,
+                applied.run_status,
+                Uuid::now_v7(),
+                occurred_at,
+                RunEventData::RunCompleted {
+                    final_message_id: *final_message_id,
+                },
+            )
+            .await?;
+        }
+        HarnessOperation::Fail { failure } => {
+            events::append_agent(
+                tx,
+                command.run_id,
+                Some(command.turn_number),
+                applied.run_state_version,
+                applied.run_status,
+                Uuid::now_v7(),
+                occurred_at,
+                RunEventData::RunFailed {
+                    failure: failure.clone(),
+                },
+            )
+            .await?;
+        }
+        HarnessOperation::Wait(wait) => {
+            events::append_agent(
+                tx,
+                command.run_id,
+                Some(command.turn_number),
+                applied.run_state_version,
+                applied.run_status,
+                Uuid::now_v7(),
+                occurred_at,
+                RunEventData::RunWaiting {
+                    wait_id: wait.wait_id,
+                    kind: wait.kind.clone(),
+                    expires_at: wait.expires_at,
+                },
+            )
+            .await?;
+        }
+        HarnessOperation::Continue => {}
+    }
+    Ok(applied)
 }
 
 async fn complete(
