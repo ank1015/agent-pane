@@ -176,6 +176,10 @@ async fn registers_and_activates_the_packaged_pi_harness() {
             }
         ])
     );
+    assert_eq!(
+        calls[0].body["supported_reasoning_levels"],
+        json!(["low", "medium", "high", "xhigh", "max"])
+    );
     assert_eq!(calls[1].method, Method::PATCH);
     assert_eq!(calls[1].path, "/v1/harnesses/pi");
     assert_eq!(
@@ -185,6 +189,10 @@ async fn registers_and_activates_the_packaged_pi_harness() {
     assert_eq!(
         calls[1].body["supported_providers"],
         calls[0].body["supported_providers"]
+    );
+    assert_eq!(
+        calls[1].body["supported_reasoning_levels"],
+        calls[0].body["supported_reasoning_levels"]
     );
     assert_eq!(calls[2].body["harness_revision_id"], PI_HARNESS_REVISION_ID);
     assert_eq!(calls[2].body["default_config"]["model_id"], "gpt-5.6-sol");

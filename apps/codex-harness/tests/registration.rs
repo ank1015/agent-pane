@@ -57,8 +57,16 @@ async fn registers_activates_and_enables_the_packaged_revision() {
             }
         ])
     );
+    assert_eq!(
+        calls[0].body["supported_reasoning_levels"],
+        json!(["low", "medium", "high", "xhigh", "max"])
+    );
     assert_eq!(calls[1].method, Method::PATCH);
     assert_eq!(calls[1].path, "/v1/harnesses/codex");
+    assert_eq!(
+        calls[1].body["supported_reasoning_levels"],
+        calls[0].body["supported_reasoning_levels"]
+    );
     assert_eq!(
         calls[2].body["harness_revision_id"],
         CODEX_HARNESS_REVISION_ID

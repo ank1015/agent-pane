@@ -1,7 +1,7 @@
 use agent_harness_sdk::{
     AgentControlServiceConfig, CreateHarnessRequest, HarnessDescriptor, HarnessProvider,
-    HarnessRegistryClient, HarnessRegistryError, RegisterHarnessRevisionRequest,
-    UpdateHarnessRequest,
+    HarnessReasoningLevel, HarnessRegistryClient, HarnessRegistryError,
+    RegisterHarnessRevisionRequest, UpdateHarnessRequest,
 };
 use llm_contracts::{JsonObject, ModelId, ProviderId};
 use serde_json::json;
@@ -38,6 +38,7 @@ fn create_request() -> CreateHarnessRequest {
         display_name: "Codex Coding Agent".to_owned(),
         description: Some(description().to_owned()),
         supported_providers: supported_providers(),
+        supported_reasoning_levels: HarnessReasoningLevel::ALL.to_vec(),
     }
 }
 
@@ -46,6 +47,7 @@ fn update_request() -> UpdateHarnessRequest {
         display_name: None,
         description: Some(Some(description().to_owned())),
         supported_providers: Some(supported_providers()),
+        supported_reasoning_levels: Some(HarnessReasoningLevel::ALL.to_vec()),
     }
 }
 
