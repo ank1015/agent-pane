@@ -6,6 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use execution_protocol::ProjectEnvironment;
 use uuid::Uuid;
 
 use super::{
@@ -28,6 +29,10 @@ pub(super) fn router(service: ProjectService) -> Router<AppState> {
                 .patch(update_project)
                 .delete(delete_project),
         )
+        .route(
+            "/api/projects/{project_id}/environments",
+            get(list_project_environments),
+        )
         .layer(middleware::map_response(add_no_store))
         .with_state(ProjectState { service })
 }
@@ -41,6 +46,13 @@ async fn get_project(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Project>, ApiError> {
     Ok(Json(state.service.get(project_id).await?))
+}
+
+async fn list_project_environments(
+    State(state): State<ProjectState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Vec<ProjectEnvironment>>, ApiError> {
+    Ok(Json(state.service.list_environments(project_id).await?))
 }
 
 async fn create_project(

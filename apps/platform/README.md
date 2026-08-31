@@ -86,8 +86,9 @@ GET    /api/projects/{project_id}/environments
 Create a project with `{"name":"Agent Pane","avatar":null}`. `avatar` may be
 omitted, supplied as a string, or set to `null` in a PATCH request to clear it.
 The project environments endpoint combines configured machine environments and
-sandbox templates. Its items expose `id`, `name`, `host_name`, `path`, `type`,
-an optional `snapshot_id`, and `created_at`.
+sandbox templates. Its items expose `id`, `name`, `host_name`, an optional
+`machine_id`, `path`, `type`, an optional `snapshot_id`, an optional
+`setup_script`, and `created_at`.
 
 ## Harnesses API
 

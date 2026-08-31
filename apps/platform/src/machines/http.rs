@@ -6,7 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, put},
 };
-use execution_protocol::{Environment, ProjectEnvironment};
+use execution_protocol::Environment;
 use uuid::Uuid;
 
 use super::{
@@ -33,10 +33,6 @@ pub(super) fn router(service: MachineService) -> Router<AppState> {
         .route(
             "/api/machines/{machine_id}/environments",
             get(list_machine_environments).post(create_machine_environment),
-        )
-        .route(
-            "/api/projects/{project_id}/environments",
-            get(list_project_environments),
         )
         .route(
             "/api/machines/sandbox-accounts",
@@ -124,15 +120,6 @@ async fn create_machine_environment(
         .create_environment(&machine_id, &request)
         .await?;
     Ok((StatusCode::CREATED, Json(environment)).into_response())
-}
-
-async fn list_project_environments(
-    State(state): State<MachineState>,
-    Path(project_id): Path<Uuid>,
-) -> Result<Json<Vec<ProjectEnvironment>>, ApiError> {
-    Ok(Json(
-        state.service.list_project_environments(project_id).await?,
-    ))
 }
 
 async fn list_sandbox_accounts(

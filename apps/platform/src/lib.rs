@@ -55,11 +55,12 @@ pub fn router(
             chatgpt_login,
         ))
         .merge(machines::router(machines::MachineService::new(
-            execution_gateway,
+            execution_gateway.clone(),
         )))
         .merge(harnesses::router(harnesses::HarnessService::new(agent)))
         .merge(projects::router(projects::ProjectService::new(
             database.pool().clone(),
+            execution_gateway,
         )))
         .layer(DefaultBodyLimit::max(max_request_bytes))
         .with_state(state)

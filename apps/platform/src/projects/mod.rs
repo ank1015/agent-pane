@@ -1,9 +1,11 @@
 mod http;
 pub mod model;
 
+use execution_protocol::ProjectEnvironment;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::upstream::execution_gateway::{ExecutionGatewayClient, ExecutionGatewayError};
 use model::{CreateProjectRequest, Project, UpdateProjectRequest};
 
 const MAX_NAME_LENGTH: usize = 128;
@@ -12,12 +14,13 @@ const MAX_AVATAR_LENGTH: usize = 800_000;
 #[derive(Clone)]
 pub struct ProjectService {
     pool: PgPool,
+    gateway: ExecutionGatewayClient,
 }
 
 impl ProjectService {
     #[must_use]
-    pub const fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub const fn new(pool: PgPool, gateway: ExecutionGatewayClient) -> Self {
+        Self { pool, gateway }
     }
 
     async fn list(&self) -> Result<Vec<Project>, ProjectError> {
@@ -40,6 +43,13 @@ impl ProjectService {
         .fetch_optional(&self.pool)
         .await?
         .ok_or(ProjectError::NotFound)
+    }
+
+    async fn list_environments(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<ProjectEnvironment>, ExecutionGatewayError> {
+        self.gateway.list_project_environments(project_id).await
     }
 
     async fn create(&self, request: &CreateProjectRequest) -> Result<Project, ProjectError> {
@@ -175,7 +185,13 @@ mod tests {
         crate::db::migrate(&pool)
             .await
             .expect("platform migrations");
-        let service = ProjectService::new(pool);
+        let gateway = crate::upstream::execution_gateway::ExecutionGatewayClient::new(
+            "http://127.0.0.1:1".parse().unwrap(),
+            "test-control-token",
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap();
+        let service = ProjectService::new(pool, gateway);
 
         let created = service
             .create(&CreateProjectRequest {
