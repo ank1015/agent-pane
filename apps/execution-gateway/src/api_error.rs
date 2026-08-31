@@ -91,6 +91,7 @@ impl ApiError {
 
     pub(crate) fn sandbox_materialization(error: SandboxMaterializationError) -> Self {
         match error {
+            SandboxMaterializationError::SnapshotAccountMismatch => Self::bad(error.to_string()),
             SandboxMaterializationError::TemplateNotFound
             | SandboxMaterializationError::SnapshotNotFound
             | SandboxMaterializationError::SandboxNotFound => Self::not_found(),

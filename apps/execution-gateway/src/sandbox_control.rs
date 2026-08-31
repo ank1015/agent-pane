@@ -4,7 +4,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::get,
 };
-use execution_protocol::MachineSummary;
+use execution_contracts::MachineId;
+use execution_protocol::{
+    CreateSandboxMachineRequest, MachineSummary, SandboxMachineCreated, SandboxSnapshotCreated,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -19,6 +22,14 @@ use crate::{
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route(
+            "/v1/sandbox-accounts/{account_id}/sandboxes",
+            axum::routing::post(create_api_sandbox),
+        )
+        .route(
+            "/v1/machines/{machine_id}/snapshots",
+            axum::routing::post(create_api_snapshot),
+        )
+        .route(
             "/v1/control/sandbox-accounts/{account_id}/sandboxes",
             get(list_sandboxes).post(create_sandbox),
         )
@@ -26,6 +37,66 @@ pub(crate) fn routes() -> Router<AppState> {
             "/v1/control/sandbox-accounts/{account_id}/sandboxes/{sandbox_id}/snapshots",
             axum::routing::post(create_snapshot),
         )
+}
+
+async fn create_api_snapshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(machine_id): Path<String>,
+) -> Result<(StatusCode, Json<SandboxSnapshotCreated>), ApiError> {
+    require(&headers, &state.api_token)?;
+    let machine_id = MachineId::new(machine_id)
+        .map_err(|error| ApiError::bad(format!("invalid machine_id: {error}")))?;
+    state
+        .sandbox_materializer
+        .create_sandbox_snapshot_for_machine(&machine_id)
+        .await
+        .map(|snapshot| {
+            (
+                StatusCode::CREATED,
+                Json(SandboxSnapshotCreated {
+                    snapshot_id: snapshot.id,
+                }),
+            )
+        })
+        .map_err(ApiError::sandbox_materialization)
+}
+
+async fn create_api_sandbox(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(account_id): Path<Uuid>,
+    Json(request): Json<CreateSandboxMachineRequest>,
+) -> Result<(StatusCode, Json<SandboxMachineCreated>), ApiError> {
+    require(&headers, &state.api_token)?;
+    let created = match request.snapshot_id {
+        Some(snapshot_id) => {
+            state
+                .sandbox_materializer
+                .create_sandbox_from_snapshot(account_id, snapshot_id, None)
+                .await
+        }
+        None => {
+            let account = state
+                .sandbox_accounts
+                .find(account_id)
+                .await
+                .map_err(ApiError::sandbox_account)?
+                .ok_or_else(ApiError::not_found)?;
+            let source = creation_source(account.provider, None)?;
+            state
+                .sandbox_materializer
+                .create_sandbox(account_id, source, None)
+                .await
+        }
+    }
+    .map_err(ApiError::sandbox_materialization)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(SandboxMachineCreated {
+            machine: created.machine,
+        }),
+    ))
 }
 
 #[derive(Debug, Deserialize)]

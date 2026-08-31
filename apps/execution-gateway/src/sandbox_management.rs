@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     db::DbError,
-    sandbox_accounts::SandboxProvider,
+    sandbox_accounts::{SandboxAccount, SandboxCredentials, SandboxProvider},
     sandbox_machines::NewSandboxMachine,
     sandbox_materialization::{SandboxMaterializationError, SandboxMaterializer},
     sandbox_provider::ProvisionedSandbox,
@@ -48,12 +48,72 @@ impl SandboxMaterializer {
             .provider
             .create_sandbox(&account, &credentials, &target_name, source)
             .await?;
+        self.record_created_sandbox(
+            machine_id,
+            machine_name,
+            &account,
+            &credentials,
+            provisioned,
+        )
+        .await
+    }
+
+    pub async fn create_sandbox_from_snapshot(
+        &self,
+        account_id: Uuid,
+        snapshot_id: Uuid,
+        name: Option<&str>,
+    ) -> Result<CreatedSandboxMachine, SandboxMaterializationError> {
+        let snapshot = self
+            .database
+            .snapshot(snapshot_id)
+            .await?
+            .ok_or(SandboxMaterializationError::SnapshotNotFound)?;
+        if snapshot.sandbox_account_id != account_id {
+            return Err(SandboxMaterializationError::SnapshotAccountMismatch);
+        }
+        let account = self
+            .accounts
+            .resolve(snapshot.provider, Some(account_id))
+            .await?;
+        let credentials = self
+            .accounts
+            .credentials(account.id)
+            .await?
+            .ok_or(SandboxMaterializationError::AccountCredentialsMissing)?;
+        let machine_id = machine_id()?;
+        let machine_name = name
+            .map(str::to_owned)
+            .unwrap_or_else(|| default_machine_name(snapshot.provider, &machine_id));
+        let target_name = format!("agent-pane-{}", Uuid::now_v7().simple());
+        let provisioned = self
+            .provider
+            .create_from_snapshot(&snapshot, &account, &credentials, &target_name)
+            .await?;
+        self.record_created_sandbox(
+            machine_id,
+            machine_name,
+            &account,
+            &credentials,
+            provisioned,
+        )
+        .await
+    }
+
+    async fn record_created_sandbox(
+        &self,
+        machine_id: MachineId,
+        machine_name: String,
+        account: &SandboxAccount,
+        credentials: &SandboxCredentials,
+        provisioned: ProvisionedSandbox,
+    ) -> Result<CreatedSandboxMachine, SandboxMaterializationError> {
         let runtime = self
             .build_created_runtime(
                 &machine_id,
                 &machine_name,
-                &account,
-                &credentials,
+                account,
+                credentials,
                 &provisioned,
             )
             .await?;
@@ -65,7 +125,7 @@ impl SandboxMaterializer {
         {
             Ok(secret) => secret,
             Err(error) => {
-                self.cleanup_unrecorded(&account, &credentials, &provisioned)
+                self.cleanup_unrecorded(account, credentials, &provisioned)
                     .await;
                 return Err(error.into());
             }
@@ -84,7 +144,7 @@ impl SandboxMaterializer {
             })
             .await
         {
-            self.cleanup_unrecorded(&account, &credentials, &provisioned)
+            self.cleanup_unrecorded(account, credentials, &provisioned)
                 .await;
             return Err(error.into());
         }
@@ -94,8 +154,8 @@ impl SandboxMaterializer {
                 let error = DbError::Contract("created sandbox machine disappeared".to_owned());
                 self.cleanup_recorded(
                     &machine_id,
-                    &account,
-                    &credentials,
+                    account,
+                    credentials,
                     &provisioned,
                     &error.to_string(),
                 )
@@ -105,8 +165,8 @@ impl SandboxMaterializer {
             Err(error) => {
                 self.cleanup_recorded(
                     &machine_id,
-                    &account,
-                    &credentials,
+                    account,
+                    credentials,
                     &provisioned,
                     &error.to_string(),
                 )
@@ -171,6 +231,24 @@ impl SandboxMaterializer {
             )
             .await
             .map_err(Into::into)
+    }
+
+    pub async fn create_sandbox_snapshot_for_machine(
+        &self,
+        machine_id: &MachineId,
+    ) -> Result<Snapshot, SandboxMaterializationError> {
+        let sandbox = self
+            .database
+            .sandbox_machine(machine_id.as_str())
+            .await?
+            .ok_or(SandboxMaterializationError::SandboxNotFound)?;
+        let name = format!("Snapshot of {}", machine_id.as_str());
+        self.create_sandbox_snapshot(
+            sandbox.sandbox_account_id,
+            &sandbox.provider_resource_id,
+            &name,
+        )
+        .await
     }
 
     async fn build_created_runtime(

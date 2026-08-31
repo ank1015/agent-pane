@@ -376,6 +376,8 @@ pub enum SandboxMaterializationError {
     TemplateNotFound,
     #[error("template snapshot was not found")]
     SnapshotNotFound,
+    #[error("snapshot does not belong to the requested sandbox account")]
+    SnapshotAccountMismatch,
     #[error("template cwd is invalid: {0}")]
     InvalidTemplateCwd(&'static str),
     #[error("sandbox was not found")]

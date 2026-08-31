@@ -12,7 +12,7 @@ use execution_contracts::Validate;
 use execution_protocol::{
     ClaimMachineRequest, ClaimMachineResponse, ConnectorKind, CreateOperationRequest,
     CreateRegistrationRequest, MachineSummary, OperationEvent, OperationRecord,
-    RegistrationCreated,
+    RegistrationCreated, SandboxAccountSummary,
 };
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
@@ -78,6 +78,7 @@ pub fn router(
         .route("/v1/admin/machine-registrations", post(create_registration))
         .route("/v1/machine-registrations/claim", post(claim_registration))
         .route("/v1/machines/connect", get(connect_machine))
+        .route("/v1/sandbox-accounts", get(list_sandbox_account_summaries))
         .route(
             "/v1/control/sandbox-accounts",
             get(list_sandbox_accounts).post(create_sandbox_account),
@@ -241,6 +242,30 @@ async fn list_sandbox_accounts(
         .list()
         .await
         .map(Json)
+        .map_err(ApiError::sandbox_account)
+}
+
+async fn list_sandbox_account_summaries(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<SandboxAccountSummary>>, ApiError> {
+    require(&headers, &state.api_token)?;
+    state
+        .sandbox_accounts
+        .list()
+        .await
+        .map(|accounts| {
+            Json(
+                accounts
+                    .into_iter()
+                    .map(|account| SandboxAccountSummary {
+                        account_id: account.id.to_string(),
+                        account_name: account.name,
+                        provider_name: account.provider.to_string(),
+                    })
+                    .collect(),
+            )
+        })
         .map_err(ApiError::sandbox_account)
 }
 
