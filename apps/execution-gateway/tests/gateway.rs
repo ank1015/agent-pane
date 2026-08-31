@@ -14,7 +14,9 @@ use execution_gateway::{
 use execution_local::{LocalExecutionRuntime, LocalRuntimeConfig, LocalWorkspaceRoot};
 use execution_protocol::{
     CreateEnvironmentRequest, CreateOperationRequest, CreateRegistrationRequest, Environment,
-    MachineSummary, Operation, OperationRecord, OperationStatus, RegistrationCreated, Response,
+    MachineSummary, Operation, OperationRecord, OperationStatus, ProjectEnvironment,
+    ProjectEnvironmentType, RegistrationCreated, Response, SandboxAccountSummary,
+    UpdateEnvironmentRequest, UpdateSandboxTemplateEnvironmentRequest,
 };
 use execution_runtime::ExecutionRuntime;
 use reqwest::StatusCode;
@@ -106,10 +108,37 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         accounts.push(account);
     }
 
+    let unauthorized_discovery = client
+        .get(format!("{base}/v1/sandbox-accounts"))
+        .bearer_auth("test-control")
+        .send()
+        .await
+        .expect("unauthorized sandbox account discovery");
+    assert_eq!(unauthorized_discovery.status(), StatusCode::UNAUTHORIZED);
+    let discovered: Vec<SandboxAccountSummary> = client
+        .get(format!("{base}/v1/sandbox-accounts"))
+        .bearer_auth("test-api")
+        .send()
+        .await
+        .expect("discover sandbox accounts")
+        .json()
+        .await
+        .expect("sandbox account summaries");
+    assert_eq!(discovered.len(), accounts.len());
+    for account in &accounts {
+        assert!(discovered.iter().any(|summary| {
+            summary.account_id == account.id.to_string()
+                && summary.account_name == account.name
+                && summary.provider_name == account.provider.as_str()
+        }));
+    }
+
     let template_snapshot =
         snapshots::assert_snapshot_control_api(&client, &base, accounts[0].id, accounts[1].id)
             .await;
-    sandbox_templates::assert_template_control_api(&client, &base, &template_snapshot).await;
+    let project_id = uuid::Uuid::now_v7();
+    sandbox_templates::assert_template_control_api(&client, &base, &template_snapshot, project_id)
+        .await;
 
     let duplicate = client
         .post(format!("{base}/v1/control/sandbox-accounts"))
@@ -321,6 +350,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .post(format!("{base}/v1/control/environments"))
         .bearer_auth("test-api")
         .json(&CreateEnvironmentRequest {
+            project_id,
             machine_id: machine_id.clone(),
             name: "Project".to_owned(),
             workspace_root_id: workspace_root_id.clone(),
@@ -335,6 +365,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .post(format!("{base}/v1/control/environments"))
         .bearer_auth("test-control")
         .json(&CreateEnvironmentRequest {
+            project_id,
             machine_id: machine_id.clone(),
             name: "Project".to_owned(),
             workspace_root_id: id("missing-root".to_owned()),
@@ -349,6 +380,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .post(format!("{base}/v1/control/environments"))
         .bearer_auth("test-control")
         .json(&CreateEnvironmentRequest {
+            project_id,
             machine_id: machine_id.clone(),
             name: "  Project  ".to_owned(),
             workspace_root_id: workspace_root_id.clone(),
@@ -363,6 +395,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .await
         .expect("environment response");
     assert_eq!(environment.machine_id, machine_id);
+    assert_eq!(environment.project_id, project_id);
     assert_eq!(environment.name, "Project");
     assert_eq!(environment.workspace_root_id, workspace_root_id);
     assert_eq!(environment.path, "project");
@@ -371,6 +404,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .post(format!("{base}/v1/control/environments"))
         .bearer_auth("test-control")
         .json(&CreateEnvironmentRequest {
+            project_id,
             machine_id: machine_id.clone(),
             name: "Duplicate location".to_owned(),
             workspace_root_id: workspace_root_id.clone(),
@@ -395,6 +429,177 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .expect("environment list");
     assert_eq!(environments.len(), 1);
     assert_eq!(&environments[0], &environment);
+
+    let filtered_environments: Vec<Environment> = client
+        .get(format!(
+            "{base}/v1/control/environments?machine_id={}&project_id={project_id}",
+            machine_id.as_str()
+        ))
+        .bearer_auth("test-control")
+        .send()
+        .await
+        .expect("list project machine environments")
+        .json()
+        .await
+        .expect("project machine environment list");
+    assert_eq!(filtered_environments, vec![environment.clone()]);
+
+    let template_response = client
+        .post(format!("{base}/v1/control/sandbox-environment-templates"))
+        .bearer_auth("test-control")
+        .json(&serde_json::json!({
+            "project_id": project_id,
+            "name": "Project sandbox",
+            "snapshot_id": template_snapshot.id,
+            "cwd": format!(
+                "{}/project",
+                sandbox_templates::provider_workspace_root(template_snapshot.provider)
+            )
+        }))
+        .send()
+        .await
+        .expect("create project sandbox template");
+    assert_eq!(template_response.status(), StatusCode::CREATED);
+    let project_template: execution_gateway::sandbox_templates::SandboxEnvironmentTemplate =
+        template_response.json().await.expect("project template");
+
+    let unauthorized_project_environments = client
+        .get(format!(
+            "{base}/v1/control/projects/{project_id}/environments"
+        ))
+        .bearer_auth("test-api")
+        .send()
+        .await
+        .expect("unauthorized project environment list");
+    assert_eq!(
+        unauthorized_project_environments.status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    let project_environments: Vec<ProjectEnvironment> = client
+        .get(format!(
+            "{base}/v1/control/projects/{project_id}/environments"
+        ))
+        .bearer_auth("test-control")
+        .send()
+        .await
+        .expect("list configured project environments")
+        .json()
+        .await
+        .expect("configured project environments");
+    assert_eq!(project_environments.len(), 2);
+    let machine_environment = project_environments
+        .iter()
+        .find(|item| item.id == environment.environment_id.as_str())
+        .expect("machine environment in project list");
+    assert_eq!(machine_environment.name, environment.name);
+    assert_eq!(machine_environment.host_name, "Integration daemon");
+    assert_eq!(machine_environment.machine_id.as_ref(), Some(&machine_id));
+    assert_eq!(machine_environment.path, environment.path);
+    assert_eq!(
+        machine_environment.environment_type,
+        ProjectEnvironmentType::Env
+    );
+    assert_eq!(machine_environment.snapshot_id, None);
+    let template_environment = project_environments
+        .iter()
+        .find(|item| item.id == project_template.id.to_string())
+        .expect("template in project list");
+    assert_eq!(template_environment.name, project_template.name);
+    assert_eq!(template_environment.host_name, "Daytona main");
+    assert_eq!(template_environment.path, "project");
+    assert_eq!(
+        template_environment.environment_type,
+        ProjectEnvironmentType::Template
+    );
+    assert_eq!(
+        template_environment.snapshot_id,
+        Some(project_template.snapshot_id)
+    );
+    assert_eq!(template_environment.setup_script.as_deref(), Some(""));
+
+    let updated_machine_environment: ProjectEnvironment = client
+        .patch(format!(
+            "{base}/v1/environments/{}",
+            environment.environment_id.as_str()
+        ))
+        .bearer_auth("test-api")
+        .json(&UpdateEnvironmentRequest {
+            project_id,
+            machine_id: Some(machine_id.clone()),
+            workspace_root_id: Some(workspace_root_id.clone()),
+            name: Some("API-updated project".to_owned()),
+            path: Some("updated/project".to_owned()),
+        })
+        .send()
+        .await
+        .expect("update operational machine environment")
+        .json()
+        .await
+        .expect("updated machine environment response");
+    assert_eq!(updated_machine_environment.name, "API-updated project");
+    assert_eq!(updated_machine_environment.path, "updated/project");
+    assert_eq!(
+        updated_machine_environment.machine_id,
+        Some(machine_id.clone())
+    );
+
+    let updated_template_environment: ProjectEnvironment = client
+        .patch(format!(
+            "{base}/v1/sandbox-environment-templates/{}",
+            project_template.id
+        ))
+        .bearer_auth("test-api")
+        .json(&UpdateSandboxTemplateEnvironmentRequest {
+            project_id,
+            path: Some("apps/api".to_owned()),
+            creation_script: Some("pnpm install --frozen-lockfile".to_owned()),
+            ..Default::default()
+        })
+        .send()
+        .await
+        .expect("update operational sandbox template")
+        .json()
+        .await
+        .expect("updated sandbox template response");
+    assert_eq!(updated_template_environment.path, "apps/api");
+    assert_eq!(
+        updated_template_environment.setup_script.as_deref(),
+        Some("pnpm install --frozen-lockfile")
+    );
+    let stored_template: execution_gateway::sandbox_templates::SandboxEnvironmentTemplate = client
+        .get(format!(
+            "{base}/v1/control/sandbox-environment-templates/{}",
+            project_template.id
+        ))
+        .bearer_auth("test-control")
+        .send()
+        .await
+        .expect("fetch updated sandbox template")
+        .json()
+        .await
+        .expect("stored sandbox template response");
+    assert_eq!(
+        stored_template.cwd,
+        format!(
+            "{}/apps/api",
+            sandbox_templates::provider_workspace_root(template_snapshot.provider)
+        )
+    );
+
+    let other_project_environments: Vec<ProjectEnvironment> = client
+        .get(format!(
+            "{base}/v1/control/projects/{}/environments",
+            uuid::Uuid::now_v7()
+        ))
+        .bearer_auth("test-control")
+        .send()
+        .await
+        .expect("list unrelated project environments")
+        .json()
+        .await
+        .expect("unrelated project environments");
+    assert!(other_project_environments.is_empty());
 
     let renamed: Environment = client
         .patch(format!(
@@ -466,6 +671,7 @@ async fn controls_sandbox_accounts_and_routes_a_real_daemon_operation() {
         .post(format!("{base}/v1/control/environments"))
         .bearer_auth("test-control")
         .json(&CreateEnvironmentRequest {
+            project_id,
             machine_id: machine_id.clone(),
             name: "Replacement".to_owned(),
             workspace_root_id: workspace_root_id.clone(),

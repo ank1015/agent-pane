@@ -1,4 +1,5 @@
 use execution_gateway::{
+    sandbox_accounts::SandboxProvider,
     sandbox_templates::{SandboxEnvironmentInstance, SandboxEnvironmentTemplate},
     snapshots::Snapshot,
 };
@@ -8,7 +9,10 @@ pub async fn assert_template_control_api(
     client: &reqwest::Client,
     base: &str,
     snapshot: &Snapshot,
+    project_id: uuid::Uuid,
 ) {
+    let workspace_root = provider_workspace_root(snapshot.provider);
+    let project_cwd = format!("{workspace_root}/project");
     let unauthorized = client
         .get(format!("{base}/v1/control/sandbox-environment-templates"))
         .bearer_auth("test-api")
@@ -21,9 +25,10 @@ pub async fn assert_template_control_api(
         .post(format!("{base}/v1/control/sandbox-environment-templates"))
         .bearer_auth("test-control")
         .json(&serde_json::json!({
+            "project_id": project_id,
             "name": "TypeScript project",
             "snapshot_id": snapshot.id,
-            "cwd": "/workspace/./project/",
+            "cwd": format!("{workspace_root}/./project/"),
             "creation_script": "npm install"
         }))
         .send()
@@ -32,17 +37,19 @@ pub async fn assert_template_control_api(
     assert_eq!(create.status(), StatusCode::CREATED);
     let template: SandboxEnvironmentTemplate = create.json().await.expect("template response");
     assert_eq!(template.snapshot_id, snapshot.id);
+    assert_eq!(template.project_id, project_id);
     assert_eq!(template.sandbox_account_id, snapshot.sandbox_account_id);
     assert_eq!(template.provider, snapshot.provider);
-    assert_eq!(template.cwd, "/workspace/project");
+    assert_eq!(template.cwd, project_cwd);
 
     let duplicate = client
         .post(format!("{base}/v1/control/sandbox-environment-templates"))
         .bearer_auth("test-control")
         .json(&serde_json::json!({
+            "project_id": project_id,
             "name": "typescript PROJECT",
             "snapshot_id": snapshot.id,
-            "cwd": "/workspace"
+            "cwd": workspace_root
         }))
         .send()
         .await
@@ -68,7 +75,9 @@ pub async fn assert_template_control_api(
     assert!(updated.creation_script.is_empty());
 
     let listed: Vec<SandboxEnvironmentTemplate> = client
-        .get(format!("{base}/v1/control/sandbox-environment-templates"))
+        .get(format!(
+            "{base}/v1/control/sandbox-environment-templates?project_id={project_id}"
+        ))
         .bearer_auth("test-control")
         .send()
         .await
@@ -121,4 +130,13 @@ pub async fn assert_template_control_api(
         .await
         .expect("get deleted template");
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+pub fn provider_workspace_root(provider: SandboxProvider) -> &'static str {
+    match provider {
+        SandboxProvider::E2b => "/home/user",
+        SandboxProvider::Daytona => "/home/daytona",
+        SandboxProvider::Blaxel => "/blaxel",
+        SandboxProvider::Tensorlake => "/home/tl-user",
+    }
 }
