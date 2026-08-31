@@ -5,7 +5,10 @@ use reqwest::header;
 use serde::de::DeserializeOwned;
 use url::Url;
 
-use crate::{error::agent_rejected_body, harnesses::model::AgentHarnessPage};
+use crate::{
+    error::agent_rejected_body,
+    harnesses::model::{AgentHarness, AgentHarnessPage},
+};
 
 const HARNESS_PAGE_SIZE: u32 = 100;
 
@@ -58,8 +61,27 @@ impl AgentClient {
         self.send_json(request).await
     }
 
+    pub(crate) async fn get_harness(&self, harness_id: &str) -> Result<AgentHarness, AgentError> {
+        self.send_json(
+            self.http
+                .get(self.url_segments(&["v1", "harnesses", harness_id])?),
+        )
+        .await
+    }
+
     fn url(&self, path: &str) -> Result<Url, AgentError> {
         self.base_url.join(path).map_err(AgentError::InvalidUrl)
+    }
+
+    fn url_segments(&self, segments: &[&str]) -> Result<Url, AgentError> {
+        let mut url = self.base_url.clone();
+        let mut path = url
+            .path_segments_mut()
+            .map_err(|()| AgentError::InvalidBaseUrl)?;
+        path.pop_if_empty();
+        path.extend(segments.iter().copied());
+        drop(path);
+        Ok(url)
     }
 
     async fn send_json<T: DeserializeOwned>(
@@ -110,6 +132,8 @@ pub enum AgentClientError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
+    #[error("Agent base URL cannot be used for path segments")]
+    InvalidBaseUrl,
     #[error("could not construct an Agent URL")]
     InvalidUrl(#[source] url::ParseError),
     #[error("Agent request failed")]
