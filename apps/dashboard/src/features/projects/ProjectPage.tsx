@@ -8,14 +8,22 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Link, Navigate, NavLink, useLocation } from 'react-router-dom'
 import {
+  type HarnessProviderModelOptions,
+  useHarnessModelOptions,
+} from '../harnesses/harness-queries'
+import {
   type ProjectEnvironment,
   useProject,
   useProjectEnvironments,
 } from './project-queries'
+import { ProjectEnvironmentPromptComposer } from './ProjectEnvironmentPromptComposer'
 
 const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   dateStyle: 'medium',
 })
+const ENVIRONMENT_HARNESS_ID = 'environment'
+const EMPTY_REASONING_LEVELS: readonly string[] = []
+const EMPTY_PROVIDER_MODEL_OPTIONS: readonly HarnessProviderModelOptions[] = []
 
 const PROJECT_NAVIGATION = [
   { suffix: '/environments', label: 'Environments', icon: Folder03Icon },
@@ -275,6 +283,8 @@ function CreateProjectEnvironmentPage({
 }: {
   environmentsPath: string
 }) {
+  const modelOptions = useHarnessModelOptions(ENVIRONMENT_HARNESS_ID)
+
   return (
     <div className="project-environment-create-page">
       <nav className="project-breadcrumbs" aria-label="Breadcrumb">
@@ -299,6 +309,19 @@ function CreateProjectEnvironmentPage({
           </li>
         </ol>
       </nav>
+      <div className="project-environment-composer-stage">
+        <ProjectEnvironmentPromptComposer
+          providerAccounts={
+            modelOptions.data?.providers ?? EMPTY_PROVIDER_MODEL_OPTIONS
+          }
+          reasoningLevels={
+            modelOptions.data?.reasoning_levels ?? EMPTY_REASONING_LEVELS
+          }
+          isModelOptionsPending={modelOptions.isPending}
+          isModelOptionsError={modelOptions.isError}
+          onRetryModelOptions={() => void modelOptions.refetch()}
+        />
+      </div>
     </div>
   )
 }
