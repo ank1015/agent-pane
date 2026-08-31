@@ -4,13 +4,19 @@ use std::{
 };
 
 use agent_contracts::{
-    NewRunMessage, RunCancelled, SessionMessage, SessionMessagesAppended, TurnRequested,
+    HARNESS_PROTOCOL_VERSION, HarnessRunEvent, HarnessRunEventData, NewRunMessage, RunCancelled,
+    SessionMessage, SessionMessagesAppended, TurnRequested,
 };
+use chrono::Utc;
 use execution_runtime::OperationContext;
+use llm_contracts::JsonObject;
 use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
 
-use crate::{AgentClient, AgentClientError};
+use crate::{
+    AgentClient, AgentClientError,
+    event_bus::{EventBus, EventPublishError},
+};
 
 /// A fenced, process-local view of one delivered run turn.
 pub struct ActiveTurn {
@@ -18,6 +24,7 @@ pub struct ActiveTurn {
     request: TurnRequested,
     session_revision: AsyncMutex<u64>,
     operation: OperationContext,
+    event_bus: Option<EventBus>,
 }
 
 impl ActiveTurn {
@@ -27,6 +34,22 @@ impl ActiveTurn {
             agent,
             request,
             operation,
+            event_bus: None,
+        }
+    }
+
+    pub(crate) fn with_event_bus(
+        agent: AgentClient,
+        request: TurnRequested,
+        operation: OperationContext,
+        event_bus: EventBus,
+    ) -> Self {
+        Self {
+            session_revision: AsyncMutex::new(request.current_session_revision),
+            agent,
+            request,
+            operation,
+            event_bus: Some(event_bus),
         }
     }
 
@@ -94,12 +117,42 @@ impl ActiveTurn {
         *revision = appended.current_session_revision;
         Ok(appended)
     }
+
+    /// Publishes a durable, non-authoritative progress observation for this turn.
+    pub async fn emit_progress(
+        &self,
+        name: impl Into<String>,
+        data: JsonObject,
+    ) -> Result<Uuid, ActiveTurnError> {
+        let event_id = Uuid::now_v7();
+        let event = HarnessRunEvent {
+            protocol_version: HARNESS_PROTOCOL_VERSION,
+            event_id,
+            emitted_at: Utc::now(),
+            run_id: self.request.run_id,
+            harness_slug: self.request.harness_slug.clone(),
+            turn_number: self.request.turn_number,
+            expected_state_version: self.request.expected_state_version,
+            event: HarnessRunEventData::Progress {
+                name: name.into(),
+                data,
+            },
+        };
+        self.event_bus
+            .as_ref()
+            .ok_or(EventPublishError::Unavailable)?
+            .publish(&event)
+            .await?;
+        Ok(event_id)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ActiveTurnError {
     #[error(transparent)]
     Agent(#[from] AgentClientError),
+    #[error(transparent)]
+    Event(#[from] EventPublishError),
 }
 
 impl ActiveTurnError {
@@ -107,6 +160,7 @@ impl ActiveTurnError {
     pub fn code(&self) -> Option<&str> {
         match self {
             Self::Agent(error) => error.code(),
+            Self::Event(_) => None,
         }
     }
 
