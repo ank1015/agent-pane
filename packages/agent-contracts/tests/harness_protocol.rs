@@ -1,5 +1,5 @@
 use agent_contracts::{
-    NewRunMessage,
+    HarnessRunEvent, HarnessRunEventData, NewRunMessage,
     harness_protocol::{
         AppendSessionMessages, HARNESS_PROTOCOL_VERSION, HarnessCommand, HarnessOperation,
         TurnRequested, WaitRequest,
@@ -151,6 +151,38 @@ fn post_cancellation_append_rejects_non_tool_messages() {
         .validate()
         .expect_err("post-cancellation append must be tool-result-only");
     assert_eq!(error.issues[0].path, "messages[0].message");
+}
+
+#[test]
+fn harness_run_events_are_fenced_and_progress_names_are_bounded() {
+    let event = HarnessRunEvent {
+        protocol_version: HARNESS_PROTOCOL_VERSION,
+        event_id: Uuid::now_v7(),
+        emitted_at: Utc::now(),
+        run_id: Uuid::now_v7(),
+        harness_slug: "pi".to_owned(),
+        turn_number: 2,
+        expected_state_version: 4,
+        event: HarnessRunEventData::Progress {
+            name: "model.call.started".to_owned(),
+            data: object(json!({"model": "gpt-5"})),
+        },
+    };
+
+    event.validate().expect("valid progress event");
+    let value = serde_json::to_value(&event).expect("serialize progress event");
+    assert_eq!(value["type"], "progress");
+    assert_eq!(value["details"]["name"], "model.call.started");
+
+    let mut invalid = event;
+    invalid.event = HarnessRunEventData::Progress {
+        name: " model.call.started ".to_owned(),
+        data: object(json!({})),
+    };
+    assert_eq!(
+        invalid.validate().expect_err("untrimmed name").issues[0].path,
+        "details.name"
+    );
 }
 
 fn object(value: serde_json::Value) -> llm_contracts::JsonObject {

@@ -3,7 +3,8 @@
 Shared wire contracts for Agent and harness servers.
 
 `harness_protocol` defines the NATS JetStream subjects and payloads for
-`TurnRequested`, `HarnessCommand`, `HarnessCommandResult`, and `RunCancelled`.
+`TurnRequested`, `HarnessCommand`, `HarnessCommandResult`, `RunCancelled`,
+`HarnessRunEvent`, and the canonical replayable `RunEvent`.
 Harness commands have exactly four operations: `complete`, `continue`, `fail`,
 and `wait`.
 
