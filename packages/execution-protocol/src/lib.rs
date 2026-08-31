@@ -2,6 +2,7 @@
 
 use execution_contracts::*;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 pub const PROTOCOL_NAME: &str = "agent-pane.machine.v1";
 
@@ -164,10 +165,66 @@ pub struct MachineSummary {
     pub last_seen_at: Option<TimestampMs>,
 }
 
+/// Minimal sandbox-account metadata exposed to execution API clients.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SandboxAccountSummary {
+    pub account_id: String,
+    pub account_name: String,
+    pub provider_name: String,
+}
+
+/// Creates a provider sandbox, optionally from a saved snapshot.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSandboxMachineRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<Uuid>,
+}
+
+/// A sandbox machine created by the execution gateway.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SandboxMachineCreated {
+    pub machine: MachineSummary,
+}
+
+/// A snapshot created from a sandbox machine.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SandboxSnapshotCreated {
+    pub snapshot_id: Uuid,
+}
+
+/// Creates a reusable sandbox environment template for a project.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateSandboxTemplateEnvironmentRequest {
+    pub project_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub name: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub creation_script: String,
+}
+
+/// Updates a reusable sandbox environment template for a project.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateSandboxTemplateEnvironmentRequest {
+    pub project_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creation_script: Option<String>,
+}
+
 /// A saved working location on a registered machine.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Environment {
     pub environment_id: EnvironmentId,
+    pub project_id: Uuid,
     pub machine_id: MachineId,
     pub name: String,
     pub workspace_root_id: WorkspaceRootId,
@@ -178,10 +235,51 @@ pub struct Environment {
 /// Creates an immutable saved working location.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CreateEnvironmentRequest {
+    pub project_id: Uuid,
     pub machine_id: MachineId,
     pub name: String,
     pub workspace_root_id: WorkspaceRootId,
     pub path: String,
+}
+
+/// Updates a saved working location while preserving its project ownership.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateEnvironmentRequest {
+    pub project_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<MachineId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root_id: Option<WorkspaceRootId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// A configured machine environment or sandbox template owned by a project.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProjectEnvironment {
+    pub id: String,
+    pub name: String,
+    pub host_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<MachineId>,
+    pub path: String,
+    #[serde(rename = "type")]
+    pub environment_type: ProjectEnvironmentType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_script: Option<String>,
+    pub created_at: TimestampMs,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectEnvironmentType {
+    Env,
+    Template,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -215,6 +313,7 @@ pub struct OperationEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn operation_envelope_has_a_stable_tagged_shape() {
         let message = ClientMessage::Request {
@@ -224,5 +323,47 @@ mod tests {
         let value = serde_json::to_value(message).expect("serialize request");
         assert_eq!(value["type"], "request");
         assert_eq!(value["operation"]["operation"], "describe");
+    }
+
+    #[test]
+    fn project_machine_environment_omits_snapshot_id() {
+        let environment = ProjectEnvironment {
+            id: "environment-1".to_owned(),
+            name: "Local project".to_owned(),
+            host_name: "Workstation".to_owned(),
+            machine_id: Some(MachineId::new("machine-1").unwrap()),
+            path: "projects/example".to_owned(),
+            environment_type: ProjectEnvironmentType::Env,
+            snapshot_id: None,
+            setup_script: None,
+            created_at: TimestampMs(1),
+        };
+
+        let value = serde_json::to_value(environment).expect("serialize project environment");
+        assert_eq!(value["type"], "env");
+        assert_eq!(value["host_name"], "Workstation");
+        assert!(value.get("snapshot_id").is_none());
+    }
+
+    #[test]
+    fn base_sandbox_creation_omits_snapshot_id() {
+        let value = serde_json::to_value(CreateSandboxMachineRequest::default())
+            .expect("serialize sandbox creation request");
+
+        assert_eq!(value, serde_json::json!({}));
+    }
+
+    #[test]
+    fn sandbox_template_creation_omits_an_empty_setup_script() {
+        let value = serde_json::to_value(CreateSandboxTemplateEnvironmentRequest {
+            project_id: Uuid::nil(),
+            snapshot_id: Uuid::nil(),
+            name: "Development".to_owned(),
+            path: "project".to_owned(),
+            creation_script: String::new(),
+        })
+        .expect("serialize sandbox template creation request");
+
+        assert!(value.get("creation_script").is_none());
     }
 }
