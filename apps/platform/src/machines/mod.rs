@@ -4,7 +4,7 @@ pub mod model;
 use uuid::Uuid;
 
 use crate::upstream::execution_gateway::{ExecutionGatewayClient, ExecutionGatewayError};
-use execution_protocol::{Environment, MachineSummary};
+use execution_protocol::{Environment, MachineSummary, ProjectEnvironment};
 use model::{
     CreateMachineEnvironmentRequest, CreateSandboxAccountRequest,
     CreateSandboxEnvironmentTemplateRequest, CreateSandboxRequest, CreateSandboxSnapshotRequest,
@@ -41,6 +41,13 @@ impl MachineService {
         request: &CreateMachineEnvironmentRequest,
     ) -> Result<Environment, ExecutionGatewayError> {
         self.gateway.create_environment(machine_id, request).await
+    }
+
+    async fn list_project_environments(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<ProjectEnvironment>, ExecutionGatewayError> {
+        self.gateway.list_project_environments(project_id).await
     }
 
     async fn list_sandbox_accounts(&self) -> Result<Vec<SandboxAccount>, ExecutionGatewayError> {

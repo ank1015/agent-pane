@@ -110,6 +110,8 @@ pub struct CreateSandboxSnapshotRequest {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateMachineEnvironmentRequest {
+    #[serde(default = "legacy_project_id")]
+    pub project_id: Uuid,
     pub name: String,
     pub workspace_root_id: String,
     pub path: String,
@@ -151,6 +153,7 @@ pub struct SnapshotQuery {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SandboxEnvironmentTemplate {
     pub id: Uuid,
+    pub project_id: Uuid,
     pub name: String,
     pub snapshot_id: Uuid,
     pub sandbox_account_id: Uuid,
@@ -164,6 +167,8 @@ pub struct SandboxEnvironmentTemplate {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSandboxEnvironmentTemplateRequest {
+    #[serde(default = "legacy_project_id")]
+    pub project_id: Uuid,
     pub name: String,
     pub snapshot_id: Uuid,
     pub cwd: String,
@@ -221,6 +226,10 @@ const fn is_true(value: &bool) -> bool {
 
 const fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn legacy_project_id() -> Uuid {
+    Uuid::from_u128(1)
 }
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ use crate::machines::model::{
 };
 
 const E2B_ACCOUNT_ID: &str = "01992aa0-0000-7000-8000-000000000010";
+const PROJECT_ID: &str = "01992aa0-0000-7000-8000-000000000011";
 
 #[tokio::test]
 async fn create_sandbox_account_authenticates_and_forwards_the_secret_once() {
@@ -143,6 +144,7 @@ async fn environment_create_forwards_the_machine_and_location() {
         .create_environment(
             "machine-1",
             &CreateMachineEnvironmentRequest {
+                project_id: PROJECT_ID.parse().unwrap(),
                 name: "Development".to_owned(),
                 workspace_root_id: "root".to_owned(),
                 path: "projects/example".to_owned(),
@@ -156,6 +158,7 @@ async fn environment_create_forwards_the_machine_and_location() {
     assert_eq!(
         body,
         json!({
+            "project_id": PROJECT_ID,
             "machine_id": "machine-1",
             "name": "Development",
             "workspace_root_id": "root",
@@ -163,6 +166,41 @@ async fn environment_create_forwards_the_machine_and_location() {
         })
     );
     assert_eq!(environment.name, "Development");
+}
+
+#[tokio::test]
+async fn project_environment_list_uses_the_project_endpoint_and_authenticates() {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let mock_gateway = Router::new()
+        .route(
+            &format!("/v1/control/projects/{PROJECT_ID}/environments"),
+            axum::routing::get(capture_project_environment_list_request),
+        )
+        .with_state(request_tx);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, mock_gateway).await.unwrap();
+    });
+
+    let client = ExecutionGatewayClient::new(
+        format!("http://{address}").parse().unwrap(),
+        "platform-control-token",
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let environments = client
+        .list_project_environments(PROJECT_ID.parse().unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        request_rx.recv().await.unwrap(),
+        "Bearer platform-control-token"
+    );
+    assert_eq!(environments.len(), 2);
+    assert_eq!(environments[0].host_name, "Workstation");
+    assert_eq!(environments[1].host_name, "E2B main");
 }
 
 #[tokio::test]
@@ -449,6 +487,7 @@ async fn capture_environment_list_request(
     request_tx.send((authorization, query)).unwrap();
     Json(json!([{
         "environment_id": "01992aa0-0000-7000-8000-000000000002",
+        "project_id": PROJECT_ID,
         "machine_id": "machine-1",
         "name": "Example",
         "workspace_root_id": "root",
@@ -472,6 +511,7 @@ async fn capture_environment_create_request(
         StatusCode::CREATED,
         Json(json!({
             "environment_id": "01992aa0-0000-7000-8000-000000000002",
+            "project_id": PROJECT_ID,
             "machine_id": "machine-1",
             "name": "Development",
             "workspace_root_id": "root",
@@ -479,6 +519,37 @@ async fn capture_environment_create_request(
             "created_at": 1787443200000_u64
         })),
     )
+}
+
+async fn capture_project_environment_list_request(
+    State(request_tx): State<mpsc::UnboundedSender<String>>,
+    headers: HeaderMap,
+) -> Json<Value> {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    request_tx.send(authorization).unwrap();
+    Json(json!([
+        {
+            "id": "environment-1",
+            "name": "Local project",
+            "host_name": "Workstation",
+            "path": "projects/example",
+            "type": "env",
+            "created_at": 1787443200000_u64
+        },
+        {
+            "id": "01992aa0-0000-7000-8000-000000000012",
+            "name": "Sandbox project",
+            "host_name": "E2B main",
+            "path": "/workspace/project",
+            "type": "template",
+            "snapshot_id": "01992aa0-0000-7000-8000-000000000013",
+            "created_at": 1787443200001_u64
+        }
+    ]))
 }
 
 async fn capture_environment_name_update_request(
@@ -494,6 +565,7 @@ async fn capture_environment_name_update_request(
     request_tx.send((authorization, body)).unwrap();
     Json(json!({
         "environment_id": "environment-1",
+        "project_id": PROJECT_ID,
         "machine_id": "machine-1",
         "name": "Renamed",
         "workspace_root_id": "root",

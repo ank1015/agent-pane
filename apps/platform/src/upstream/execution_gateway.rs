@@ -17,7 +17,7 @@ use crate::{
         SnapshotQuery, UpdateNameRequest, UpdateSandboxEnvironmentTemplateRequest,
     },
 };
-use execution_protocol::{Environment, MachineSummary};
+use execution_protocol::{Environment, MachineSummary, ProjectEnvironment};
 
 #[derive(Clone)]
 pub struct ExecutionGatewayClient {
@@ -87,12 +87,24 @@ impl ExecutionGatewayClient {
     ) -> Result<Environment, ExecutionGatewayError> {
         self.send_json(self.http.post(self.url("v1/control/environments")?).json(
             &serde_json::json!({
+                "project_id": request.project_id,
                 "machine_id": machine_id,
                 "name": request.name.as_str(),
                 "workspace_root_id": request.workspace_root_id.as_str(),
                 "path": request.path.as_str(),
             }),
         ))
+        .await
+    }
+
+    pub(crate) async fn list_project_environments(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<ProjectEnvironment>, ExecutionGatewayError> {
+        self.send_json(
+            self.http
+                .get(self.url(&format!("v1/control/projects/{project_id}/environments"))?),
+        )
         .await
     }
 
