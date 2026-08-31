@@ -7,7 +7,15 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Link, Navigate, NavLink, useLocation } from 'react-router-dom'
-import { useProject } from './project-queries'
+import {
+  type ProjectEnvironment,
+  useProject,
+  useProjectEnvironments,
+} from './project-queries'
+
+const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  dateStyle: 'medium',
+})
 
 const PROJECT_NAVIGATION = [
   { suffix: '/environments', label: 'Environments', icon: Folder03Icon },
@@ -98,6 +106,7 @@ export function ProjectPage({ projectId }: { projectId: string }) {
 
 function ProjectEnvironments({ projectId }: { projectId: string }) {
   const { data: project, isPending: isProjectPending } = useProject(projectId)
+  const environments = useProjectEnvironments(projectId)
   const projectName =
     project?.name ?? (isProjectPending ? 'Loading…' : projectId)
   const createEnvironmentPath = `/projects/${encodeURIComponent(projectId)}/environments/create`
@@ -128,6 +137,7 @@ function ProjectEnvironments({ projectId }: { projectId: string }) {
           <table className="providers-table project-environments-table">
             <colgroup>
               <col className="project-environment-name-column" />
+              <col className="project-environment-host-column" />
               <col className="project-environment-path-column" />
               <col className="project-environment-type-column" />
               <col className="project-environment-snapshot-column" />
@@ -136,24 +146,128 @@ function ProjectEnvironments({ projectId }: { projectId: string }) {
             <thead>
               <tr>
                 <th scope="col">Name</th>
+                <th scope="col">Host name</th>
                 <th scope="col">Path</th>
                 <th scope="col">Type</th>
                 <th scope="col">Snapshot ID</th>
                 <th scope="col">Created at</th>
               </tr>
             </thead>
-            <tbody aria-live="polite">
-              <tr>
-                <td className="providers-table-message" colSpan={5}>
-                  No environments present
-                </td>
-              </tr>
+            <tbody aria-live="polite" aria-busy={environments.isPending}>
+              <ProjectEnvironmentRows query={environments} />
             </tbody>
           </table>
         </div>
       </section>
     </div>
   )
+}
+
+function ProjectEnvironmentRows({
+  query,
+}: {
+  query: ReturnType<typeof useProjectEnvironments>
+}) {
+  if (query.isPending) {
+    return <ProjectEnvironmentTableMessage message="Loading environments..." />
+  }
+  if (query.isError) {
+    return (
+      <tr>
+        <td
+          className="providers-table-message"
+          colSpan={6}
+          title={query.error.message}
+        >
+          <span>Couldn&apos;t load environments</span>
+          <button
+            type="button"
+            className="providers-retry-button"
+            onClick={() => void query.refetch()}
+          >
+            Retry
+          </button>
+        </td>
+      </tr>
+    )
+  }
+  if (query.data.length === 0) {
+    return <ProjectEnvironmentTableMessage message="No environments present" />
+  }
+
+  return query.data.map((environment) => (
+    <ProjectEnvironmentRow key={environment.id} environment={environment} />
+  ))
+}
+
+function ProjectEnvironmentRow({
+  environment,
+}: {
+  environment: ProjectEnvironment
+}) {
+  return (
+    <tr>
+      <td>
+        <span className="provider-name" title={environment.name}>
+          {environment.name}
+        </span>
+      </td>
+      <td>
+        <span className="provider-detail" title={environment.host_name}>
+          {environment.host_name}
+        </span>
+      </td>
+      <td>
+        <span className="provider-detail" title={environment.path}>
+          {environment.path}
+        </span>
+      </td>
+      <td>
+        <span className="provider-detail">
+          {formatEnvironmentType(environment.type)}
+        </span>
+      </td>
+      <td>
+        <span className="provider-detail" title={environment.snapshot_id}>
+          {environment.snapshot_id ?? '—'}
+        </span>
+      </td>
+      <td>
+        <time
+          className="provider-detail"
+          dateTime={formatDateTime(environment.created_at)}
+        >
+          {formatDate(environment.created_at)}
+        </time>
+      </td>
+    </tr>
+  )
+}
+
+function ProjectEnvironmentTableMessage({ message }: { message: string }) {
+  return (
+    <tr>
+      <td className="providers-table-message" colSpan={6}>
+        {message}
+      </td>
+    </tr>
+  )
+}
+
+function formatEnvironmentType(type: ProjectEnvironment['type']) {
+  return type === 'env' ? 'Environment' : 'Template'
+}
+
+function formatDate(value: number) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? String(value)
+    : DATE_FORMATTER.format(date)
+}
+
+function formatDateTime(value: number) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
 }
 
 function CreateProjectEnvironmentPage({

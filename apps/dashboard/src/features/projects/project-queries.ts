@@ -7,6 +7,18 @@ export type Project = {
   avatar: string | null
 }
 
+export type ProjectEnvironment = {
+  id: string
+  name: string
+  host_name: string
+  machine_id?: string
+  path: string
+  type: 'env' | 'template'
+  snapshot_id?: string
+  setup_script?: string
+  created_at: number
+}
+
 export type CreateProjectInput = {
   name: string
   avatar: string | null
@@ -17,6 +29,8 @@ export const projectKeys = {
   list: () => [...projectKeys.all, 'list'] as const,
   detail: (projectId: string) =>
     [...projectKeys.all, 'detail', projectId] as const,
+  environments: (projectId: string) =>
+    [...projectKeys.all, 'detail', projectId, 'environments'] as const,
 }
 
 export function useProjects() {
@@ -41,6 +55,18 @@ export function useProject(projectId: string) {
       queryClient
         .getQueryData<Project[]>(projectKeys.list())
         ?.find((project) => project.id === projectId),
+  })
+}
+
+export function useProjectEnvironments(projectId: string) {
+  return useQuery({
+    queryKey: projectKeys.environments(projectId),
+    queryFn: ({ signal }) =>
+      getJson<ProjectEnvironment[]>(
+        `/api/projects/${encodeURIComponent(projectId)}/environments`,
+        signal,
+      ),
+    enabled: projectId.length > 0,
   })
 }
 

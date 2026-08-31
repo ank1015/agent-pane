@@ -249,11 +249,15 @@
 }
 
 .project-environments-table {
-  min-width: 900px;
+  min-width: 1050px;
 }
 
 .project-environment-name-column {
-  width: 22%;
+  width: 18%;
+}
+
+.project-environment-host-column {
+  width: 18%;
 }
 
 .project-environment-path-column {
@@ -261,11 +265,11 @@
 }
 
 .project-environment-type-column {
-  width: 16%;
+  width: 110px;
 }
 
 .project-environment-snapshot-column {
-  width: 25%;
+  width: 230px;
 }
 
 .project-environment-created-column {
