@@ -1,0 +1,47 @@
+[package]
+name = "environment-harness"
+description = "NATS-native project execution environment harness server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+agent-contracts.workspace = true
+agent-harness-sdk.workspace = true
+async-nats.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+dotenvy.workspace = true
+execution-contracts.workspace = true
+execution-gateway-client.workspace = true
+execution-protocol.workspace = true
+execution-runtime.workspace = true
+futures-util.workspace = true
+llm-contracts.workspace = true
+tool-pi-bash.workspace = true
+tool-pi-edit.workspace = true
+tool-pi-read.workspace = true
+tool-pi-write.workspace = true
+provider-chatgpt.workspace = true
+provider-deepseek.workspace = true
+provider-fireworks.workspace = true
+provider-openai.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+execution-local.workspace = true
+tempfile = "3.0"
+
+[lints]
+workspace = true

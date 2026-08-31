@@ -983,6 +983,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "environment-harness"
+version = "0.1.0"
+dependencies = [
+ "agent-contracts",
+ "agent-harness-sdk",
+ "async-nats",
+ "async-trait",
+ "axum",
+ "chrono",
+ "dotenvy",
+ "execution-contracts",
+ "execution-gateway-client",
+ "execution-local",
+ "execution-protocol",
+ "execution-runtime",
+ "futures-util",
+ "llm-contracts",
+ "provider-chatgpt",
+ "provider-deepseek",
+ "provider-fireworks",
+ "provider-openai",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tool-pi-bash",
+ "tool-pi-edit",
+ "tool-pi-read",
+ "tool-pi-write",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1115,6 +1154,7 @@ dependencies = [
  "execution-contracts",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
