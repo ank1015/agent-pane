@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use agent_contracts::{WaitResolutionSource, WaitResume, WaitStatus};
+use agent_contracts::{RunEventData, WaitResolutionSource, WaitResume, WaitStatus};
 use chrono::Utc;
 use llm_contracts::Validate as _;
 use sqlx::types::Json;
@@ -10,7 +10,9 @@ use uuid::Uuid;
 
 use super::{
     ExecutionError, ResolveRunWait, RunRow, RunStatus, RunWait, RunWaitPage, RunWaitResolved,
-    WaitListQuery, WaitRow, records::RUN_COLUMNS, runs,
+    WaitListQuery, WaitRow, events,
+    records::{RUN_COLUMNS, positive_u32, positive_u64},
+    runs,
 };
 use crate::db::Database;
 
@@ -94,6 +96,17 @@ async fn resolve_inner(
         resolved_at,
     };
     let next = runs::load_context(&mut tx, run_id, false).await?;
+    events::append_agent(
+        &mut tx,
+        run_id,
+        Some(positive_u32("runs.current_turn", next.current_turn)?),
+        positive_u64("runs.state_version", next.state_version)?,
+        RunStatus::Active,
+        Uuid::now_v7(),
+        resolved_at,
+        RunEventData::RunResumed { wait_id, source },
+    )
+    .await?;
     runs::enqueue_turn(&mut tx, &next, Some(resume)).await?;
     let wait_row = sqlx::query_as::<_, WaitRow>(&format!(
         "select {WAIT_COLUMNS} from run_waits where wait_id = $1"

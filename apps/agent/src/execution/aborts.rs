@@ -1,4 +1,6 @@
-use agent_contracts::{HARNESS_PROTOCOL_VERSION, RunCancelled, cancelled_subject};
+use agent_contracts::{
+    HARNESS_PROTOCOL_VERSION, RunCancelled, RunEventData, TurnEndReason, cancelled_subject,
+};
 use chrono::Utc;
 use llm_contracts::Validate as _;
 use sqlx::types::Json;
@@ -6,7 +8,9 @@ use uuid::Uuid;
 
 use super::{
     AbortListQuery, AbortRow, ExecutionError, RequestRunAbort, RunAbort, RunAbortPage,
-    RunAbortResult, RunRow, RunStatus, constraint, outbox, records::RUN_COLUMNS, runs,
+    RunAbortResult, RunRow, RunStatus, constraint, events, outbox,
+    records::{RUN_COLUMNS, positive_u32, positive_u64},
+    runs,
 };
 use crate::db::Database;
 
@@ -67,11 +71,41 @@ pub(super) async fn request(
     sqlx::query("update session_messages set state = 'discarded', discard_reason = 'run_aborted', discarded_at = now() where run_id = $1 and delivery = 'next_turn' and state = 'pending'").bind(run_id).execute(&mut *tx).await?;
     sqlx::query("update runs set status = 'aborted', state_version = state_version + 1, finished_at = now() where run_id = $1").bind(run_id).execute(&mut *tx).await?;
     let updated = runs::load_context(&mut tx, run_id, false).await?;
+    let emitted_at = Utc::now();
+    let updated_turn = positive_u32("runs.current_turn", updated.current_turn)?;
+    let updated_state = positive_u64("runs.state_version", updated.state_version)?;
+    events::append_agent(
+        &mut tx,
+        run_id,
+        Some(updated_turn),
+        updated_state,
+        RunStatus::Aborted,
+        Uuid::now_v7(),
+        emitted_at,
+        RunEventData::TurnEnded {
+            reason: TurnEndReason::Aborted,
+        },
+    )
+    .await?;
+    events::append_agent(
+        &mut tx,
+        run_id,
+        Some(updated_turn),
+        updated_state,
+        RunStatus::Aborted,
+        Uuid::now_v7(),
+        emitted_at,
+        RunEventData::RunAborted {
+            abort_id: request.abort_id,
+            reason: request.reason.clone(),
+        },
+    )
+    .await?;
     let event_id = Uuid::now_v7();
     let event = RunCancelled {
         protocol_version: HARNESS_PROTOCOL_VERSION,
         event_id,
-        emitted_at: Utc::now(),
+        emitted_at,
         run_id,
         turn_number: u32::try_from(updated.current_turn)
             .map_err(|e| ExecutionError::InvalidStoredData(format!("runs.current_turn: {e}")))?,
