@@ -248,6 +248,7 @@ async fn get_environment(Path(environment_id): Path<String>) -> Json<Value> {
     assert_eq!(environment_id, "environment-1");
     Json(json!({
         "environment_id": "environment-1",
+        "project_id": "01992aa0-0000-7000-8000-000000000011",
         "machine_id": "machine-1",
         "name": "Project",
         "workspace_root_id": "root",

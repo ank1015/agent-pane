@@ -2,7 +2,11 @@ use serde::de::DeserializeOwned;
 
 use execution_contracts::{EnvironmentId, ExecutionError, MachineId};
 use execution_protocol::{
-    CreateOperationRequest, Environment, MachineSummary, Operation, OperationEvent, OperationRecord,
+    CreateEnvironmentRequest, CreateOperationRequest, CreateSandboxMachineRequest,
+    CreateSandboxTemplateEnvironmentRequest, Environment, MachineSummary, Operation,
+    OperationEvent, OperationRecord, ProjectEnvironment, SandboxAccountSummary,
+    SandboxMachineCreated, SandboxSnapshotCreated, UpdateEnvironmentRequest,
+    UpdateSandboxTemplateEnvironmentRequest,
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderMap, HeaderValue};
 use url::Url;
@@ -50,6 +54,91 @@ impl ExecutionGatewayClient {
     pub async fn list_machines(&self) -> Result<Vec<MachineSummary>, ExecutionGatewayClientError> {
         self.send_json(self.http.get(self.url(&["v1", "machines"])?))
             .await
+    }
+
+    pub async fn list_sandbox_accounts(
+        &self,
+    ) -> Result<Vec<SandboxAccountSummary>, ExecutionGatewayClientError> {
+        self.send_json(self.http.get(self.url(&["v1", "sandbox-accounts"])?))
+            .await
+    }
+
+    pub async fn create_sandbox(
+        &self,
+        account_id: &str,
+        request: &CreateSandboxMachineRequest,
+    ) -> Result<SandboxMachineCreated, ExecutionGatewayClientError> {
+        let url = self.url(&["v1", "sandbox-accounts", account_id, "sandboxes"])?;
+        self.send_json(self.http.post(url).json(request)).await
+    }
+
+    pub async fn snapshot_sandbox(
+        &self,
+        machine_id: &MachineId,
+    ) -> Result<SandboxSnapshotCreated, ExecutionGatewayClientError> {
+        let url = self.url(&["v1", "machines", machine_id.as_str(), "snapshots"])?;
+        self.send_json(self.http.post(url)).await
+    }
+
+    pub async fn create_environment(
+        &self,
+        request: &CreateEnvironmentRequest,
+    ) -> Result<Environment, ExecutionGatewayClientError> {
+        self.send_json(
+            self.http
+                .post(self.url(&["v1", "environments"])?)
+                .json(request),
+        )
+        .await
+    }
+
+    pub async fn create_sandbox_template_environment(
+        &self,
+        request: &CreateSandboxTemplateEnvironmentRequest,
+    ) -> Result<ProjectEnvironment, ExecutionGatewayClientError> {
+        self.send_json(
+            self.http
+                .post(self.url(&["v1", "sandbox-environment-templates"])?)
+                .json(request),
+        )
+        .await
+    }
+
+    pub async fn update_environment(
+        &self,
+        environment_id: &str,
+        request: &UpdateEnvironmentRequest,
+    ) -> Result<ProjectEnvironment, ExecutionGatewayClientError> {
+        self.send_json(
+            self.http
+                .patch(self.url(&["v1", "environments", environment_id])?)
+                .json(request),
+        )
+        .await
+    }
+
+    pub async fn update_sandbox_template_environment(
+        &self,
+        template_id: &str,
+        request: &UpdateSandboxTemplateEnvironmentRequest,
+    ) -> Result<ProjectEnvironment, ExecutionGatewayClientError> {
+        self.send_json(
+            self.http
+                .patch(self.url(&["v1", "sandbox-environment-templates", template_id])?)
+                .json(request),
+        )
+        .await
+    }
+
+    pub async fn list_project_environments(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectEnvironment>, ExecutionGatewayClientError> {
+        self.send_json(
+            self.http
+                .get(self.url(&["v1", "projects", project_id, "environments"])?),
+        )
+        .await
     }
 
     pub async fn machine(
