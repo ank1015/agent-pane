@@ -9,6 +9,20 @@ pub struct HarnessProvider {
     pub model_ids: Vec<ModelId>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessReasoningLevel {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl HarnessReasoningLevel {
+    pub const ALL: [Self; 5] = [Self::Low, Self::Medium, Self::High, Self::Xhigh, Self::Max];
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HarnessRevisionStatus {
