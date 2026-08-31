@@ -44,7 +44,8 @@ async fn harness_crud_supports_safe_retries_and_filters() {
         "description": "Original description",
         "supported_providers": [
             {"provider_id": "openai", "model_ids": ["gpt-5.6-sol", "gpt-5.6-terra"]}
-        ]
+        ],
+        "supported_reasoning_levels": ["low", "medium", "high", "xhigh", "max"]
     });
 
     let first = app
@@ -60,6 +61,10 @@ async fn harness_crud_supports_safe_retries_and_filters() {
     assert_eq!(
         first_body["supported_providers"],
         create["supported_providers"]
+    );
+    assert_eq!(
+        first_body["supported_reasoning_levels"],
+        create["supported_reasoning_levels"]
     );
     assert!(first_body["created_at"].is_string());
     assert!(first_body["updated_at"].is_string());
@@ -107,7 +112,8 @@ async fn harness_crud_supports_safe_retries_and_filters() {
             "description": null,
             "supported_providers": [
                 {"provider_id": "anthropic", "model_ids": ["claude-opus-4-1"]}
-            ]
+            ],
+            "supported_reasoning_levels": ["low", "high"]
         }))
         .send()
         .await
@@ -119,6 +125,10 @@ async fn harness_crud_supports_safe_retries_and_filters() {
     assert_eq!(
         updated["supported_providers"][0]["provider_id"],
         "anthropic"
+    );
+    assert_eq!(
+        updated["supported_reasoning_levels"],
+        json!(["low", "high"])
     );
     assert!(updated["updated_at"].is_string());
 

@@ -2,10 +2,11 @@ use chrono::{DateTime, Utc};
 use sqlx::{FromRow, types::Json};
 
 use super::{
-    Harness, HarnessError, HarnessProvider, HarnessRevision, HarnessRevisionStatus, JsonObject,
+    Harness, HarnessError, HarnessProvider, HarnessReasoningLevel, HarnessRevision,
+    HarnessRevisionStatus, JsonObject,
 };
 
-pub(super) const HARNESS_COLUMNS: &str = "harness_id, slug, display_name, description, supported_providers, enabled, active_revision_id, created_at, updated_at";
+pub(super) const HARNESS_COLUMNS: &str = "harness_id, slug, display_name, description, supported_providers, supported_reasoning_levels, enabled, active_revision_id, created_at, updated_at";
 
 pub(super) const REVISION_COLUMNS: &str = "r.harness_revision_id, r.harness_id, r.revision, r.contract_version, \
      r.default_config, r.config_schema, r.first_activated_at, r.retired_at, r.created_at, \
@@ -18,6 +19,7 @@ pub(super) struct HarnessRow {
     pub display_name: String,
     pub description: Option<String>,
     pub supported_providers: Json<Vec<HarnessProvider>>,
+    pub supported_reasoning_levels: Json<Vec<HarnessReasoningLevel>>,
     pub enabled: bool,
     pub active_revision_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -32,6 +34,7 @@ impl From<HarnessRow> for Harness {
             display_name: row.display_name,
             description: row.description,
             supported_providers: row.supported_providers.0,
+            supported_reasoning_levels: row.supported_reasoning_levels.0,
             enabled: row.enabled,
             active_revision_id: row.active_revision_id,
             created_at: row.created_at,

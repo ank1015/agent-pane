@@ -4,7 +4,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
-pub use agent_contracts::{HarnessProvider, HarnessRevision, HarnessRevisionStatus};
+pub use agent_contracts::{
+    HarnessProvider, HarnessReasoningLevel, HarnessRevision, HarnessRevisionStatus,
+};
 
 pub type JsonObject = Map<String, Value>;
 
@@ -15,6 +17,7 @@ pub struct Harness {
     pub display_name: String,
     pub description: Option<String>,
     pub supported_providers: Vec<HarnessProvider>,
+    pub supported_reasoning_levels: Vec<HarnessReasoningLevel>,
     pub enabled: bool,
     pub active_revision_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -42,6 +45,8 @@ pub struct CreateHarness {
     pub description: Option<String>,
     #[serde(default)]
     pub supported_providers: Vec<HarnessProvider>,
+    #[serde(default)]
+    pub supported_reasoning_levels: Vec<HarnessReasoningLevel>,
 }
 
 impl CreateHarness {
@@ -54,6 +59,7 @@ impl CreateHarness {
             validate_trimmed(&mut issues, "description", description, 1, 2_000);
         }
         validate_supported_providers(&mut issues, &self.supported_providers);
+        validate_reasoning_levels(&mut issues, &self.supported_reasoning_levels);
         finish(issues)
     }
 }
@@ -65,6 +71,7 @@ pub struct UpdateHarness {
     #[serde(default, deserialize_with = "deserialize_optional_description")]
     pub description: Option<Option<String>>,
     pub supported_providers: Option<Vec<HarnessProvider>>,
+    pub supported_reasoning_levels: Option<Vec<HarnessReasoningLevel>>,
 }
 
 impl UpdateHarness {
@@ -73,6 +80,7 @@ impl UpdateHarness {
         if self.display_name.is_none()
             && self.description.is_none()
             && self.supported_providers.is_none()
+            && self.supported_reasoning_levels.is_none()
         {
             issue(&mut issues, "$", "must update at least one field");
         }
@@ -84,6 +92,9 @@ impl UpdateHarness {
         }
         if let Some(supported_providers) = &self.supported_providers {
             validate_supported_providers(&mut issues, supported_providers);
+        }
+        if let Some(supported_reasoning_levels) = &self.supported_reasoning_levels {
+            validate_reasoning_levels(&mut issues, supported_reasoning_levels);
         }
         finish(issues)
     }
@@ -259,6 +270,22 @@ fn validate_supported_providers(
     }
 }
 
+fn validate_reasoning_levels(
+    issues: &mut Vec<ValidationIssue>,
+    supported_reasoning_levels: &[HarnessReasoningLevel],
+) {
+    let mut levels = HashSet::new();
+    for (index, level) in supported_reasoning_levels.iter().enumerate() {
+        if !levels.insert(level) {
+            issue(
+                issues,
+                &format!("supported_reasoning_levels[{index}]"),
+                "must be unique",
+            );
+        }
+    }
+}
+
 fn issue(issues: &mut Vec<ValidationIssue>, path: &str, message: impl Into<String>) {
     issues.push(ValidationIssue {
         path: path.to_owned(),
@@ -297,6 +324,7 @@ mod tests {
             display_name: "Coding agent".to_owned(),
             description: None,
             supported_providers: Vec::new(),
+            supported_reasoning_levels: Vec::new(),
         };
         assert!(valid.validate().is_ok());
 
@@ -346,5 +374,20 @@ mod tests {
         }))
         .expect("clear providers");
         assert!(clear.validate().is_ok());
+    }
+
+    #[test]
+    fn validates_unique_reasoning_levels() {
+        let duplicate: CreateHarness = serde_json::from_value(json!({
+            "harness_id": "harness-1",
+            "slug": "coding-agent",
+            "display_name": "Coding agent",
+            "supported_reasoning_levels": ["low", "low"]
+        }))
+        .expect("reasoning levels");
+
+        let error = duplicate.validate().expect_err("duplicate reasoning level");
+        assert_eq!(error.issues.len(), 1);
+        assert_eq!(error.issues[0].path, "supported_reasoning_levels[1]");
     }
 }

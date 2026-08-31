@@ -17,8 +17,8 @@ pub(super) async fn create(
     command.validate()?;
     let query = format!(
         "insert into harnesses \
-             (harness_id, slug, display_name, description, supported_providers) \
-         values ($1, $2, $3, $4, $5) \
+             (harness_id, slug, display_name, description, supported_providers, supported_reasoning_levels) \
+         values ($1, $2, $3, $4, $5, $6) \
          on conflict (harness_id) do nothing \
          returning {HARNESS_COLUMNS}"
     );
@@ -28,6 +28,7 @@ pub(super) async fn create(
         .bind(&command.display_name)
         .bind(&command.description)
         .bind(Json(&command.supported_providers))
+        .bind(Json(&command.supported_reasoning_levels))
         .fetch_optional(database.pool())
         .await;
 
@@ -121,11 +122,14 @@ pub(super) async fn update(
     let description = command.description.flatten();
     let update_supported_providers = command.supported_providers.is_some();
     let supported_providers = command.supported_providers.unwrap_or_default();
+    let update_supported_reasoning_levels = command.supported_reasoning_levels.is_some();
+    let supported_reasoning_levels = command.supported_reasoning_levels.unwrap_or_default();
     let query = format!(
         "update harnesses \
          set display_name = coalesce($2, display_name), \
              description = case when $3 then $4 else description end, \
-             supported_providers = case when $5 then $6 else supported_providers end \
+             supported_providers = case when $5 then $6 else supported_providers end, \
+             supported_reasoning_levels = case when $7 then $8 else supported_reasoning_levels end \
          where harness_id = $1 \
          returning {HARNESS_COLUMNS}"
     );
@@ -136,6 +140,8 @@ pub(super) async fn update(
         .bind(description)
         .bind(update_supported_providers)
         .bind(Json(supported_providers))
+        .bind(update_supported_reasoning_levels)
+        .bind(Json(supported_reasoning_levels))
         .fetch_optional(database.pool())
         .await?
         .map(Into::into)
