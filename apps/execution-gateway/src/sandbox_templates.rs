@@ -13,6 +13,7 @@ use crate::{
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SandboxEnvironmentTemplate {
     pub id: Uuid,
+    pub project_id: Uuid,
     pub name: String,
     pub snapshot_id: Uuid,
     pub sandbox_account_id: Uuid,
@@ -26,6 +27,7 @@ pub struct SandboxEnvironmentTemplate {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateSandboxEnvironmentTemplateRequest {
+    pub project_id: Uuid,
     pub name: String,
     pub snapshot_id: Uuid,
     pub cwd: String,
@@ -63,12 +65,13 @@ impl Database {
     ) -> Result<Option<SandboxEnvironmentTemplate>, DbError> {
         let inserted = sqlx::query(
             "insert into sandbox_environment_templates
-                 (id, name, snapshot_id, cwd, creation_script)
-             select $1, $2, s.id, $4, $5
-             from snapshots s where s.id = $3
+                 (id, project_id, name, snapshot_id, cwd, creation_script)
+             select $1, $2, $3, s.id, $5, $6
+             from snapshots s where s.id = $4
              returning id",
         )
         .bind(id)
+        .bind(request.project_id)
         .bind(&request.name)
         .bind(request.snapshot_id)
         .bind(&request.cwd)
@@ -97,10 +100,14 @@ impl Database {
 
     pub async fn sandbox_environment_templates(
         &self,
+        project_id: Option<Uuid>,
     ) -> Result<Vec<SandboxEnvironmentTemplate>, DbError> {
         sqlx::query(&format!(
-            "{TEMPLATE_SELECT} where t.deleted_at is null order by lower(t.name), t.created_at, t.id"
+            "{TEMPLATE_SELECT} where t.deleted_at is null
+             and ($1::uuid is null or t.project_id = $1)
+             order by lower(t.name), t.created_at, t.id"
         ))
+        .bind(project_id)
         .fetch_all(self.pool())
         .await?
         .into_iter()
@@ -154,7 +161,7 @@ impl Database {
     ) -> Result<Vec<SandboxEnvironmentInstance>, DbError> {
         sqlx::query(
             "select i.template_id, a.provider, sm.provider_resource_id,
-                    e.environment_id, e.machine_id, e.name as environment_name,
+                    e.environment_id, e.project_id, e.machine_id, e.name as environment_name,
                     e.workspace_root_id, e.path,
                     e.created_at as environment_created_at, i.created_at
              from sandbox_environment_instances i
@@ -174,7 +181,7 @@ impl Database {
 }
 
 const TEMPLATE_SELECT: &str =
-    "select t.id, t.name, t.snapshot_id, s.sandbox_account_id, a.provider,
+    "select t.id, t.project_id, t.name, t.snapshot_id, s.sandbox_account_id, a.provider,
             t.cwd, t.creation_script, t.created_at, t.updated_at
      from sandbox_environment_templates t
      join snapshots s on s.id = t.snapshot_id
@@ -251,6 +258,7 @@ pub(crate) fn environment_path(cwd: &str, workspace_root: &str) -> Result<String
 fn template_from_row(row: sqlx::postgres::PgRow) -> Result<SandboxEnvironmentTemplate, DbError> {
     Ok(SandboxEnvironmentTemplate {
         id: row.try_get("id")?,
+        project_id: row.try_get("project_id")?,
         name: row.try_get("name")?,
         snapshot_id: row.try_get("snapshot_id")?,
         sandbox_account_id: row.try_get("sandbox_account_id")?,
@@ -266,6 +274,7 @@ fn instance_from_row(row: sqlx::postgres::PgRow) -> Result<SandboxEnvironmentIns
     let environment = Environment {
         environment_id: EnvironmentId::new(row.try_get::<String, _>("environment_id")?)
             .map_err(|error| DbError::Contract(error.to_string()))?,
+        project_id: row.try_get("project_id")?,
         machine_id: MachineId::new(row.try_get::<String, _>("machine_id")?)
             .map_err(|error| DbError::Contract(error.to_string()))?,
         name: row.try_get("environment_name")?,

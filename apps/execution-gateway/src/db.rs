@@ -6,7 +6,7 @@ use execution_contracts::{
 };
 use execution_protocol::{
     ConnectorKind, Environment, MachineSummary, Operation, OperationEvent, OperationRecord,
-    OperationStatus, Response, StreamItem,
+    OperationStatus, ProjectEnvironment, ProjectEnvironmentType, Response, StreamItem,
 };
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use thiserror::Error;
@@ -175,6 +175,7 @@ impl Database {
     pub async fn create_environment(
         &self,
         environment_id: &EnvironmentId,
+        project_id: Uuid,
         machine_id: &MachineId,
         name: &str,
         workspace_root_id: &WorkspaceRootId,
@@ -182,13 +183,14 @@ impl Database {
     ) -> Result<Option<Environment>, DbError> {
         let row = sqlx::query(
             "insert into environments
-                 (environment_id, machine_id, name, workspace_root_id, path)
-             select $1, machine_id, $3, $4, $5
+                 (environment_id, project_id, machine_id, name, workspace_root_id, path)
+             select $1, $2, machine_id, $4, $5, $6
              from machines
-             where machine_id = $2 and deleted_at is null
+             where machine_id = $3 and deleted_at is null
              returning *",
         )
         .bind(environment_id.as_str())
+        .bind(project_id)
         .bind(machine_id.as_str())
         .bind(name)
         .bind(workspace_root_id.as_str())
@@ -213,18 +215,90 @@ impl Database {
     pub async fn environments(
         &self,
         machine_id: Option<&str>,
+        project_id: Option<Uuid>,
     ) -> Result<Vec<Environment>, DbError> {
         sqlx::query(
             "select * from environments
-             where deleted_at is null and ($1::text is null or machine_id = $1)
+             where deleted_at is null
+               and ($1::text is null or machine_id = $1)
+               and ($2::uuid is null or project_id = $2)
              order by created_at, environment_id",
         )
         .bind(machine_id)
+        .bind(project_id)
         .fetch_all(&self.pool)
         .await?
         .into_iter()
         .map(environment_from_row)
         .collect()
+    }
+
+    pub async fn project_environments(
+        &self,
+        project_id: Uuid,
+    ) -> Result<Vec<ProjectEnvironment>, DbError> {
+        sqlx::query(
+            "select configured.id, configured.name, configured.host_name, configured.machine_id,
+                    configured.path, configured.environment_type, configured.snapshot_id,
+                    configured.setup_script, configured.provider, configured.created_at
+             from (
+                 select e.environment_id as id, e.name, m.name as host_name, e.machine_id,
+                        e.path, 'env'::text as environment_type, null::uuid as snapshot_id,
+                        null::text as setup_script, null::text as provider, e.created_at
+                 from environments e
+                 join machines m on m.machine_id = e.machine_id
+                 where e.project_id = $1 and e.deleted_at is null
+                   and not exists (
+                       select 1 from sandbox_environment_instances i
+                       where i.environment_id = e.environment_id
+                   )
+                 union all
+                 select t.id::text as id, t.name, a.name as host_name, null::text as machine_id,
+                        t.cwd as path, 'template'::text as environment_type, t.snapshot_id,
+                        t.creation_script as setup_script, a.provider, t.created_at
+                 from sandbox_environment_templates t
+                 join snapshots s on s.id = t.snapshot_id
+                 join sandbox_accounts a on a.id = s.sandbox_account_id
+                 where t.project_id = $1 and t.deleted_at is null
+             ) configured
+             order by configured.created_at, configured.id",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(project_environment_from_row)
+        .collect()
+    }
+
+    pub async fn update_environment(
+        &self,
+        environment_id: &str,
+        project_id: Uuid,
+        machine_id: Option<&MachineId>,
+        name: Option<&str>,
+        workspace_root_id: Option<&WorkspaceRootId>,
+        path: Option<&str>,
+    ) -> Result<Option<Environment>, DbError> {
+        sqlx::query(
+            "update environments e
+             set machine_id = coalesce($3, e.machine_id),
+                 name = coalesce($4, e.name),
+                 workspace_root_id = coalesce($5, e.workspace_root_id),
+                 path = coalesce($6, e.path)
+             where e.environment_id = $1 and e.project_id = $2 and e.deleted_at is null
+             returning *",
+        )
+        .bind(environment_id)
+        .bind(project_id)
+        .bind(machine_id.map(MachineId::as_str))
+        .bind(name)
+        .bind(workspace_root_id.map(WorkspaceRootId::as_str))
+        .bind(path)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(environment_from_row)
+        .transpose()
     }
 
     pub async fn update_environment_name(
@@ -385,11 +459,57 @@ fn environment_from_row(row: sqlx::postgres::PgRow) -> Result<Environment, DbErr
     let created: DateTime<Utc> = row.try_get("created_at")?;
     Ok(Environment {
         environment_id,
+        project_id: row.try_get("project_id")?,
         machine_id,
         name: row.try_get("name")?,
         workspace_root_id,
         path: row.try_get("path")?,
         created_at: timestamp(created),
+    })
+}
+
+fn project_environment_from_row(row: sqlx::postgres::PgRow) -> Result<ProjectEnvironment, DbError> {
+    let environment_type = match row.try_get::<String, _>("environment_type")?.as_str() {
+        "env" => ProjectEnvironmentType::Env,
+        "template" => ProjectEnvironmentType::Template,
+        value => {
+            return Err(DbError::Contract(format!(
+                "unknown project environment type {value:?}"
+            )));
+        }
+    };
+    let machine_id = row
+        .try_get::<Option<String>, _>("machine_id")?
+        .map(MachineId::new)
+        .transpose()
+        .map_err(|error| DbError::Contract(error.to_string()))?;
+    let path: String = row.try_get("path")?;
+    let path = if environment_type == ProjectEnvironmentType::Template {
+        let provider = row
+            .try_get::<Option<String>, _>("provider")?
+            .ok_or_else(|| DbError::Contract("sandbox template provider is missing".to_owned()))?
+            .parse()
+            .map_err(|error: crate::sandbox_accounts::SandboxAccountError| {
+                DbError::Contract(error.to_string())
+            })?;
+        crate::sandbox_templates::environment_path(
+            &path,
+            crate::sandbox_runtime::sandbox_workspace_root(provider),
+        )
+        .map_err(|error| DbError::Contract(error.to_owned()))?
+    } else {
+        path
+    };
+    Ok(ProjectEnvironment {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        host_name: row.try_get("host_name")?,
+        machine_id,
+        path,
+        environment_type,
+        snapshot_id: row.try_get("snapshot_id")?,
+        setup_script: row.try_get("setup_script")?,
+        created_at: timestamp(row.try_get("created_at")?),
     })
 }
 

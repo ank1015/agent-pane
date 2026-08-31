@@ -119,14 +119,17 @@ impl Database {
         let mut transaction = self.pool().begin().await?;
         sqlx::query(
             "insert into environments
-                 (environment_id, machine_id, name, workspace_root_id, path)
-             values ($1, $2, $3, $4, $5)",
+                 (environment_id, project_id, machine_id, name, workspace_root_id, path)
+             select $1, t.project_id, $2, $3, $4, $5
+             from sandbox_environment_templates t
+             where t.id = $6 and t.deleted_at is null",
         )
         .bind(environment_id.as_str())
         .bind(machine_id.as_str())
         .bind(environment_name)
         .bind(workspace_root_id.as_str())
         .bind(path)
+        .bind(template_id)
         .execute(&mut *transaction)
         .await?;
         sqlx::query(
