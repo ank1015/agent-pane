@@ -51,13 +51,15 @@ pub fn router(
         .route("/health", get(health))
         .route("/ready", get(readiness))
         .merge(providers::router(
-            ProviderService::new(gateway),
+            ProviderService::new(gateway.clone()),
             chatgpt_login,
         ))
         .merge(machines::router(machines::MachineService::new(
             execution_gateway.clone(),
         )))
-        .merge(harnesses::router(harnesses::HarnessService::new(agent)))
+        .merge(harnesses::router(harnesses::HarnessService::new(
+            agent, gateway,
+        )))
         .merge(projects::router(projects::ProjectService::new(
             database.pool().clone(),
             execution_gateway,

@@ -94,12 +94,32 @@ sandbox templates. Its items expose `id`, `name`, `host_name`, an optional
 
 ```text
 GET /api/harnesses
+GET /api/harnesses/{harness_id}/model-options
 ```
 
 Platform follows Agent pagination internally and returns a dashboard-oriented
 JSON array containing `id`, `name`, `description`, `created_at`, and
 `updated_at`. Upstream authentication uses the Agent control token; the token
 is never exposed to the dashboard.
+
+The model-options endpoint combines the harness capability catalog from Agent
+with enabled provider accounts from `llm-gateway`. It returns one `providers`
+entry per matching account (so a provider may appear more than once) and the
+harness's portable `reasoning_levels`:
+
+```json
+{
+  "providers": [
+    {
+      "account_id": "0198f88e-2ff3-7000-8000-000000000001",
+      "name": "Personal OpenAI",
+      "provider": "openai",
+      "model_ids": ["gpt-5.6-sol", "gpt-5.6-terra"]
+    }
+  ],
+  "reasoning_levels": ["low", "medium", "high", "xhigh", "max"]
+}
+```
 
 ## Sandbox accounts API
 

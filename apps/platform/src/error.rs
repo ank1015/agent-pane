@@ -6,6 +6,7 @@ use axum::{
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::harnesses::HarnessModelOptionsError;
 use crate::projects::ProjectError;
 use crate::upstream::agent::AgentError;
 use crate::upstream::execution_gateway::ExecutionGatewayError;
@@ -47,6 +48,15 @@ impl From<ExecutionGatewayError> for ApiError {
 impl From<ProjectError> for ApiError {
     fn from(error: ProjectError) -> Self {
         Self::Project(error)
+    }
+}
+
+impl From<HarnessModelOptionsError> for ApiError {
+    fn from(error: HarnessModelOptionsError) -> Self {
+        match error {
+            HarnessModelOptionsError::Agent(error) => Self::Agent(error),
+            HarnessModelOptionsError::LlmGateway(error) => Self::LlmGateway(error),
+        }
     }
 }
 
