@@ -1,8 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use agent_contracts::{
-    EVENT_STREAM_NAME, HarnessCommandOutcome, HarnessCommandResult, RunCancelled, TurnRequested,
-    WORK_STREAM_NAME, cancelled_subject, result_subject, turn_subject,
+    EVENT_STREAM_NAME, HARNESS_PROTOCOL_VERSION, HarnessCommandOutcome, HarnessCommandResult,
+    HarnessRunEvent, HarnessRunEventData, RunCancelled, TurnRequested, WORK_STREAM_NAME,
+    cancelled_subject, result_subject, turn_subject,
 };
 use async_nats::jetstream::{self, consumer, message::AckKind};
 use execution_runtime::OperationContext;
@@ -15,6 +16,7 @@ use crate::{
     ActiveTurn, AgentClient, AgentClientError, HarnessRuntime, HarnessServerConfig, TurnOutcome,
     active_turn::ActiveTurns,
     command_bus::{CommandBus, CommandBusError, PendingResults},
+    event_bus::EventBus,
 };
 
 /// Static broker identity for one independently deployed harness server.
@@ -49,6 +51,7 @@ pub struct HarnessServer<R> {
     results: consumer::Consumer<consumer::pull::Config>,
     cancellations: consumer::Consumer<consumer::pull::Config>,
     command_bus: CommandBus,
+    event_bus: EventBus,
     pending_results: PendingResults,
     active_turns: ActiveTurns,
     max_concurrent_turns: usize,
@@ -117,6 +120,7 @@ impl<R: HarnessRuntime> HarnessServer<R> {
             .await
             .map_err(HarnessServerError::broker)?;
         let pending_results = PendingResults::default();
+        let event_bus = EventBus::new(jetstream.clone());
         let command_bus = CommandBus::new(jetstream, pending_results.clone(), &config.broker);
         Ok(Self {
             descriptor,
@@ -126,6 +130,7 @@ impl<R: HarnessRuntime> HarnessServer<R> {
             results,
             cancellations,
             command_bus,
+            event_bus,
             pending_results,
             active_turns: ActiveTurns::default(),
             max_concurrent_turns: config.max_concurrent_turns,
@@ -173,6 +178,7 @@ impl<R: HarnessRuntime> HarnessServer<R> {
                                 agent: self.agent.clone(),
                                 runtime: self.runtime.clone(),
                                 command_bus: self.command_bus.clone(),
+                                event_bus: self.event_bus.clone(),
                                 active_turns: self.active_turns.clone(),
                                 shutdown: shutdown.clone(),
                                 delivery_retry_delay: self.delivery_retry_delay,
@@ -198,6 +204,7 @@ struct TurnTaskContext<R> {
     agent: AgentClient,
     runtime: Arc<R>,
     command_bus: CommandBus,
+    event_bus: EventBus,
     active_turns: ActiveTurns,
     shutdown: OperationContext,
     delivery_retry_delay: Duration,
@@ -238,7 +245,25 @@ async fn process_delivery<R: HarnessRuntime>(
         context.progress_interval,
         progress_stop.clone(),
     );
-    let turn = ActiveTurn::new(context.agent, request.clone(), operation.clone());
+    let started = HarnessRunEvent {
+        protocol_version: HARNESS_PROTOCOL_VERSION,
+        event_id: Uuid::new_v5(&request.event_id, b"turn.started"),
+        emitted_at: chrono::Utc::now(),
+        run_id: request.run_id,
+        harness_slug: request.harness_slug.clone(),
+        turn_number: request.turn_number,
+        expected_state_version: request.expected_state_version,
+        event: HarnessRunEventData::TurnStarted,
+    };
+    if let Err(error) = context.event_bus.publish(&started).await {
+        tracing::warn!(run_id = %request.run_id, %error, "could not publish turn started event");
+    }
+    let turn = ActiveTurn::with_event_bus(
+        context.agent,
+        request.clone(),
+        operation.clone(),
+        context.event_bus,
+    );
     let outcome = context.runtime.execute(&turn).await;
     let acknowledgement = match outcome {
         Ok(TurnOutcome::Command(command)) => match context
