@@ -23,6 +23,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     broker.ensure_topology().await?;
 
     let shutdown = CancellationToken::new();
+    let _run_events = database.spawn_run_event_listener(shutdown.clone()).await?;
     let _commands = broker
         .spawn_command_consumer(database.clone(), shutdown.clone())
         .await?;

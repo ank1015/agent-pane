@@ -1,6 +1,7 @@
 mod aborts;
 mod commands;
 mod configuration;
+pub(crate) mod events;
 mod http;
 mod messages;
 mod outbox;
@@ -10,6 +11,7 @@ mod types;
 mod waits;
 
 pub use commands::apply_harness_command;
+pub use events::{HarnessEventIngestOutcome, ingest_harness_event};
 pub use http::{harness_router, router};
 pub use outbox::spawn_outbox_publisher;
 pub use types::*;
@@ -66,6 +68,10 @@ pub enum ExecutionError {
     InvalidQueuedMessagePageSize,
     #[error("queued run message after_sequence is too large")]
     InvalidQueuedMessageAfterSequence,
+    #[error("run event page limit must be between 1 and 500")]
+    InvalidRunEventPageSize,
+    #[error("run event after_sequence is too large")]
+    InvalidRunEventAfterSequence,
     #[error("wait {0} was not found")]
     WaitNotFound(uuid::Uuid),
     #[error("wait id {0} is already in use")]
