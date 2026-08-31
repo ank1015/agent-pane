@@ -3,12 +3,24 @@ use std::collections::BTreeSet;
 use sqlx::postgres::PgPoolOptions;
 use uuid::Uuid;
 
-const TABLES: [&str; 9] = [
+const CORE_TABLES: [&str; 9] = [
     "broker_inbox",
     "broker_outbox",
     "harness_revisions",
     "harnesses",
     "run_aborts",
+    "run_waits",
+    "runs",
+    "session_messages",
+    "sessions",
+];
+const TABLES: [&str; 10] = [
+    "broker_inbox",
+    "broker_outbox",
+    "harness_revisions",
+    "harnesses",
+    "run_aborts",
+    "run_events",
     "run_waits",
     "runs",
     "session_messages",
@@ -23,7 +35,7 @@ fn core_migration_declares_only_the_rethought_tables() {
         .filter_map(|line| line.strip_prefix("create table "))
         .filter_map(|line| line.strip_suffix(" ("))
         .collect::<BTreeSet<_>>();
-    let expected = TABLES.into_iter().collect::<BTreeSet<_>>();
+    let expected = CORE_TABLES.into_iter().collect::<BTreeSet<_>>();
 
     assert_eq!(declared, expected);
     for removed in [
@@ -34,6 +46,18 @@ fn core_migration_declares_only_the_rethought_tables() {
     ] {
         assert!(!declared.contains(removed));
     }
+}
+
+#[test]
+fn run_event_migration_adds_the_replay_log() {
+    let migration = include_str!("../migrations/20260831010000_add_run_events.sql");
+    let scoped_ids = include_str!("../migrations/20260831020000_scope_run_event_ids.sql");
+    let global_ids = include_str!("../migrations/20260831030000_restore_global_run_event_ids.sql");
+    assert!(migration.contains("create table run_events"));
+    assert!(migration.contains("primary key (run_id, sequence)"));
+    assert!(migration.contains("add column last_event_sequence"));
+    assert!(scoped_ids.contains("unique (run_id, event_id)"));
+    assert!(global_ids.contains("unique (event_id)"));
 }
 
 #[tokio::test]
