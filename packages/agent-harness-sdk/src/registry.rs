@@ -1,5 +1,5 @@
-pub use agent_contracts::HarnessProvider;
 use agent_contracts::{AgentApiError, AgentErrorResponse};
+pub use agent_contracts::{HarnessProvider, HarnessReasoningLevel};
 use llm_contracts::JsonObject;
 use reqwest::{Method, StatusCode, header};
 use serde::Serialize;
@@ -129,6 +129,7 @@ pub struct CreateHarnessRequest {
     pub display_name: String,
     pub description: Option<String>,
     pub supported_providers: Vec<HarnessProvider>,
+    pub supported_reasoning_levels: Vec<HarnessReasoningLevel>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -139,6 +140,8 @@ pub struct UpdateHarnessRequest {
     pub description: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supported_providers: Option<Vec<HarnessProvider>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supported_reasoning_levels: Option<Vec<HarnessReasoningLevel>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

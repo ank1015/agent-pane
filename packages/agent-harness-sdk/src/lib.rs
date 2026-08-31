@@ -16,8 +16,8 @@ pub use config::{
 };
 pub use event_bus::EventPublishError;
 pub use registry::{
-    CreateHarnessRequest, HarnessProvider, HarnessRegistryClient, HarnessRegistryError,
-    RegisterHarnessRevisionRequest, UpdateHarnessRequest,
+    CreateHarnessRequest, HarnessProvider, HarnessReasoningLevel, HarnessRegistryClient,
+    HarnessRegistryError, RegisterHarnessRevisionRequest, UpdateHarnessRequest,
 };
 pub use runtime::{HarnessRuntime, TurnOutcome};
 pub use server::{HarnessDescriptor, HarnessServer, HarnessServerError};
