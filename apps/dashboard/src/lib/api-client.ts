@@ -10,6 +10,11 @@ export class ApiError extends Error {
   }
 }
 
+export type JsonRequestOptions = {
+  signal?: AbortSignal
+  headers?: Record<string, string>
+}
+
 export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(path, {
     headers: { Accept: 'application/json' },
@@ -24,14 +29,20 @@ export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T>
   return response.json() as Promise<T>
 }
 
-export async function postJson<T>(path: string, body: unknown): Promise<T> {
+export async function postJson<T>(
+  path: string,
+  body: unknown,
+  options: JsonRequestOptions = {},
+): Promise<T> {
   const response = await fetch(path, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      ...options.headers,
     },
     body: JSON.stringify(body),
+    signal: options.signal,
   })
 
   if (!response.ok) {
