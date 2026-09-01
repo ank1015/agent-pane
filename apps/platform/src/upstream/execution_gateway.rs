@@ -23,6 +23,7 @@ use execution_protocol::{Environment, MachineSummary, ProjectEnvironment};
 pub struct ExecutionGatewayClient {
     http: reqwest::Client,
     base_url: Url,
+    materialization_timeout: Duration,
 }
 
 impl ExecutionGatewayClient {
@@ -30,6 +31,15 @@ impl ExecutionGatewayClient {
         base_url: Url,
         control_token: &str,
         timeout: Duration,
+    ) -> Result<Self, ExecutionGatewayClientError> {
+        Self::new_with_materialization_timeout(base_url, control_token, timeout, timeout)
+    }
+
+    pub fn new_with_materialization_timeout(
+        base_url: Url,
+        control_token: &str,
+        timeout: Duration,
+        materialization_timeout: Duration,
     ) -> Result<Self, ExecutionGatewayClientError> {
         let mut authorization =
             reqwest::header::HeaderValue::from_str(&format!("Bearer {control_token}"))
@@ -47,6 +57,7 @@ impl ExecutionGatewayClient {
         Ok(Self {
             http,
             base_url: normalized_base_url(base_url),
+            materialization_timeout,
         })
     }
 
@@ -331,9 +342,13 @@ impl ExecutionGatewayClient {
         &self,
         template_id: Uuid,
     ) -> Result<SandboxEnvironmentInstance, ExecutionGatewayError> {
-        self.send_json(self.http.post(self.url(&format!(
-            "v1/control/sandbox-environment-templates/{template_id}/environments"
-        ))?))
+        self.send_json(
+            self.http
+                .post(self.url(&format!(
+                    "v1/control/sandbox-environment-templates/{template_id}/environments"
+                ))?)
+                .timeout(self.materialization_timeout),
+        )
         .await
     }
 

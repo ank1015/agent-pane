@@ -17,6 +17,7 @@ use crate::machines::model::{
 
 const E2B_ACCOUNT_ID: &str = "01992aa0-0000-7000-8000-000000000010";
 const PROJECT_ID: &str = "01992aa0-0000-7000-8000-000000000011";
+const TEMPLATE_ID: &str = "01992aa0-0000-7000-8000-000000000012";
 
 #[tokio::test]
 async fn create_sandbox_account_authenticates_and_forwards_the_secret_once() {
@@ -201,6 +202,41 @@ async fn project_environment_list_uses_the_project_endpoint_and_authenticates() 
     assert_eq!(environments.len(), 2);
     assert_eq!(environments[0].host_name, "Workstation");
     assert_eq!(environments[1].host_name, "E2B main");
+}
+
+#[tokio::test]
+async fn sandbox_materialization_uses_its_dedicated_longer_timeout() {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let mock_gateway = Router::new()
+        .route(
+            &format!("/v1/control/sandbox-environment-templates/{TEMPLATE_ID}/environments"),
+            post(capture_delayed_materialization_request),
+        )
+        .with_state(request_tx);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, mock_gateway).await.unwrap();
+    });
+
+    let client = ExecutionGatewayClient::new_with_materialization_timeout(
+        format!("http://{address}").parse().unwrap(),
+        "platform-control-token",
+        Duration::from_millis(25),
+        Duration::from_millis(250),
+    )
+    .unwrap();
+    let instance = client
+        .materialize_sandbox_environment_template(TEMPLATE_ID.parse().unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        request_rx.recv().await.unwrap(),
+        "Bearer platform-control-token"
+    );
+    assert_eq!(instance.template_id.to_string(), TEMPLATE_ID);
+    assert_eq!(instance.environment.machine_id.as_str(), "machine-e2b-1");
 }
 
 #[tokio::test]
@@ -572,6 +608,37 @@ async fn capture_environment_name_update_request(
         "path": "projects/example",
         "created_at": 1787443200000_u64
     }))
+}
+
+async fn capture_delayed_materialization_request(
+    State(request_tx): State<mpsc::UnboundedSender<String>>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<Value>) {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    request_tx.send(authorization).unwrap();
+    tokio::time::sleep(Duration::from_millis(75)).await;
+    (
+        StatusCode::CREATED,
+        Json(json!({
+            "template_id": TEMPLATE_ID,
+            "provider": "e2b",
+            "provider_sandbox_id": "e2b-sandbox-1",
+            "environment": {
+                "environment_id": "environment-1",
+                "project_id": PROJECT_ID,
+                "machine_id": "machine-e2b-1",
+                "name": "Development",
+                "workspace_root_id": "root",
+                "path": "projects/example",
+                "created_at": 1787443200000_u64
+            },
+            "created_at": 1787443200000_u64
+        })),
+    )
 }
 
 async fn capture_snapshot_name_update_request(

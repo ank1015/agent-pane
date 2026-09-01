@@ -26,10 +26,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &config.llm_gateway_admin_token,
         config.llm_gateway_timeout,
     )?;
-    let execution_gateway = ExecutionGatewayClient::new(
+    let execution_gateway = ExecutionGatewayClient::new_with_materialization_timeout(
         config.execution_gateway_url.clone(),
         &config.execution_gateway_control_token,
         config.execution_gateway_timeout,
+        config.execution_gateway_materialization_timeout,
     )?;
     let agent = AgentClient::new(
         config.agent_url.clone(),

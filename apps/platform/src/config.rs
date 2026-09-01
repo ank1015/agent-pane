@@ -12,6 +12,7 @@ const DEFAULT_LLM_GATEWAY_URL: &str = "http://127.0.0.1:3000";
 const DEFAULT_LLM_GATEWAY_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_EXECUTION_GATEWAY_URL: &str = "http://127.0.0.1:8790";
 const DEFAULT_EXECUTION_GATEWAY_TIMEOUT_SECONDS: u64 = 30;
+const DEFAULT_EXECUTION_GATEWAY_MATERIALIZATION_TIMEOUT_SECONDS: u64 = 660;
 const DEFAULT_AGENT_URL: &str = "http://127.0.0.1:8780";
 const DEFAULT_AGENT_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_CHATGPT_OAUTH_CALLBACK_ADDRESS: &str = "127.0.0.1:1455";
@@ -29,6 +30,7 @@ pub struct AppConfig {
     pub execution_gateway_url: Url,
     pub execution_gateway_control_token: Zeroizing<String>,
     pub execution_gateway_timeout: Duration,
+    pub execution_gateway_materialization_timeout: Duration,
     pub agent_url: Url,
     pub agent_control_token: Zeroizing<String>,
     pub agent_timeout: Duration,
@@ -139,6 +141,14 @@ impl AppConfig {
             "PLATFORM_EXECUTION_GATEWAY_TIMEOUT_SECONDS",
             execution_gateway_timeout_seconds,
         )?;
+        let execution_gateway_materialization_timeout_seconds = parse_integer(
+            "PLATFORM_EXECUTION_GATEWAY_MATERIALIZATION_TIMEOUT_SECONDS",
+            DEFAULT_EXECUTION_GATEWAY_MATERIALIZATION_TIMEOUT_SECONDS,
+        )?;
+        require_positive(
+            "PLATFORM_EXECUTION_GATEWAY_MATERIALIZATION_TIMEOUT_SECONDS",
+            execution_gateway_materialization_timeout_seconds,
+        )?;
 
         let agent_url = parse_http_url(
             "PLATFORM_AGENT_URL",
@@ -203,6 +213,9 @@ impl AppConfig {
             execution_gateway_url,
             execution_gateway_control_token,
             execution_gateway_timeout: Duration::from_secs(execution_gateway_timeout_seconds),
+            execution_gateway_materialization_timeout: Duration::from_secs(
+                execution_gateway_materialization_timeout_seconds,
+            ),
             agent_url,
             agent_control_token,
             agent_timeout: Duration::from_secs(agent_timeout_seconds),
