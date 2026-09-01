@@ -144,7 +144,7 @@ async fn registers_and_activates_the_packaged_pi_harness() {
     assert_eq!(calls[0].body["harness_id"], "pi");
     assert_eq!(
         calls[0].body["description"],
-        "Minimalistic pi agent with four tools. Single agent, Single machine."
+        "Minimalistic pi coding agent with execution and optional web tools."
     );
     assert_eq!(
         calls[0].body["supported_providers"],
@@ -184,7 +184,7 @@ async fn registers_and_activates_the_packaged_pi_harness() {
     assert_eq!(calls[1].path, "/v1/harnesses/pi");
     assert_eq!(
         calls[1].body["description"],
-        "Minimalistic pi agent with four tools. Single agent, Single machine."
+        "Minimalistic pi coding agent with execution and optional web tools."
     );
     assert_eq!(
         calls[1].body["supported_providers"],
@@ -196,6 +196,11 @@ async fn registers_and_activates_the_packaged_pi_harness() {
     );
     assert_eq!(calls[2].body["harness_revision_id"], PI_HARNESS_REVISION_ID);
     assert_eq!(calls[2].body["default_config"]["model_id"], "gpt-5.6-sol");
+    assert_eq!(calls[2].body["default_config"]["web_search_enabled"], true);
+    assert_eq!(
+        calls[2].body["config_schema"]["properties"]["web_search_enabled"],
+        json!({"type": "boolean", "default": true})
+    );
     assert_eq!(
         calls[2].body["config_schema"]["properties"]["provider"]["enum"],
         json!(["openai", "chatgpt", "fireworks", "deepseek"])

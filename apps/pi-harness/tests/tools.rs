@@ -16,6 +16,8 @@ struct Fixture {
     workspace: std::path::PathBuf,
     runtime: LocalExecutionRuntime,
     root_id: WorkspaceRootId,
+    search: tool_firecrawl_search::FirecrawlSearchToolContext,
+    scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext,
 }
 
 impl Fixture {
@@ -48,6 +50,10 @@ impl Fixture {
             workspace,
             runtime,
             root_id,
+            search: tool_firecrawl_search::FirecrawlSearchToolContext::new("test-key")
+                .expect("search context"),
+            scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext::new("test-key")
+                .expect("scrape context"),
         }
     }
 
@@ -65,6 +71,8 @@ async fn executes_write_read_edit_and_bash() {
         runtime: &fixture.runtime,
         cwd: &cwd,
         operation: &operation,
+        search: &fixture.search,
+        scrape: &fixture.scrape,
     };
 
     let write = execute(
@@ -139,6 +147,8 @@ async fn read_returns_images_as_base64_content() {
         runtime: &fixture.runtime,
         cwd: &cwd,
         operation: &operation,
+        search: &fixture.search,
+        scrape: &fixture.scrape,
     };
 
     let result = execute(&context, "read", json!({ "path": "image.png" })).await;
@@ -168,6 +178,8 @@ async fn tool_failures_are_returned_to_the_model() {
         runtime: &fixture.runtime,
         cwd: &cwd,
         operation: &operation,
+        search: &fixture.search,
+        scrape: &fixture.scrape,
     };
 
     let edit = execute(
@@ -211,6 +223,8 @@ async fn resolves_absolute_paths_only_inside_the_active_root() {
         runtime: &fixture.runtime,
         cwd: &cwd,
         operation: &operation,
+        search: &fixture.search,
+        scrape: &fixture.scrape,
     };
 
     let result = execute(&context, "read", json!({ "path": file.to_string_lossy() })).await;

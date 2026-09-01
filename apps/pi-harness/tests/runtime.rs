@@ -52,7 +52,10 @@ async fn retries_a_transient_llm_failure_inside_the_harness_and_completes() {
         requests[1]["request"]["messages"].as_array().unwrap().len(),
         1
     );
-    assert_eq!(requests[1]["request"]["tools"].as_array().unwrap().len(), 4);
+    let tools = requests[1]["request"]["tools"].as_array().unwrap();
+    assert_eq!(tools.len(), 6);
+    assert_eq!(tools[4]["name"], "search");
+    assert_eq!(tools[5]["name"], "scrape");
     drop(requests);
 
     let appends = agent.appends.lock().expect("Agent appends");
@@ -65,6 +68,29 @@ async fn retries_a_transient_llm_failure_inside_the_harness_and_completes() {
         appends[0].messages[0].message,
         Message::Assistant(_)
     ));
+}
+
+#[tokio::test]
+async fn omits_web_tools_and_guidance_when_disabled() {
+    let agent = Arc::new(AgentState::new().with_web_search_enabled(false));
+    let llm = Arc::new(LlmState::new(0));
+    let runtime = runtime(&llm).await;
+    let turn = active_turn(&agent).await;
+
+    runtime.execute(&turn).await.expect("runtime outcome");
+
+    let requests = llm.requests.lock().expect("LLM requests");
+    let request = &requests[0]["request"];
+    let tools = request["tools"].as_array().expect("tool definitions");
+    assert_eq!(tools.len(), 4);
+    assert!(tools.iter().all(|tool| tool["name"] != "search"));
+    assert!(tools.iter().all(|tool| tool["name"] != "scrape"));
+    assert!(
+        !request["instructions"]
+            .as_str()
+            .expect("instructions")
+            .contains("Use search to discover current public information")
+    );
 }
 
 #[tokio::test]
@@ -221,7 +247,13 @@ async fn runtime(llm: &Arc<LlmState>) -> PiRuntime {
         "execution-secret",
     ))
     .expect("execution client");
-    PiRuntime::new(llm_client, execution_client).with_retry_policy(RetryPolicy {
+    PiRuntime::new(
+        llm_client,
+        execution_client,
+        tool_firecrawl_search::FirecrawlSearchToolContext::new("test-key").expect("search context"),
+        tool_firecrawl_scrape::FirecrawlScrapeToolContext::new("test-key").expect("scrape context"),
+    )
+    .with_retry_policy(RetryPolicy {
         max_retries: 1,
         base_delay: Duration::from_millis(1),
         max_retry_delay: Duration::from_millis(5),
@@ -250,6 +282,7 @@ struct AgentState {
     trigger_session_message_id: Uuid,
     account_id: Uuid,
     provider: &'static str,
+    web_search_enabled: bool,
     revision: AtomicU64,
     appends: Mutex<Vec<AppendSessionMessages>>,
 }
@@ -266,9 +299,15 @@ impl AgentState {
             trigger_session_message_id: Uuid::now_v7(),
             account_id: Uuid::now_v7(),
             provider,
+            web_search_enabled: true,
             revision: AtomicU64::new(1),
             appends: Mutex::new(Vec::new()),
         }
+    }
+
+    fn with_web_search_enabled(mut self, enabled: bool) -> Self {
+        self.web_search_enabled = enabled;
+        self
     }
 
     fn request(&self) -> TurnRequested {
@@ -300,7 +339,8 @@ impl AgentState {
                 },
                 "account_id": self.account_id,
                 "external_prompt": "Use Rust 2024 conventions.",
-                "is_replaced": false
+                "is_replaced": false,
+                "web_search_enabled": self.web_search_enabled
             })
             .as_object()
             .unwrap()
