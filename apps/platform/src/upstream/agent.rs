@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use agent_contracts::{
-    NewRunMessage, Run, RunAbort, RunEventPage, RunStatus, SessionMessage, SessionMessagePage,
+    HarnessRevision, NewRunMessage, Run, RunAbort, RunEventPage, RunStatus, SessionMessage,
+    SessionMessagePage,
 };
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
@@ -169,6 +170,7 @@ impl AgentClient {
     pub(crate) async fn list_harnesses(
         &self,
         cursor: Option<&str>,
+        enabled: Option<bool>,
     ) -> Result<AgentHarnessPage, AgentError> {
         let mut request = self
             .http
@@ -176,6 +178,9 @@ impl AgentClient {
             .query(&[("limit", HARNESS_PAGE_SIZE)]);
         if let Some(cursor) = cursor {
             request = request.query(&[("cursor", cursor)]);
+        }
+        if let Some(enabled) = enabled {
+            request = request.query(&[("enabled", enabled)]);
         }
         self.send_json(request).await
     }
@@ -185,6 +190,21 @@ impl AgentClient {
             self.http
                 .get(self.url_segments(&["v1", "harnesses", harness_id])?),
         )
+        .await
+    }
+
+    pub(crate) async fn get_harness_revision(
+        &self,
+        harness_id: &str,
+        revision_id: &str,
+    ) -> Result<HarnessRevision, AgentError> {
+        self.send_json(self.http.get(self.url_segments(&[
+            "v1",
+            "harnesses",
+            harness_id,
+            "revisions",
+            revision_id,
+        ])?))
         .await
     }
 

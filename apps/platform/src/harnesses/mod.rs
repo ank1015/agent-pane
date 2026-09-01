@@ -30,7 +30,7 @@ impl HarnessService {
         let mut seen_cursors = HashSet::new();
 
         loop {
-            let page = self.agent.list_harnesses(cursor.as_deref()).await?;
+            let page = self.agent.list_harnesses(cursor.as_deref(), None).await?;
             harnesses.extend(page.items.into_iter().map(HarnessSummary::from));
 
             match page.next_cursor {
@@ -167,6 +167,7 @@ mod tests {
             supported_reasoning_levels: ["low", "medium", "high", "xhigh", "max"]
                 .map(str::to_owned)
                 .to_vec(),
+            active_revision_id: Some("environment-v1".to_owned()),
             created_at: timestamp(),
             updated_at: timestamp(),
         }

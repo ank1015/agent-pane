@@ -13,11 +13,12 @@ pub(crate) struct AgentHarness {
     pub supported_providers: Vec<AgentHarnessProvider>,
     #[serde(default)]
     pub supported_reasoning_levels: Vec<String>,
+    pub active_revision_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct AgentHarnessProvider {
     pub provider_id: String,
     pub model_ids: Vec<String>,

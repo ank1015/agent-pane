@@ -22,7 +22,10 @@ use super::{
 struct ListQuery {
     limit: u32,
     cursor: Option<String>,
+    enabled: Option<bool>,
 }
+
+type HarnessListRequest = (String, u32, Option<String>, Option<bool>);
 
 #[tokio::test]
 async fn harness_detail_authenticates_and_encodes_the_harness_id() {
@@ -52,6 +55,40 @@ async fn harness_detail_authenticates_and_encodes_the_harness_id() {
 }
 
 #[tokio::test]
+async fn harness_revision_authenticates_and_encodes_both_ids() {
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+    let mock_agent = Router::new()
+        .route(
+            "/v1/harnesses/{harness_id}/revisions/{revision_id}",
+            get(capture_harness_revision),
+        )
+        .with_state(request_tx);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, mock_agent).await.unwrap();
+    });
+
+    let client = AgentClient::new(
+        format!("http://{address}").parse().unwrap(),
+        "platform-agent-control-token",
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    let revision = client
+        .get_harness_revision("environment", "environment-v1")
+        .await
+        .unwrap();
+    let (authorization, harness_id, revision_id) = request_rx.recv().await.unwrap();
+
+    assert_eq!(authorization, "Bearer platform-agent-control-token");
+    assert_eq!(harness_id, "environment");
+    assert_eq!(revision_id, "environment-v1");
+    assert_eq!(revision.harness_revision_id, "environment-v1");
+    assert_eq!(revision.config_schema.unwrap()["type"], "object");
+}
+
+#[tokio::test]
 async fn harness_list_authenticates_and_forwards_pagination() {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel();
     let mock_agent = Router::new()
@@ -69,12 +106,16 @@ async fn harness_list_authenticates_and_forwards_pagination() {
         Duration::from_secs(1),
     )
     .unwrap();
-    let page = client.list_harnesses(Some("next-page")).await.unwrap();
-    let (authorization, limit, cursor) = request_rx.recv().await.unwrap();
+    let page = client
+        .list_harnesses(Some("next-page"), Some(true))
+        .await
+        .unwrap();
+    let (authorization, limit, cursor, enabled) = request_rx.recv().await.unwrap();
 
     assert_eq!(authorization, "Bearer platform-agent-control-token");
     assert_eq!(limit, 100);
     assert_eq!(cursor.as_deref(), Some("next-page"));
+    assert_eq!(enabled, Some(true));
     assert_eq!(page.items.len(), 1);
     assert_eq!(page.items[0].harness_id, "pi");
     assert_eq!(page.items[0].display_name, "Pi");
@@ -316,7 +357,7 @@ async fn run_events_stream_and_abort_authenticate_and_forward_the_contract() {
 }
 
 async fn capture_harness_list(
-    State(request_tx): State<mpsc::UnboundedSender<(String, u32, Option<String>)>>,
+    State(request_tx): State<mpsc::UnboundedSender<HarnessListRequest>>,
     headers: HeaderMap,
     Query(query): Query<ListQuery>,
 ) -> Json<serde_json::Value> {
@@ -330,6 +371,7 @@ async fn capture_harness_list(
                 .to_owned(),
             query.limit,
             query.cursor,
+            query.enabled,
         ))
         .unwrap();
     Json(json!({
@@ -377,6 +419,28 @@ async fn capture_harness_detail(
         "active_revision_id": "environment-v1",
         "created_at": "2026-08-27T00:00:00Z",
         "updated_at": "2026-08-28T00:00:00Z"
+    }))
+}
+
+async fn capture_harness_revision(
+    State(request_tx): State<mpsc::UnboundedSender<(String, String, String)>>,
+    Path((harness_id, revision_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Json<serde_json::Value> {
+    request_tx
+        .send((authorization(&headers), harness_id, revision_id))
+        .unwrap();
+    Json(json!({
+        "harness_revision_id": "environment-v1",
+        "harness_id": "environment",
+        "revision": "1",
+        "contract_version": 1,
+        "status": "active",
+        "default_config": {},
+        "config_schema": {"type": "object"},
+        "first_activated_at": "2026-08-27T00:00:00Z",
+        "retired_at": null,
+        "created_at": "2026-08-27T00:00:00Z"
     }))
 }
 
