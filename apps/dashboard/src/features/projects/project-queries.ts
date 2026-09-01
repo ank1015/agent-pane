@@ -22,6 +22,7 @@ export type ProjectEnvironment = {
   name: string
   host_name: string
   machine_id?: string
+  workspace_root_id?: string
   path: string
   type: 'env' | 'template'
   snapshot_id?: string

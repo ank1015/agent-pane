@@ -265,6 +265,8 @@ pub struct ProjectEnvironment {
     pub host_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_id: Option<MachineId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root_id: Option<WorkspaceRootId>,
     pub path: String,
     #[serde(rename = "type")]
     pub environment_type: ProjectEnvironmentType,
@@ -332,6 +334,7 @@ mod tests {
             name: "Local project".to_owned(),
             host_name: "Workstation".to_owned(),
             machine_id: Some(MachineId::new("machine-1").unwrap()),
+            workspace_root_id: Some(WorkspaceRootId::new("workspace").unwrap()),
             path: "projects/example".to_owned(),
             environment_type: ProjectEnvironmentType::Env,
             snapshot_id: None,

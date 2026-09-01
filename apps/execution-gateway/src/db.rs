@@ -239,11 +239,11 @@ impl Database {
     ) -> Result<Vec<ProjectEnvironment>, DbError> {
         sqlx::query(
             "select configured.id, configured.name, configured.host_name, configured.machine_id,
-                    configured.path, configured.environment_type, configured.snapshot_id,
+                    configured.workspace_root_id, configured.path, configured.environment_type, configured.snapshot_id,
                     configured.setup_script, configured.provider, configured.created_at
              from (
                  select e.environment_id as id, e.name, m.name as host_name, e.machine_id,
-                        e.path, 'env'::text as environment_type, null::uuid as snapshot_id,
+                        e.workspace_root_id, e.path, 'env'::text as environment_type, null::uuid as snapshot_id,
                         null::text as setup_script, null::text as provider, e.created_at
                  from environments e
                  join machines m on m.machine_id = e.machine_id
@@ -254,7 +254,7 @@ impl Database {
                    )
                  union all
                  select t.id::text as id, t.name, a.name as host_name, null::text as machine_id,
-                        t.cwd as path, 'template'::text as environment_type, t.snapshot_id,
+                        null::text as workspace_root_id, t.cwd as path, 'template'::text as environment_type, t.snapshot_id,
                         t.creation_script as setup_script, a.provider, t.created_at
                  from sandbox_environment_templates t
                  join snapshots s on s.id = t.snapshot_id
@@ -483,6 +483,11 @@ fn project_environment_from_row(row: sqlx::postgres::PgRow) -> Result<ProjectEnv
         .map(MachineId::new)
         .transpose()
         .map_err(|error| DbError::Contract(error.to_string()))?;
+    let workspace_root_id = row
+        .try_get::<Option<String>, _>("workspace_root_id")?
+        .map(WorkspaceRootId::new)
+        .transpose()
+        .map_err(|error| DbError::Contract(error.to_string()))?;
     let path: String = row.try_get("path")?;
     let path = if environment_type == ProjectEnvironmentType::Template {
         let provider = row
@@ -505,6 +510,7 @@ fn project_environment_from_row(row: sqlx::postgres::PgRow) -> Result<ProjectEnv
         name: row.try_get("name")?,
         host_name: row.try_get("host_name")?,
         machine_id,
+        workspace_root_id,
         path,
         environment_type,
         snapshot_id: row.try_get("snapshot_id")?,
