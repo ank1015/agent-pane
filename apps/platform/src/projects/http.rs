@@ -48,6 +48,10 @@ pub(super) fn router(service: ProjectService) -> Router<AppState> {
             get(list_project_environments),
         )
         .route(
+            "/api/projects/{project_id}/bootstrap",
+            get(get_project_bootstrap),
+        )
+        .route(
             "/api/projects/{project_id}/harness-sessions",
             post(create_project_harness_session),
         )
@@ -99,6 +103,13 @@ async fn list_project_environments(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Vec<ProjectEnvironment>>, ApiError> {
     Ok(Json(state.service.list_environments(project_id).await?))
+}
+
+async fn get_project_bootstrap(
+    State(state): State<ProjectState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<super::model::ProjectBootstrap>, ApiError> {
+    Ok(Json(state.service.bootstrap(project_id).await?))
 }
 
 async fn create_project_harness_session(
