@@ -40,6 +40,13 @@ pub fn router(
     chatgpt_login: ChatGptLoginService,
     max_request_bytes: usize,
 ) -> Router {
+    let project_service = projects::ProjectService::new(
+        database.pool().clone(),
+        execution_gateway.clone(),
+        agent.clone(),
+        gateway.clone(),
+    );
+    project_service.spawn_activity_reconciler();
     let state = AppState {
         database: database.clone(),
         llm_gateway: gateway.clone(),
@@ -61,12 +68,7 @@ pub fn router(
             agent.clone(),
             gateway.clone(),
         )))
-        .merge(projects::router(projects::ProjectService::new(
-            database.pool().clone(),
-            execution_gateway,
-            agent,
-            gateway,
-        )))
+        .merge(projects::router(project_service))
         .layer(DefaultBodyLimit::max(max_request_bytes))
         .with_state(state)
 }

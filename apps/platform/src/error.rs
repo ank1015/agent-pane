@@ -78,19 +78,53 @@ impl IntoResponse for ApiError {
                 Json(ErrorResponse::new("project_not_found", "project not found")),
             )
                 .into_response(),
-            Self::Project(ProjectError::HarnessSessionNotFound) => (
+            Self::Project(ProjectError::SessionNotFound) => (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse::new(
-                    "harness_session_not_found",
-                    "project harness session not found",
+                    "session_not_found",
+                    "project session not found",
                 )),
             )
                 .into_response(),
-            Self::Project(ProjectError::HarnessRunNotFound) => (
+            Self::Project(ProjectError::RunNotFound) => (
                 StatusCode::NOT_FOUND,
                 Json(ErrorResponse::new(
-                    "harness_run_not_found",
-                    "project harness run not found",
+                    "run_not_found",
+                    "project session run not found",
+                )),
+            )
+                .into_response(),
+            Self::Project(ProjectError::EnvironmentNotFound(environment_id)) => (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new(
+                    "project_environment_not_found",
+                    format!("project environment {environment_id} was not found"),
+                )),
+            )
+                .into_response(),
+            Self::Project(ProjectError::RunAlreadyActive(run_id)) => (
+                StatusCode::CONFLICT,
+                Json(ErrorResponse::new(
+                    "session_run_active",
+                    format!("project session already has active run {run_id}"),
+                )),
+            )
+                .into_response(),
+            Self::Project(ProjectError::ActiveSessionCannotBeArchived(run_id)) => (
+                StatusCode::CONFLICT,
+                Json(ErrorResponse::new(
+                    "active_session_cannot_be_archived",
+                    format!(
+                        "active project session run {run_id} must finish before the session can be archived"
+                    ),
+                )),
+            )
+                .into_response(),
+            Self::Project(ProjectError::TooManyEnvironments) => (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new(
+                    "too_many_environments",
+                    "too many project environments were selected",
                 )),
             )
                 .into_response(),
@@ -110,9 +144,12 @@ impl IntoResponse for ApiError {
             Self::Project(
                 error @ (ProjectError::Database(_)
                 | ProjectError::InvalidSystemClock
-                | ProjectError::RequestSerialization(_)),
+                | ProjectError::RequestSerialization(_)
+                | ProjectError::InvalidAgentRevision
+                | ProjectError::InvalidAgentRunState
+                | ProjectError::InvalidStoredSessionRevision),
             ) => {
-                tracing::error!(%error, "project harness session operation failed");
+                tracing::error!(%error, "project session operation failed");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse::new(

@@ -1,17 +1,21 @@
 mod http;
 pub mod model;
 
-use std::collections::HashSet;
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use agent_contracts::{NewRunMessage, Run, RunEventPage, RunStatus, SessionMessagePage};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use execution_protocol::ProjectEnvironment;
 use llm_contracts::{
     ContentPart, Message, MessageId, TextContent, Timestamp, UserMessage, Validate as _,
 };
 use serde::Serialize;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::{PgPool, types::Json};
 use tokio::task::JoinError;
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -26,15 +30,20 @@ use crate::upstream::{
     llm_gateway::{LlmGatewayClient, LlmGatewayError},
 };
 use model::{
-    CreateProjectHarnessSessionRequest, CreateProjectHarnessSessionResponse, CreateProjectRequest,
-    Project, ProjectBootstrap, ProjectBootstrapHarness, ProjectBootstrapHarnessProvider,
-    ProjectBootstrapProviderAccount, ProjectHarnessSessionResponse,
-    StartProjectHarnessSessionRunRequest, StartProjectHarnessSessionRunResponse,
-    UpdateProjectRequest,
+    CreateProjectRequest, CreateProjectSessionRequest, CreateProjectSessionResponse, Project,
+    ProjectBootstrap, ProjectBootstrapHarness, ProjectBootstrapHarnessProvider,
+    ProjectBootstrapProviderAccount, ProjectSession, ProjectSessionResponse,
+    StartProjectSessionRunRequest, StartProjectSessionRunResponse, UpdateProjectRequest,
+    UpdateProjectSessionRequest,
 };
 
 const MAX_NAME_LENGTH: usize = 128;
 const MAX_AVATAR_LENGTH: usize = 800_000;
+const MAX_SESSION_TITLE_LENGTH: usize = 255;
+const DEFAULT_SESSION_TITLE_WORDS: usize = 8;
+const DEFAULT_SESSION_TITLE_LENGTH: usize = 80;
+const ACTIVITY_RECONCILE_INTERVAL: Duration = Duration::from_secs(5);
+const ACTIVITY_RECONCILE_BATCH_SIZE: i64 = 100;
 
 #[derive(Clone)]
 pub struct ProjectService {
@@ -177,20 +186,63 @@ impl ProjectService {
         Ok(resolved)
     }
 
-    async fn create_harness_session(
+    pub fn spawn_activity_reconciler(&self) {
+        let service = self.clone();
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!("project session activity reconciler requires a Tokio runtime");
+            return;
+        };
+        runtime.spawn(async move {
+            let mut interval = tokio::time::interval(ACTIVITY_RECONCILE_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                interval.tick().await;
+                if let Err(error) = service.reconcile_active_runs().await {
+                    tracing::warn!(%error, "could not reconcile active project sessions");
+                }
+            }
+        });
+    }
+
+    async fn list_sessions(&self, project_id: Uuid) -> Result<Vec<ProjectSession>, ProjectError> {
+        self.get(project_id).await?;
+        let rows = sqlx::query_as::<_, ProjectSessionRow>(
+            "select id, project_id, title, harness_id, harness_revision_id, harness_config, \
+                    web_search_enabled, active_run_id, current_revision, creation_state, \
+                    creation_error, created_at, accepted_at, last_activity_at, archived_at \
+             from project_sessions \
+             where project_id = $1 and archived_at is null \
+             order by last_activity_at desc, id desc",
+        )
+        .bind(project_id)
+        .fetch_all(&self.pool)
+        .await?;
+        self.sessions_from_rows(rows).await
+    }
+
+    async fn create_session(
         &self,
         project_id: Uuid,
         idempotency_key: &str,
-        request: &CreateProjectHarnessSessionRequest,
-    ) -> Result<CreateProjectHarnessSessionResponse, ProjectError> {
-        validate_harness_session_request(idempotency_key, request)?;
+        request: &CreateProjectSessionRequest,
+    ) -> Result<CreateProjectSessionResponse, ProjectError> {
+        validate_session_request(idempotency_key, request)?;
+        let environments = self
+            .resolve_environment_snapshots(project_id, &request.environment_ids)
+            .await?;
         let request_hash = request_hash(request)?;
+        let title = request
+            .title
+            .clone()
+            .unwrap_or_else(|| default_session_title(&request.prompt));
         let reserved = self
             .reserve_initial_run(
                 project_id,
                 idempotency_key,
                 &request.harness_id,
+                &title,
                 &request_hash,
+                &environments,
             )
             .await?;
         let message = user_message(
@@ -198,47 +250,67 @@ impl ProjectService {
             &request.prompt,
             &request.attachments,
         )?;
-        let mut session = self.agent.create_session(reserved.session_id).await?;
-        let accepted = self
-            .agent
-            .start_run(
-                reserved.session_id,
-                &AgentStartRun {
-                    run_id: reserved.run_id,
-                    input: NewRunMessage {
-                        session_message_id: reserved.trigger_message_id,
-                        message,
+
+        let accepted = async {
+            self.agent.create_session(reserved.session_id).await?;
+            self.agent
+                .start_run(
+                    reserved.session_id,
+                    &AgentStartRun {
+                        run_id: reserved.run_id,
+                        input: NewRunMessage {
+                            session_message_id: reserved.trigger_message_id,
+                            message,
+                        },
+                        harness: AgentHarnessSelection::ActiveRevision {
+                            harness_id: request.harness_id.clone(),
+                        },
+                        config_override: request.config_override.clone(),
+                        limits: AgentRunLimits {
+                            max_turns: request.limits.max_turns,
+                        },
+                        expected_session_revision: Some(0),
                     },
-                    harness: AgentHarnessSelection::ActiveRevision {
-                        harness_id: request.harness_id.clone(),
-                    },
-                    config_override: request.config_override.clone(),
-                    limits: AgentRunLimits {
-                        max_turns: request.limits.max_turns,
-                    },
-                    expected_session_revision: Some(0),
-                },
-            )
-            .await?;
-        session.current_revision = accepted.trigger_message.revision;
-        self.mark_session_and_run_accepted(reserved.session_id, reserved.run_id)
+                )
+                .await
+        }
+        .await;
+
+        let accepted = match accepted {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                self.mark_creation_failed(reserved.session_id, reserved.run_id, &error)
+                    .await?;
+                return Err(error.into());
+            }
+        };
+        self.mark_initial_run_accepted(
+            reserved.session_id,
+            &accepted.run,
+            accepted.trigger_message.revision,
+        )
+        .await?;
+        let session = self
+            .project_session(project_id, reserved.session_id)
             .await?;
 
-        Ok(CreateProjectHarnessSessionResponse {
+        Ok(CreateProjectSessionResponse {
             session,
             trigger_message: accepted.trigger_message,
             run: accepted.run,
         })
     }
 
-    async fn start_harness_session_run(
+    async fn start_session_run(
         &self,
         project_id: Uuid,
         session_id: Uuid,
         idempotency_key: &str,
-        request: &StartProjectHarnessSessionRunRequest,
-    ) -> Result<StartProjectHarnessSessionRunResponse, ProjectError> {
+        request: &StartProjectSessionRunRequest,
+    ) -> Result<StartProjectSessionRunResponse, ProjectError> {
         validate_start_run_request(idempotency_key, request)?;
+        self.reconcile_session_active_run(project_id, session_id)
+            .await?;
         let request_hash = request_hash(request)?;
         let reserved = self
             .reserve_follow_up_run(project_id, session_id, idempotency_key, &request_hash)
@@ -258,97 +330,151 @@ impl ProjectService {
                         session_message_id: reserved.trigger_message_id,
                         message,
                     },
-                    harness: AgentHarnessSelection::ActiveRevision {
-                        harness_id: reserved.harness_id,
+                    harness: AgentHarnessSelection::ExactRevision {
+                        harness_revision_id: reserved.harness_revision_id,
                     },
-                    config_override: request.config_override.clone(),
+                    config_override: reserved.harness_config,
                     limits: AgentRunLimits {
                         max_turns: request.limits.max_turns,
                     },
                     expected_session_revision: Some(request.expected_session_revision),
                 },
             )
-            .await?;
-        self.mark_run_accepted(reserved.run_id).await?;
+            .await;
+        let accepted = match accepted {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                self.mark_run_creation_failed(reserved.run_id, &error)
+                    .await?;
+                return Err(error.into());
+            }
+        };
+        self.mark_follow_up_run_accepted(
+            session_id,
+            &accepted.run,
+            accepted.trigger_message.revision,
+        )
+        .await?;
 
-        Ok(StartProjectHarnessSessionRunResponse {
+        Ok(StartProjectSessionRunResponse {
             trigger_message: accepted.trigger_message,
             run: accepted.run,
         })
     }
 
-    async fn get_harness_session(
+    async fn get_session(
         &self,
         project_id: Uuid,
         session_id: Uuid,
-    ) -> Result<ProjectHarnessSessionResponse, ProjectError> {
-        let mapped = self.mapped_harness_session(project_id, session_id).await?;
-        let (session, latest_run) = match mapped.latest_run_id {
+    ) -> Result<ProjectSessionResponse, ProjectError> {
+        self.reconcile_session_active_run(project_id, session_id)
+            .await?;
+        let mapped = self.mapped_session(project_id, session_id).await?;
+        let latest_run = match mapped.latest_run_id {
             Some(run_id) => {
-                let (session, run) = tokio::try_join!(
-                    self.agent.get_session(session_id),
-                    self.agent.get_run(run_id)
-                )?;
-                (session, Some(run))
+                let run = self.agent.get_run(run_id).await?;
+                self.persist_run_state(&run).await?;
+                Some(run)
             }
-            None => (self.agent.get_session(session_id).await?, None),
+            None => None,
         };
         let active_run = latest_run
             .as_ref()
-            .filter(|run| matches!(run.status, RunStatus::Active | RunStatus::Waiting))
+            .filter(|run| is_live_status(run.status))
             .cloned();
-        Ok(ProjectHarnessSessionResponse {
+        let session = self.project_session(project_id, session_id).await?;
+        Ok(ProjectSessionResponse {
             session,
-            harness_id: mapped.harness_id,
             latest_run,
             active_run,
         })
     }
 
-    async fn list_harness_session_messages(
+    async fn update_session(
+        &self,
+        project_id: Uuid,
+        session_id: Uuid,
+        request: UpdateProjectSessionRequest,
+    ) -> Result<ProjectSession, ProjectError> {
+        let mut transaction = self.pool.begin().await?;
+        let active_run_id = sqlx::query_scalar::<_, Option<Uuid>>(
+            "select active_run_id \
+             from project_sessions \
+             where project_id = $1 and id = $2 \
+             for update",
+        )
+        .bind(project_id)
+        .bind(session_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(ProjectError::SessionNotFound)?;
+        if request.archived {
+            if let Some(run_id) = active_run_id {
+                return Err(ProjectError::ActiveSessionCannotBeArchived(run_id));
+            }
+        }
+        sqlx::query(
+            "update project_sessions \
+             set archived_at = case when $3 then coalesce(archived_at, now()) else null end \
+             where project_id = $1 and id = $2",
+        )
+        .bind(project_id)
+        .bind(session_id)
+        .bind(request.archived)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        self.project_session(project_id, session_id).await
+    }
+
+    async fn list_session_messages(
         &self,
         project_id: Uuid,
         session_id: Uuid,
         query: &AgentSessionMessageListQuery,
     ) -> Result<SessionMessagePage, ProjectError> {
-        self.mapped_harness_session(project_id, session_id).await?;
+        self.mapped_session(project_id, session_id).await?;
         Ok(self.agent.list_session_messages(session_id, query).await?)
     }
 
-    async fn list_harness_session_runs(
+    async fn list_session_runs(
         &self,
         project_id: Uuid,
         session_id: Uuid,
         query: &AgentSessionRunListQuery,
     ) -> Result<AgentSessionRunPage, ProjectError> {
-        self.mapped_harness_session(project_id, session_id).await?;
-        Ok(self.agent.list_session_runs(session_id, query).await?)
+        self.mapped_session(project_id, session_id).await?;
+        let page = self.agent.list_session_runs(session_id, query).await?;
+        for run in &page.items {
+            self.persist_run_summary(run).await?;
+        }
+        Ok(page)
     }
 
-    async fn get_harness_run(
+    async fn get_run(
         &self,
         project_id: Uuid,
         session_id: Uuid,
         run_id: Uuid,
     ) -> Result<Run, ProjectError> {
-        self.mapped_harness_run(project_id, session_id, run_id)
-            .await?;
-        Ok(self.agent.get_run(run_id).await?)
+        self.mapped_run(project_id, session_id, run_id).await?;
+        let run = self.agent.get_run(run_id).await?;
+        self.persist_run_state(&run).await?;
+        Ok(run)
     }
 
-    async fn list_harness_run_events(
+    async fn list_run_events(
         &self,
         project_id: Uuid,
         session_id: Uuid,
         run_id: Uuid,
         query: &AgentRunEventListQuery,
     ) -> Result<RunEventPage, ProjectError> {
-        self.mapped_harness_run(project_id, session_id, run_id)
-            .await?;
+        self.mapped_run(project_id, session_id, run_id).await?;
         Ok(self.agent.list_run_events(run_id, query).await?)
     }
 
-    async fn stream_harness_run_events(
+    async fn stream_run_events(
         &self,
         project_id: Uuid,
         session_id: Uuid,
@@ -356,52 +482,78 @@ impl ProjectService {
         query: &AgentRunEventStreamQuery,
         last_event_id: Option<&str>,
     ) -> Result<reqwest::Response, ProjectError> {
-        self.mapped_harness_run(project_id, session_id, run_id)
-            .await?;
+        self.mapped_run(project_id, session_id, run_id).await?;
         Ok(self
             .agent
             .stream_run_events(run_id, query, last_event_id)
             .await?)
     }
 
-    async fn abort_harness_run(
+    async fn abort_run(
         &self,
         project_id: Uuid,
         session_id: Uuid,
         run_id: Uuid,
         request: &AgentRunAbortRequest,
     ) -> Result<AgentRunAbortResult, ProjectError> {
-        self.mapped_harness_run(project_id, session_id, run_id)
-            .await?;
-        Ok(self.agent.abort_run(run_id, request).await?)
+        self.mapped_run(project_id, session_id, run_id).await?;
+        let result = self.agent.abort_run(run_id, request).await?;
+        self.persist_run_state(&result.run).await?;
+        Ok(result)
     }
 
-    async fn mapped_harness_session(
+    async fn resolve_environment_snapshots(
+        &self,
+        project_id: Uuid,
+        environment_ids: &[String],
+    ) -> Result<Vec<ProjectEnvironment>, ProjectError> {
+        if environment_ids.is_empty() {
+            self.get(project_id).await?;
+            return Ok(Vec::new());
+        }
+        let available = self.gateway.list_project_environments(project_id).await?;
+        let by_id = available
+            .into_iter()
+            .map(|environment| (environment.id.clone(), environment))
+            .collect::<HashMap<_, _>>();
+        environment_ids
+            .iter()
+            .map(|environment_id| {
+                by_id
+                    .get(environment_id)
+                    .cloned()
+                    .ok_or_else(|| ProjectError::EnvironmentNotFound(environment_id.clone()))
+            })
+            .collect()
+    }
+
+    async fn mapped_session(
         &self,
         project_id: Uuid,
         session_id: Uuid,
-    ) -> Result<MappedHarnessSessionRow, ProjectError> {
-        sqlx::query_as::<_, MappedHarnessSessionRow>(
-            "select session.harness_id, latest_run.run_id as latest_run_id \
-             from project_harness_sessions session \
+    ) -> Result<MappedSessionRow, ProjectError> {
+        sqlx::query_as::<_, MappedSessionRow>(
+            "select latest_run.run_id as latest_run_id \
+             from project_sessions session \
              left join lateral ( \
                  select run.run_id \
-                 from project_harness_runs run \
-                 where run.session_id = session.session_id \
+                 from project_session_runs run \
+                 where run.session_id = session.id \
                    and run.creation_state = 'accepted' \
                  order by run.run_sequence desc \
                  limit 1 \
              ) latest_run on true \
-             where session.project_id = $1 and session.session_id = $2",
+             where session.project_id = $1 and session.id = $2 \
+               and session.creation_state = 'accepted'",
         )
         .bind(project_id)
         .bind(session_id)
         .fetch_optional(&self.pool)
         .await?
-        .ok_or(ProjectError::HarnessSessionNotFound)
+        .ok_or(ProjectError::SessionNotFound)
     }
 
-    async fn mapped_harness_run(
+    async fn mapped_run(
         &self,
         project_id: Uuid,
         session_id: Uuid,
@@ -410,11 +562,10 @@ impl ProjectService {
         let exists = sqlx::query_scalar::<_, bool>(
             "select exists( \
                  select 1 \
-                 from project_harness_runs run \
-                 join project_harness_sessions session \
-                   on session.session_id = run.session_id \
+                 from project_session_runs run \
+                 join project_sessions session on session.id = run.session_id \
                  where session.project_id = $1 \
-                   and session.session_id = $2 \
+                   and session.id = $2 \
                    and run.run_id = $3 \
                    and session.creation_state = 'accepted' \
                    and run.creation_state = 'accepted' \
@@ -426,7 +577,7 @@ impl ProjectService {
         .fetch_one(&self.pool)
         .await?;
         if !exists {
-            return Err(ProjectError::HarnessRunNotFound);
+            return Err(ProjectError::RunNotFound);
         }
         Ok(())
     }
@@ -436,7 +587,9 @@ impl ProjectService {
         project_id: Uuid,
         idempotency_key: &str,
         harness_id: &str,
+        title: &str,
         request_hash: &[u8; 32],
+        environments: &[ProjectEnvironment],
     ) -> Result<ReservedInitialRun, ProjectError> {
         let mut transaction = self.pool.begin().await?;
         let project_exists = sqlx::query_scalar::<_, bool>(
@@ -451,13 +604,14 @@ impl ProjectService {
 
         let candidate_session_id = Uuid::now_v7();
         sqlx::query(
-            "insert into project_harness_sessions \
-             (session_id, project_id, harness_id, idempotency_key, request_hash) \
-             values ($1, $2, $3, $4, $5) \
+            "insert into project_sessions \
+             (id, project_id, title, harness_id, idempotency_key, request_hash, last_activity_at) \
+             values ($1, $2, $3, $4, $5, $6, now()) \
              on conflict (project_id, idempotency_key) do nothing",
         )
         .bind(candidate_session_id)
         .bind(project_id)
+        .bind(title)
         .bind(harness_id)
         .bind(idempotency_key)
         .bind(request_hash.as_slice())
@@ -465,9 +619,10 @@ impl ProjectService {
         .await?;
 
         let session = sqlx::query_as::<_, ReservedSessionRow>(
-            "select session_id, request_hash \
-             from project_harness_sessions \
-             where project_id = $1 and idempotency_key = $2",
+            "select id as session_id, request_hash \
+             from project_sessions \
+             where project_id = $1 and idempotency_key = $2 \
+             for update",
         )
         .bind(project_id)
         .bind(idempotency_key)
@@ -477,10 +632,26 @@ impl ProjectService {
             return Err(ProjectError::IdempotencyConflict);
         }
 
+        if session.session_id == candidate_session_id {
+            for (position, environment) in environments.iter().enumerate() {
+                sqlx::query(
+                    "insert into project_session_environment_bindings \
+                     (session_id, position, environment_id, environment_snapshot) \
+                     values ($1, $2, $3, $4)",
+                )
+                .bind(session.session_id)
+                .bind(i32::try_from(position).map_err(|_| ProjectError::TooManyEnvironments)?)
+                .bind(&environment.id)
+                .bind(Json(environment))
+                .execute(&mut *transaction)
+                .await?;
+            }
+        }
+
         let candidate_run_id = Uuid::now_v7();
         let candidate_message_id = Uuid::now_v7();
         sqlx::query(
-            "insert into project_harness_runs \
+            "insert into project_session_runs \
              (run_id, session_id, trigger_message_id, run_sequence, idempotency_key, request_hash) \
              values ($1, $2, $3, 1, $4, $5) \
              on conflict (session_id, run_sequence) do nothing",
@@ -494,11 +665,27 @@ impl ProjectService {
         .await?;
         let run = sqlx::query_as::<_, ReservedRunRow>(
             "select run_id, trigger_message_id \
-             from project_harness_runs \
+             from project_session_runs \
              where session_id = $1 and run_sequence = 1",
         )
         .bind(session.session_id)
         .fetch_one(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "update project_sessions \
+             set creation_state = 'pending', accepted_at = null, creation_error = null \
+             where id = $1 and creation_state = 'failed'",
+        )
+        .bind(session.session_id)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "update project_session_runs \
+             set creation_state = 'pending', accepted_at = null, creation_error = null \
+             where run_id = $1 and creation_state = 'failed'",
+        )
+        .bind(run.run_id)
+        .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
 
@@ -517,21 +704,21 @@ impl ProjectService {
         request_hash: &[u8; 32],
     ) -> Result<ReservedFollowUpRun, ProjectError> {
         let mut transaction = self.pool.begin().await?;
-        let harness_id = sqlx::query_scalar::<_, String>(
-            "select harness_id \
-             from project_harness_sessions \
-             where project_id = $1 and session_id = $2 and creation_state = 'accepted' \
+        let session = sqlx::query_as::<_, FixedSessionConfigRow>(
+            "select harness_revision_id, harness_config, active_run_id \
+             from project_sessions \
+             where project_id = $1 and id = $2 and creation_state = 'accepted' \
              for update",
         )
         .bind(project_id)
         .bind(session_id)
         .fetch_optional(&mut *transaction)
         .await?
-        .ok_or(ProjectError::HarnessSessionNotFound)?;
+        .ok_or(ProjectError::SessionNotFound)?;
 
         if let Some(existing) = sqlx::query_as::<_, ReservedIdempotentRunRow>(
             "select run_id, trigger_message_id, request_hash \
-             from project_harness_runs \
+             from project_session_runs \
              where session_id = $1 and idempotency_key = $2",
         )
         .bind(session_id)
@@ -544,15 +731,19 @@ impl ProjectService {
             }
             transaction.commit().await?;
             return Ok(ReservedFollowUpRun {
-                harness_id,
+                harness_revision_id: session.harness_revision_id,
+                harness_config: session.harness_config.0,
                 run_id: existing.run_id,
                 trigger_message_id: existing.trigger_message_id,
             });
         }
+        if let Some(active_run_id) = session.active_run_id {
+            return Err(ProjectError::RunAlreadyActive(active_run_id));
+        }
 
         let run_sequence = sqlx::query_scalar::<_, i32>(
             "select coalesce(max(run_sequence), 0) + 1 \
-             from project_harness_runs \
+             from project_session_runs \
              where session_id = $1",
         )
         .bind(session_id)
@@ -561,7 +752,7 @@ impl ProjectService {
         let run_id = Uuid::now_v7();
         let trigger_message_id = Uuid::now_v7();
         sqlx::query(
-            "insert into project_harness_runs \
+            "insert into project_session_runs \
              (run_id, session_id, trigger_message_id, run_sequence, idempotency_key, request_hash) \
              values ($1, $2, $3, $4, $5, $6)",
         )
@@ -576,36 +767,311 @@ impl ProjectService {
         transaction.commit().await?;
 
         Ok(ReservedFollowUpRun {
-            harness_id,
+            harness_revision_id: session.harness_revision_id,
+            harness_config: session.harness_config.0,
             run_id,
             trigger_message_id,
         })
     }
 
-    async fn mark_session_and_run_accepted(
+    async fn mark_initial_run_accepted(
         &self,
         session_id: Uuid,
-        run_id: Uuid,
+        run: &Run,
+        current_revision: u64,
     ) -> Result<(), ProjectError> {
         let mut transaction = self.pool.begin().await?;
+        let web_search_enabled = run
+            .resolved_config
+            .get("web_search_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
         sqlx::query(
-            "update project_harness_sessions \
-             set creation_state = 'accepted', accepted_at = coalesce(accepted_at, now()) \
-             where session_id = $1",
+            "update project_sessions \
+             set harness_revision_id = $2, harness_config = $3, web_search_enabled = $4, \
+                 current_revision = greatest(current_revision, $5), \
+                 creation_state = 'accepted', creation_error = null, \
+                 accepted_at = coalesce(accepted_at, now()), \
+                 last_activity_at = greatest(last_activity_at, $8), \
+                 activity_checked_at = case \
+                     when $6 and (active_run_id is null or active_run_id = $7) then null \
+                     when not $6 and active_run_id = $7 then now() \
+                     else activity_checked_at \
+                 end, \
+                 active_run_id = case \
+                     when $6 and (active_run_id is null or active_run_id = $7) then $7 \
+                     when not $6 and active_run_id = $7 then null \
+                     else active_run_id \
+                 end \
+             where id = $1",
         )
         .bind(session_id)
+        .bind(&run.harness_revision_id)
+        .bind(Json(&run.resolved_config))
+        .bind(web_search_enabled)
+        .bind(i64::try_from(current_revision).map_err(|_| ProjectError::InvalidAgentRevision)?)
+        .bind(is_live_status(run.status))
+        .bind(run.run_id)
+        .bind(run.activated_at)
         .execute(&mut *transaction)
         .await?;
-        mark_run_accepted_in(&mut transaction, run_id).await?;
+        persist_run_state_in(&mut transaction, run).await?;
         transaction.commit().await?;
         Ok(())
     }
 
-    async fn mark_run_accepted(&self, run_id: Uuid) -> Result<(), ProjectError> {
+    async fn mark_follow_up_run_accepted(
+        &self,
+        session_id: Uuid,
+        run: &Run,
+        current_revision: u64,
+    ) -> Result<(), ProjectError> {
         let mut transaction = self.pool.begin().await?;
-        mark_run_accepted_in(&mut transaction, run_id).await?;
+        persist_run_state_in(&mut transaction, run).await?;
+        sqlx::query(
+            "update project_sessions \
+             set current_revision = greatest(current_revision, $2), \
+                 last_activity_at = greatest(last_activity_at, $5), \
+                 activity_checked_at = case \
+                     when $3 and (active_run_id is null or active_run_id = $4) then null \
+                     when not $3 and active_run_id = $4 then now() \
+                     else activity_checked_at \
+                 end, \
+                 active_run_id = case \
+                     when $3 and (active_run_id is null or active_run_id = $4) then $4 \
+                     when not $3 and active_run_id = $4 then null \
+                     else active_run_id \
+                 end \
+             where id = $1",
+        )
+        .bind(session_id)
+        .bind(i64::try_from(current_revision).map_err(|_| ProjectError::InvalidAgentRevision)?)
+        .bind(is_live_status(run.status))
+        .bind(run.run_id)
+        .bind(run.activated_at)
+        .execute(&mut *transaction)
+        .await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    async fn mark_creation_failed(
+        &self,
+        session_id: Uuid,
+        run_id: Uuid,
+        error: &AgentError,
+    ) -> Result<(), ProjectError> {
+        let failure = Json(agent_error_snapshot(error));
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
+            "update project_sessions \
+             set creation_state = 'failed', creation_error = $2, accepted_at = null, \
+                 active_run_id = null, last_activity_at = now() \
+             where id = $1 and creation_state <> 'accepted'",
+        )
+        .bind(session_id)
+        .bind(&failure)
+        .execute(&mut *transaction)
+        .await?;
+        sqlx::query(
+            "update project_session_runs \
+             set creation_state = 'failed', creation_error = $2, accepted_at = null \
+             where run_id = $1 and creation_state <> 'accepted'",
+        )
+        .bind(run_id)
+        .bind(&failure)
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    async fn mark_run_creation_failed(
+        &self,
+        run_id: Uuid,
+        error: &AgentError,
+    ) -> Result<(), ProjectError> {
+        sqlx::query(
+            "update project_session_runs \
+             set creation_state = 'failed', creation_error = $2, accepted_at = null \
+             where run_id = $1 and creation_state <> 'accepted'",
+        )
+        .bind(run_id)
+        .bind(Json(agent_error_snapshot(error)))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn reconcile_active_runs(&self) -> Result<(), ProjectError> {
+        let run_ids = sqlx::query_scalar::<_, Uuid>(
+            "select active_run_id \
+             from project_sessions \
+             where active_run_id is not null \
+             order by activity_checked_at asc nulls first, active_run_id \
+             limit $1",
+        )
+        .bind(ACTIVITY_RECONCILE_BATCH_SIZE)
+        .fetch_all(&self.pool)
+        .await?;
+        for run_id in run_ids {
+            match self.agent.get_run(run_id).await {
+                Ok(run) => self.persist_run_state(&run).await?,
+                Err(error) => {
+                    sqlx::query(
+                        "update project_sessions set activity_checked_at = now() \
+                         where active_run_id = $1",
+                    )
+                    .bind(run_id)
+                    .execute(&self.pool)
+                    .await?;
+                    tracing::warn!(%run_id, %error, "could not reconcile project run");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn reconcile_session_active_run(
+        &self,
+        project_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<(), ProjectError> {
+        let active_run_id = sqlx::query_scalar::<_, Option<Uuid>>(
+            "select active_run_id from project_sessions where project_id = $1 and id = $2",
+        )
+        .bind(project_id)
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(ProjectError::SessionNotFound)?;
+        if let Some(run_id) = active_run_id {
+            let run = self.agent.get_run(run_id).await?;
+            self.persist_run_state(&run).await?;
+        }
+        Ok(())
+    }
+
+    async fn persist_run_state(&self, run: &Run) -> Result<(), ProjectError> {
+        let mut transaction = self.pool.begin().await?;
+        persist_run_state_in(&mut transaction, run).await?;
+        transaction.commit().await?;
+        if !is_live_status(run.status) {
+            if let Err(error) = self.sync_session_revision(run.session_id).await {
+                tracing::warn!(
+                    session_id = %run.session_id,
+                    %error,
+                    "could not refresh the completed project session revision"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn sync_session_revision(&self, session_id: Uuid) -> Result<(), ProjectError> {
+        let agent_session = self.agent.get_session(session_id).await?;
+        sqlx::query(
+            "update project_sessions \
+             set current_revision = greatest(current_revision, $2) \
+             where id = $1",
+        )
+        .bind(session_id)
+        .bind(
+            i64::try_from(agent_session.current_revision)
+                .map_err(|_| ProjectError::InvalidAgentRevision)?,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn persist_run_summary(
+        &self,
+        run: &crate::upstream::agent::AgentSessionRunSummary,
+    ) -> Result<(), ProjectError> {
+        sqlx::query(
+            "update project_session_runs \
+             set status = $2, current_turn = $3, max_turns = $4, state_version = $5, \
+                 failure = $6, activated_at = $7, finished_at = $8 \
+             where run_id = $1",
+        )
+        .bind(run.run_id)
+        .bind(run.status.as_db())
+        .bind(i32::try_from(run.current_turn).map_err(|_| ProjectError::InvalidAgentRunState)?)
+        .bind(i32::try_from(run.max_turns).map_err(|_| ProjectError::InvalidAgentRunState)?)
+        .bind(i64::try_from(run.state_version).map_err(|_| ProjectError::InvalidAgentRunState)?)
+        .bind(run.failure.as_ref().map(Json))
+        .bind(run.activated_at)
+        .bind(run.finished_at)
+        .execute(&self.pool)
+        .await?;
+        if !is_live_status(run.status) {
+            sqlx::query(
+                "update project_sessions \
+                 set active_run_id = null, last_activity_at = coalesce($2, now()), \
+                     activity_checked_at = now() \
+                 where id = $1 and active_run_id = $3",
+            )
+            .bind(run.session_id)
+            .bind(run.finished_at)
+            .bind(run.run_id)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn project_session(
+        &self,
+        project_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<ProjectSession, ProjectError> {
+        let row = sqlx::query_as::<_, ProjectSessionRow>(
+            "select id, project_id, title, harness_id, harness_revision_id, harness_config, \
+                    web_search_enabled, active_run_id, current_revision, creation_state, \
+                    creation_error, created_at, accepted_at, last_activity_at, archived_at \
+             from project_sessions where project_id = $1 and id = $2",
+        )
+        .bind(project_id)
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(ProjectError::SessionNotFound)?;
+        let mut sessions = self.sessions_from_rows(vec![row]).await?;
+        sessions.pop().ok_or(ProjectError::SessionNotFound)
+    }
+
+    async fn sessions_from_rows(
+        &self,
+        rows: Vec<ProjectSessionRow>,
+    ) -> Result<Vec<ProjectSession>, ProjectError> {
+        let session_ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
+        let bindings = if session_ids.is_empty() {
+            Vec::new()
+        } else {
+            sqlx::query_as::<_, EnvironmentBindingRow>(
+                "select session_id, environment_snapshot \
+                 from project_session_environment_bindings \
+                 where session_id = any($1) \
+                 order by session_id, position",
+            )
+            .bind(&session_ids)
+            .fetch_all(&self.pool)
+            .await?
+        };
+        let mut environments = HashMap::<Uuid, Vec<ProjectEnvironment>>::new();
+        for binding in bindings {
+            environments
+                .entry(binding.session_id)
+                .or_default()
+                .push(binding.environment_snapshot.0);
+        }
+        rows.into_iter()
+            .map(|row| {
+                let row_environments = environments.remove(&row.id).unwrap_or_default();
+                row.into_project_session(row_environments)
+            })
+            .collect()
     }
 
     async fn create(&self, request: &CreateProjectRequest) -> Result<Project, ProjectError> {
@@ -677,8 +1143,7 @@ struct ReservedSessionRow {
 }
 
 #[derive(sqlx::FromRow)]
-struct MappedHarnessSessionRow {
-    harness_id: String,
+struct MappedSessionRow {
     latest_run_id: Option<Uuid>,
 }
 
@@ -695,6 +1160,67 @@ struct ReservedIdempotentRunRow {
     request_hash: Vec<u8>,
 }
 
+#[derive(sqlx::FromRow)]
+struct FixedSessionConfigRow {
+    harness_revision_id: String,
+    harness_config: Json<llm_contracts::JsonObject>,
+    active_run_id: Option<Uuid>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ProjectSessionRow {
+    id: Uuid,
+    project_id: Uuid,
+    title: String,
+    harness_id: String,
+    harness_revision_id: Option<String>,
+    harness_config: Json<llm_contracts::JsonObject>,
+    web_search_enabled: bool,
+    active_run_id: Option<Uuid>,
+    current_revision: i64,
+    creation_state: String,
+    creation_error: Option<Json<Value>>,
+    created_at: DateTime<Utc>,
+    accepted_at: Option<DateTime<Utc>>,
+    last_activity_at: DateTime<Utc>,
+    archived_at: Option<DateTime<Utc>>,
+}
+
+impl ProjectSessionRow {
+    fn into_project_session(
+        self,
+        environments: Vec<ProjectEnvironment>,
+    ) -> Result<ProjectSession, ProjectError> {
+        let current_revision = u64::try_from(self.current_revision)
+            .map_err(|_| ProjectError::InvalidStoredSessionRevision)?;
+        Ok(ProjectSession {
+            id: self.id,
+            project_id: self.project_id,
+            title: self.title,
+            harness_id: self.harness_id,
+            harness_revision_id: self.harness_revision_id,
+            harness_config: self.harness_config.0,
+            web_search_enabled: self.web_search_enabled,
+            environments,
+            active_run_id: self.active_run_id,
+            is_active: self.active_run_id.is_some(),
+            current_revision,
+            creation_state: self.creation_state,
+            creation_error: self.creation_error.map(|value| value.0),
+            created_at: self.created_at,
+            accepted_at: self.accepted_at,
+            last_activity_at: self.last_activity_at,
+            archived_at: self.archived_at,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct EnvironmentBindingRow {
+    session_id: Uuid,
+    environment_snapshot: Json<ProjectEnvironment>,
+}
+
 struct ReservedInitialRun {
     session_id: Uuid,
     run_id: Uuid,
@@ -702,14 +1228,15 @@ struct ReservedInitialRun {
 }
 
 struct ReservedFollowUpRun {
-    harness_id: String,
+    harness_revision_id: String,
+    harness_config: llm_contracts::JsonObject,
     run_id: Uuid,
     trigger_message_id: Uuid,
 }
 
-fn validate_harness_session_request(
+fn validate_session_request(
     idempotency_key: &str,
-    request: &CreateProjectHarnessSessionRequest,
+    request: &CreateProjectSessionRequest,
 ) -> Result<(), ProjectError> {
     validate_idempotency_key(idempotency_key)?;
     if request.harness_id.is_empty()
@@ -720,12 +1247,31 @@ fn validate_harness_session_request(
             "harness_id must be between 1 and 255 characters and have no surrounding whitespace",
         ));
     }
+    if let Some(title) = request.title.as_deref() {
+        validate_session_title(title)?;
+    }
+    let mut environment_ids = HashSet::new();
+    for environment_id in &request.environment_ids {
+        if environment_id.is_empty()
+            || environment_id != environment_id.trim()
+            || environment_id.chars().count() > 255
+        {
+            return Err(ProjectError::InvalidRequest(
+                "environment_ids must contain non-empty, trimmed values up to 255 characters",
+            ));
+        }
+        if !environment_ids.insert(environment_id) {
+            return Err(ProjectError::InvalidRequest(
+                "environment_ids must not contain duplicates",
+            ));
+        }
+    }
     validate_run_input(&request.prompt, &request.attachments, request.limits)
 }
 
 fn validate_start_run_request(
     idempotency_key: &str,
-    request: &StartProjectHarnessSessionRunRequest,
+    request: &StartProjectSessionRunRequest,
 ) -> Result<(), ProjectError> {
     validate_idempotency_key(idempotency_key)?;
     validate_run_input(&request.prompt, &request.attachments, request.limits)
@@ -746,7 +1292,7 @@ fn validate_idempotency_key(idempotency_key: &str) -> Result<(), ProjectError> {
 fn validate_run_input(
     prompt: &str,
     attachments: &[llm_contracts::ImageContent],
-    limits: model::ProjectHarnessRunLimits,
+    limits: model::ProjectRunLimits,
 ) -> Result<(), ProjectError> {
     if prompt.trim().is_empty() && attachments.is_empty() {
         return Err(ProjectError::InvalidRequest(
@@ -761,24 +1307,102 @@ fn validate_run_input(
     Ok(())
 }
 
+fn validate_session_title(title: &str) -> Result<(), ProjectError> {
+    if title.is_empty() || title != title.trim() || title.chars().count() > MAX_SESSION_TITLE_LENGTH
+    {
+        return Err(ProjectError::InvalidRequest(
+            "title must be between 1 and 255 characters and have no surrounding whitespace",
+        ));
+    }
+    Ok(())
+}
+
+fn default_session_title(prompt: &str) -> String {
+    let line = prompt
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(str::trim);
+    let Some(line) = line else {
+        return "New session".to_owned();
+    };
+    line.split_whitespace()
+        .take(DEFAULT_SESSION_TITLE_WORDS)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(DEFAULT_SESSION_TITLE_LENGTH)
+        .collect()
+}
+
 fn request_hash<T: Serialize>(request: &T) -> Result<[u8; 32], ProjectError> {
     let bytes = serde_json::to_vec(request).map_err(ProjectError::RequestSerialization)?;
     Ok(Sha256::digest(bytes).into())
 }
 
-async fn mark_run_accepted_in(
+async fn persist_run_state_in(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    run_id: Uuid,
+    run: &Run,
 ) -> Result<(), ProjectError> {
     sqlx::query(
-        "update project_harness_runs \
-         set creation_state = 'accepted', accepted_at = coalesce(accepted_at, now()) \
+        "update project_session_runs \
+         set creation_state = 'accepted', creation_error = null, \
+             accepted_at = coalesce(accepted_at, now()), status = $2, \
+             current_turn = $3, max_turns = $4, state_version = $5, failure = $6, \
+             activated_at = $7, finished_at = $8 \
          where run_id = $1",
     )
-    .bind(run_id)
+    .bind(run.run_id)
+    .bind(run.status.as_db())
+    .bind(i32::try_from(run.current_turn).map_err(|_| ProjectError::InvalidAgentRunState)?)
+    .bind(i32::try_from(run.max_turns).map_err(|_| ProjectError::InvalidAgentRunState)?)
+    .bind(i64::try_from(run.state_version).map_err(|_| ProjectError::InvalidAgentRunState)?)
+    .bind(run.failure.as_ref().map(Json))
+    .bind(run.activated_at)
+    .bind(run.finished_at)
     .execute(&mut **transaction)
     .await?;
+    if is_live_status(run.status) {
+        sqlx::query(
+            "update project_sessions \
+             set active_run_id = $2, activity_checked_at = now() \
+             where id = $1 and (active_run_id is null or active_run_id = $2)",
+        )
+        .bind(run.session_id)
+        .bind(run.run_id)
+        .execute(&mut **transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            "update project_sessions \
+             set active_run_id = null, last_activity_at = coalesce($2, now()), \
+                 activity_checked_at = now() \
+             where id = $1 and active_run_id = $3",
+        )
+        .bind(run.session_id)
+        .bind(run.finished_at)
+        .bind(run.run_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
     Ok(())
+}
+
+fn is_live_status(status: RunStatus) -> bool {
+    matches!(status, RunStatus::Active | RunStatus::Waiting)
+}
+
+fn agent_error_snapshot(error: &AgentError) -> Value {
+    match error {
+        AgentError::Rejected { status, body } => json!({
+            "code": "agent_rejected",
+            "status": status.as_u16(),
+            "details": body,
+        }),
+        _ => json!({
+            "code": "agent_unavailable",
+            "message": error.to_string(),
+        }),
+    }
 }
 
 fn user_message(
@@ -838,10 +1462,18 @@ pub enum ProjectError {
     InvalidRequest(&'static str),
     #[error("project not found")]
     NotFound,
-    #[error("project harness session not found")]
-    HarnessSessionNotFound,
-    #[error("project harness run not found")]
-    HarnessRunNotFound,
+    #[error("project session not found")]
+    SessionNotFound,
+    #[error("project session run not found")]
+    RunNotFound,
+    #[error("project session already has active run {0}")]
+    RunAlreadyActive(Uuid),
+    #[error("active project session run {0} must finish before the session can be archived")]
+    ActiveSessionCannotBeArchived(Uuid),
+    #[error("project environment {0} was not found")]
+    EnvironmentNotFound(String),
+    #[error("too many project environments were selected")]
+    TooManyEnvironments,
     #[error("the Idempotency-Key is already associated with a different request")]
     IdempotencyConflict,
     #[error("invalid harness session message: {0}")]
@@ -850,6 +1482,12 @@ pub enum ProjectError {
     InvalidHarnessMetadata(String),
     #[error("the system clock is before the Unix epoch")]
     InvalidSystemClock,
+    #[error("Agent returned an invalid session revision")]
+    InvalidAgentRevision,
+    #[error("Agent returned invalid run counters")]
+    InvalidAgentRunState,
+    #[error("the stored project session revision is invalid")]
+    InvalidStoredSessionRevision,
     #[error("could not serialize the harness session request")]
     RequestSerialization(#[source] serde_json::Error),
     #[error(transparent)]
@@ -876,13 +1514,13 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        ProjectError, ProjectService,
+        ProjectError, ProjectService, default_session_title,
         model::{
-            CreateProjectHarnessSessionRequest, CreateProjectRequest,
-            StartProjectHarnessSessionRunRequest, UpdateProjectRequest,
+            CreateProjectRequest, CreateProjectSessionRequest, StartProjectSessionRunRequest,
+            UpdateProjectRequest,
         },
-        request_hash, user_message, validate_avatar, validate_harness_session_request,
-        validate_name, validate_start_run_request,
+        request_hash, user_message, validate_avatar, validate_name, validate_session_request,
+        validate_start_run_request,
     };
 
     #[test]
@@ -898,7 +1536,7 @@ mod tests {
 
     #[test]
     fn harness_session_message_places_prompt_before_image_attachments() {
-        let request: CreateProjectHarnessSessionRequest = serde_json::from_value(json!({
+        let request: CreateProjectSessionRequest = serde_json::from_value(json!({
             "harness_id": "environment",
             "prompt": "Build from this reference",
             "attachments": [
@@ -944,7 +1582,7 @@ mod tests {
 
     #[test]
     fn harness_session_accepts_an_attachment_without_a_prompt() {
-        let request: CreateProjectHarnessSessionRequest = serde_json::from_value(json!({
+        let request: CreateProjectSessionRequest = serde_json::from_value(json!({
             "harness_id": "environment",
             "prompt": "  ",
             "attachements": [{
@@ -956,7 +1594,7 @@ mod tests {
         }))
         .unwrap();
 
-        validate_harness_session_request("request-1", &request).unwrap();
+        validate_session_request("request-1", &request).unwrap();
         let Message::User(message) =
             user_message(Uuid::now_v7(), &request.prompt, &request.attachments).unwrap()
         else {
@@ -968,7 +1606,7 @@ mod tests {
 
     #[test]
     fn harness_session_rejects_empty_input_and_invalid_limits() {
-        let mut request: CreateProjectHarnessSessionRequest = serde_json::from_value(json!({
+        let mut request: CreateProjectSessionRequest = serde_json::from_value(json!({
             "harness_id": "environment",
             "prompt": "",
             "limits": {"max_turns": 0}
@@ -976,21 +1614,20 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            validate_harness_session_request("request-1", &request),
+            validate_session_request("request-1", &request),
             Err(ProjectError::InvalidRequest(_))
         ));
         request.prompt = "Build it".to_owned();
         assert!(matches!(
-            validate_harness_session_request("request-1", &request),
+            validate_session_request("request-1", &request),
             Err(ProjectError::InvalidRequest(_))
         ));
     }
 
     #[test]
     fn follow_up_run_requires_input_and_preserves_the_expected_revision() {
-        let request: StartProjectHarnessSessionRunRequest = serde_json::from_value(json!({
+        let request: StartProjectSessionRunRequest = serde_json::from_value(json!({
             "prompt": "Continue building the environment",
-            "config_override": {"model_id": "gpt-5.6-sol"},
             "limits": {"max_turns": 25},
             "expected_session_revision": 7
         }))
@@ -999,7 +1636,7 @@ mod tests {
         validate_start_run_request("run-request-2", &request).unwrap();
         assert_eq!(request.expected_session_revision, 7);
 
-        let empty: StartProjectHarnessSessionRunRequest = serde_json::from_value(json!({
+        let empty: StartProjectSessionRunRequest = serde_json::from_value(json!({
             "prompt": "  ",
             "expected_session_revision": 7
         }))
@@ -1008,16 +1645,40 @@ mod tests {
             validate_start_run_request("run-request-3", &empty),
             Err(ProjectError::InvalidRequest(_))
         ));
+
+        assert!(
+            serde_json::from_value::<StartProjectSessionRunRequest>(json!({
+                "prompt": "Try to replace fixed config",
+                "config_override": {"model_id": "another-model"},
+                "expected_session_revision": 7
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn session_request_rejects_duplicate_environment_bindings() {
+        let request: CreateProjectSessionRequest = serde_json::from_value(json!({
+            "harness_id": "codex",
+            "prompt": "Inspect this environment",
+            "environment_ids": ["env-1", "env-1"]
+        }))
+        .unwrap();
+
+        assert!(matches!(
+            validate_session_request("request-1", &request),
+            Err(ProjectError::InvalidRequest(_))
+        ));
     }
 
     #[test]
     fn follow_up_run_idempotency_hash_includes_the_expected_revision() {
-        let first: StartProjectHarnessSessionRunRequest = serde_json::from_value(json!({
+        let first: StartProjectSessionRunRequest = serde_json::from_value(json!({
             "prompt": "Continue",
             "expected_session_revision": 3
         }))
         .unwrap();
-        let second: StartProjectHarnessSessionRunRequest = serde_json::from_value(json!({
+        let second: StartProjectSessionRunRequest = serde_json::from_value(json!({
             "prompt": "Continue",
             "expected_session_revision": 4
         }))
@@ -1026,6 +1687,21 @@ mod tests {
         assert_ne!(
             request_hash(&first).unwrap(),
             request_hash(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn session_title_defaults_to_the_first_non_empty_prompt_line() {
+        assert_eq!(
+            default_session_title("\n  Build a Rust service  \nwith tests"),
+            "Build a Rust service"
+        );
+        assert_eq!(default_session_title("  "), "New session");
+        assert_eq!(
+            default_session_title(
+                "Check sandbox internet disable flag and then update every related test"
+            ),
+            "Check sandbox internet disable flag and then update"
         );
     }
 
