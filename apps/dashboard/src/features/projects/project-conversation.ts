@@ -1,6 +1,5 @@
 import type {
   ProjectRunSummary,
-  RunEvent,
   SessionMessage,
 } from './project-session-types'
 
@@ -10,16 +9,24 @@ export type ProjectConversationItem =
       kind: 'run-progress'
       id: string
       run: ProjectRunSummary
-      events: readonly RunEvent[]
+    }
+  | {
+      kind: 'run-error'
+      id: string
+      run: ProjectRunSummary
     }
 
 export function buildProjectConversation(
   messages: readonly SessionMessage[],
   runs: readonly ProjectRunSummary[],
-  eventsByRun: ReadonlyMap<string, readonly RunEvent[]>,
 ): ProjectConversationItem[] {
   const runByTriggerMessage = new Map(
     runs.map((run) => [run.trigger_message_id, run] as const),
+  )
+  const finalMessageIds = new Set(
+    runs.flatMap((run) =>
+      run.final_message_id === null ? [] : [run.final_message_id],
+    ),
   )
   const orderedMessages = deduplicateById(
     messages,
@@ -28,22 +35,31 @@ export function buildProjectConversation(
   const items: ProjectConversationItem[] = []
 
   for (const message of orderedMessages) {
-    items.push({
-      kind: 'message',
-      id: `message:${message.session_message_id}`,
-      message,
-    })
+    if (
+      message.message.role === 'user' ||
+      (message.message.role === 'assistant' &&
+        finalMessageIds.has(message.session_message_id))
+    ) {
+      items.push({
+        kind: 'message',
+        id: `message:${message.session_message_id}`,
+        message,
+      })
+    }
     const run = runByTriggerMessage.get(message.session_message_id)
     if (run !== undefined) {
       items.push({
         kind: 'run-progress',
         id: `run:${run.run_id}`,
         run,
-        events: deduplicateById(
-          eventsByRun.get(run.run_id) ?? [],
-          (event) => event.event_id,
-        ).toSorted((left, right) => left.sequence - right.sequence),
       })
+      if (run.status === 'failed') {
+        items.push({
+          kind: 'run-error',
+          id: `run-error:${run.run_id}`,
+          run,
+        })
+      }
     }
   }
 

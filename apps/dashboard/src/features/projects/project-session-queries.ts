@@ -120,6 +120,9 @@ export function useProjectSessionMessages(
     initialPageParam: 0,
     getNextPageParam: (page) => page.next_after_revision ?? undefined,
     enabled: projectId.length > 0 && sessionId.length > 0,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   })
 }
 
@@ -317,11 +320,6 @@ export function appendProjectRunEvents(
   })
   for (const event of additions) {
     applyProjectRunEvent(queryClient, projectId, sessionId, runId, event)
-  }
-  if (additions.some((event) => event.type === 'turn_ended')) {
-    void queryClient.invalidateQueries({
-      queryKey: projectSessionKeys.messages(projectId, sessionId),
-    })
   }
 }
 

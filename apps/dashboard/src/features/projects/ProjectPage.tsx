@@ -47,7 +47,6 @@ import { buildProjectConversation } from './project-conversation'
 import { useProjectRunEventStream } from './project-run-event-stream'
 import {
   createIdempotencyKey,
-  useAbortProjectHarnessRun,
   useCreateProjectHarnessSession,
   useProjectHarnessRun,
   useProjectHarnessSession,
@@ -58,7 +57,6 @@ import {
 } from './project-session-queries'
 import type {
   ProjectRunSummary,
-  RunEvent,
   SessionMessage,
 } from './project-session-types'
 import { isLiveRunStatus } from './project-session-types'
@@ -71,7 +69,6 @@ const EMPTY_REASONING_LEVELS: readonly string[] = []
 const EMPTY_PROVIDER_MODEL_OPTIONS: readonly HarnessProviderModelOptions[] = []
 const EMPTY_SESSION_MESSAGES: readonly SessionMessage[] = []
 const EMPTY_SESSION_RUNS: readonly ProjectRunSummary[] = []
-const EMPTY_RUN_EVENTS: readonly RunEvent[] = []
 const ProjectEnvironmentConversation = lazy(() =>
   import('./ProjectEnvironmentConversation').then((module) => ({
     default: module.ProjectEnvironmentConversation,
@@ -525,15 +522,12 @@ function ProjectEnvironmentSessionPage({
       isLiveRunStatus(currentRunStatus),
   })
   const startRun = useStartProjectHarnessRun(projectId, sessionId)
-  const abortRun = useAbortProjectHarnessRun(projectId, sessionId, runId)
   const startRunMutate = startRun.mutate
-  const abortRunMutate = abortRun.mutate
   const refetchSession = session.refetch
   const refetchMessages = messages.refetch
   const refetchRuns = runs.refetch
   const refetchModelOptions = modelOptions.refetch
   const submitRetryRef = useRef<{ fingerprint: string; key: string } | null>(null)
-  const abortRetryRef = useRef<{ stateVersion: number; id: string } | null>(null)
   const [composerVersion, setComposerVersion] = useState(0)
   const messageItems = useMemo(
     () =>
@@ -545,18 +539,9 @@ function ProjectEnvironmentSessionPage({
     () => runs.data?.pages.flatMap((page) => page.items) ?? EMPTY_SESSION_RUNS,
     [runs.data],
   )
-  const runEvents = useMemo(
-    () => events.data?.pages.flatMap((page) => page.items) ?? EMPTY_RUN_EVENTS,
-    [events.data],
-  )
-  const eventsByRun = useMemo(() => {
-    const result = new Map<string, readonly RunEvent[]>()
-    if (runId.length > 0) result.set(runId, runEvents)
-    return result
-  }, [runEvents, runId])
   const conversation = useMemo(
-    () => buildProjectConversation(messageItems, runItems, eventsByRun),
-    [eventsByRun, messageItems, runItems],
+    () => buildProjectConversation(messageItems, runItems),
+    [messageItems, runItems],
   )
   const isRunLive =
     currentRunStatus !== undefined && isLiveRunStatus(currentRunStatus)
@@ -618,25 +603,6 @@ function ProjectEnvironmentSessionPage({
     startRunMutate,
   ])
 
-  const abort = useCallback(() => {
-    if (currentRun === null || !isRunLive) return
-    if (abortRetryRef.current?.stateVersion !== currentRun.state_version) {
-      abortRetryRef.current = {
-        stateVersion: currentRun.state_version,
-        id: createIdempotencyKey(),
-      }
-    }
-    abortRunMutate(
-      {
-        abort_id: abortRetryRef.current.id,
-        expected_state_version: currentRun.state_version,
-        reason: 'Stopped by user',
-        payload: {},
-      },
-      { onSuccess: () => { abortRetryRef.current = null } },
-    )
-  }, [abortRunMutate, currentRun, isRunLive])
-
   const retryConversation = useCallback(() => {
     void Promise.all([refetchSession(), refetchMessages(), refetchRuns()])
   }, [refetchMessages, refetchRuns, refetchSession])
@@ -677,16 +643,10 @@ function ProjectEnvironmentSessionPage({
           }
         >
           <ProjectEnvironmentConversation
-            projectId={projectId}
-            sessionId={sessionId}
             items={conversation}
-            activeRunId={isRunLive ? runId : null}
-            streamState={stream.state}
             isPending={session.isPending || messages.isPending || runs.isPending}
             isError={session.isError || messages.isError || runs.isError}
             onRetry={retryConversation}
-            onAbortRun={abort}
-            isAborting={abortRun.isPending}
           />
         </Suspense>
         <div className="project-session-composer-wrap">
