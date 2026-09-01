@@ -81,6 +81,15 @@ GET    /api/projects/{project_id}
 PATCH  /api/projects/{project_id}
 DELETE /api/projects/{project_id}
 GET    /api/projects/{project_id}/environments
+POST   /api/projects/{project_id}/harness-sessions
+GET    /api/projects/{project_id}/harness-sessions/{session_id}
+GET    /api/projects/{project_id}/harness-sessions/{session_id}/messages
+GET    /api/projects/{project_id}/harness-sessions/{session_id}/runs
+POST   /api/projects/{project_id}/harness-sessions/{session_id}/runs
+GET    /api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}
+GET    /api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}/events
+GET    /api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}/events/stream
+POST   /api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}/abort
 ```
 
 Create a project with `{"name":"Agent Pane","avatar":null}`. `avatar` may be
@@ -89,6 +98,123 @@ The project environments endpoint combines configured machine environments and
 sandbox templates. Its items expose `id`, `name`, `host_name`, an optional
 `machine_id`, `path`, `type`, an optional `snapshot_id`, an optional
 `setup_script`, and `created_at`.
+
+Create a project-scoped harness session and its initial run with an
+`Idempotency-Key` header. Platform reserves stable session, run, and message
+IDs, creates the Agent session, and starts the run against the harness's active
+revision. `config_override` is forwarded without Platform interpreting its
+harness-specific shape:
+
+```json
+{
+  "harness_id": "environment",
+  "prompt": "Create a TypeScript environment",
+  "attachments": [
+    {
+      "source": {
+        "type": "url",
+        "url": "https://example.com/reference.png"
+      },
+      "detail": "high"
+    }
+  ],
+  "config_override": {
+    "project_id": "0198f88e-2ff3-7000-8000-000000000010",
+    "provider": "openai",
+    "model_id": "gpt-5.6-sol",
+    "reasoning_level": "high"
+  },
+  "limits": {
+    "max_turns": 100
+  }
+}
+```
+
+Attachments are image content without the outer `{"type":"image"}` wrapper.
+Their source may be an HTTP(S) URL or base64 data with a MIME type. Platform
+places non-blank prompt text first, followed by image content in request order.
+At least one prompt or attachment is required. A successful request returns
+`202 Accepted` with the Agent session, trigger message, and accepted run.
+
+Session reads are scoped through Platform's project/session ownership mapping
+before Agent is called. The session detail response contains `session`, the
+session's `harness_id`, `latest_run`, and `active_run`; waiting runs count as
+active, and both run fields are nullable. Canonical transcript messages retain
+Agent's revision pagination:
+
+```text
+GET .../messages?after_revision={revision}&limit={limit}
+```
+
+Run history retains Agent's status and cursor pagination:
+
+```text
+GET .../runs?status={active|waiting|aborted|completed|failed}&cursor={cursor}&limit={limit}
+```
+
+Start another run in an existing session with a new `Idempotency-Key`. Platform
+reuses the session's harness ID and forwards the opaque `config_override` to
+the active harness revision. `expected_session_revision` is required so Agent
+can reject stale submissions or concurrent changes:
+
+```json
+{
+  "prompt": "Now add a PostgreSQL service",
+  "attachments": [],
+  "config_override": {
+    "provider": "openai",
+    "model_id": "gpt-5.6-sol",
+    "reasoning_level": "high"
+  },
+  "limits": {
+    "max_turns": 100
+  },
+  "expected_session_revision": 2
+}
+```
+
+The response is `202 Accepted` with `trigger_message` and `run`. Exact retries
+reuse the reserved message and run IDs. Reusing an idempotency key with a
+different body returns `409 Conflict`; an active run or stale session revision
+is also returned as Agent's `409 Conflict` response.
+
+Run detail and lifecycle operations are scoped through the complete
+project/session/run ownership mapping before Platform calls Agent. Persisted
+events use sequence pagination:
+
+```text
+GET .../runs/{run_id}/events?after_sequence={sequence}&limit={1..500}
+```
+
+The response contains `items` in ascending sequence order and a nullable
+`next_after_sequence`. The SSE endpoint accepts the same `after_sequence`
+resume position. A `Last-Event-ID` header takes precedence when both are
+present:
+
+```text
+GET .../runs/{run_id}/events/stream?after_sequence={sequence}
+Last-Event-ID: {sequence}
+```
+
+Platform relays Agent's event IDs, event names, JSON data, keep-alives, and
+terminal stream closure without buffering. It preserves `text/event-stream`,
+`Cache-Control: no-cache, no-transform`, and `X-Accel-Buffering: no`.
+
+Abort an active or waiting run with a client-generated stable `abort_id`. The
+ID makes exact retries idempotent, while `expected_state_version` prevents a
+stale UI from aborting a run whose state changed after it was displayed:
+
+```json
+{
+  "abort_id": "01991a8d-7eef-7000-8000-000000000001",
+  "expected_state_version": 6,
+  "reason": "Stopped by user",
+  "payload": {}
+}
+```
+
+A successful abort returns `202 Accepted` with `abort` and the updated `run`.
+Agent conflict and validation responses are forwarded unchanged.
 
 ## Harnesses API
 
