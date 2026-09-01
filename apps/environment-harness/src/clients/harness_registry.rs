@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::harness::model_catalog::{SUPPORTED_PROVIDERS, model_ids};
 
 pub const ENVIRONMENT_HARNESS_ID: &str = "environment";
-pub const ENVIRONMENT_HARNESS_REVISION_ID: &str = "environment-2026-08-31-fixed-prompt";
+pub const ENVIRONMENT_HARNESS_REVISION_ID: &str = "environment-2026-09-01-web-tools";
 pub const ENVIRONMENT_HARNESS_DESCRIPTOR: HarnessDescriptor = HarnessDescriptor::new(
     ENVIRONMENT_HARNESS_ID,
     "environment",
@@ -88,7 +88,7 @@ fn environment_revision() -> RegisterHarnessRevisionRequest {
         .collect::<Vec<_>>();
     RegisterHarnessRevisionRequest {
         harness_revision_id: ENVIRONMENT_HARNESS_REVISION_ID.to_owned(),
-        revision: "2026-08-31-fixed-prompt".to_owned(),
+        revision: "2026-09-01-web-tools".to_owned(),
         contract_version: 1,
         default_config: object(json!({
             "provider": "openai",

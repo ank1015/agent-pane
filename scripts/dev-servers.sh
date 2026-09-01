@@ -533,7 +533,7 @@ if [[ -n "$dashboard_pid" ]]; then
   echo "dashboard:         http://127.0.0.1:5173 (pid $dashboard_pid)"
 fi
 echo "Pi revision:       pi / pi-2026-08-27-nats-server"
-echo "Environment revision: environment / environment-2026-08-31-fixed-prompt"
+echo "Environment revision: environment / environment-2026-09-01-web-tools"
 echo "Codex revision:    codex / codex-2026-08-30-runtime-v1"
 echo "oauth callback:    http://localhost:1455/auth/callback"
 echo "Press Ctrl-C to stop the stack. Docker data volumes are preserved."

@@ -103,7 +103,7 @@ cargo run -p environment-harness
 
 Set `ENVIRONMENT_HARNESS_AGENT_CONTROL_TOKEN` to the Agent control token to have the
 server idempotently register and activate revision
-`environment-2026-08-31-fixed-prompt` during startup. Otherwise provision the harness
+`environment-2026-09-01-web-tools` during startup. Otherwise provision the harness
 through Agent before submitting runs.
 
 ## Broker topology
