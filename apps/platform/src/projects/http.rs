@@ -19,8 +19,8 @@ use uuid::Uuid;
 use super::{
     ProjectService,
     model::{
-        CreateProjectHarnessSessionRequest, CreateProjectRequest, Project,
-        StartProjectHarnessSessionRunRequest, UpdateProjectRequest,
+        CreateProjectRequest, CreateProjectSessionRequest, Project, StartProjectSessionRunRequest,
+        UpdateProjectRequest, UpdateProjectSessionRequest,
     },
 };
 use crate::{
@@ -52,36 +52,36 @@ pub(super) fn router(service: ProjectService) -> Router<AppState> {
             get(get_project_bootstrap),
         )
         .route(
-            "/api/projects/{project_id}/harness-sessions",
-            post(create_project_harness_session),
+            "/api/projects/{project_id}/sessions",
+            get(list_project_sessions).post(create_project_session),
         )
         .route(
-            "/api/projects/{project_id}/harness-sessions/{session_id}",
-            get(get_project_harness_session),
+            "/api/projects/{project_id}/sessions/{session_id}",
+            get(get_project_session).patch(update_project_session),
         )
         .route(
-            "/api/projects/{project_id}/harness-sessions/{session_id}/messages",
-            get(list_project_harness_session_messages),
+            "/api/projects/{project_id}/sessions/{session_id}/messages",
+            get(list_project_session_messages),
         )
         .route(
-            "/api/projects/{project_id}/harness-sessions/{session_id}/runs",
-            get(list_project_harness_session_runs).post(start_project_harness_session_run),
+            "/api/projects/{project_id}/sessions/{session_id}/runs",
+            get(list_project_session_runs).post(start_project_session_run),
         )
         .route(
-            "/api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}",
-            get(get_project_harness_run),
+            "/api/projects/{project_id}/sessions/{session_id}/runs/{run_id}",
+            get(get_project_run),
         )
         .route(
-            "/api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}/events",
-            get(list_project_harness_run_events),
+            "/api/projects/{project_id}/sessions/{session_id}/runs/{run_id}/events",
+            get(list_project_run_events),
         )
         .route(
-            "/api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}/events/stream",
-            get(stream_project_harness_run_events),
+            "/api/projects/{project_id}/sessions/{session_id}/runs/{run_id}/events/stream",
+            get(stream_project_run_events),
         )
         .route(
-            "/api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}/abort",
-            post(abort_project_harness_run),
+            "/api/projects/{project_id}/sessions/{session_id}/runs/{run_id}/abort",
+            post(abort_project_run),
         )
         .layer(middleware::map_response(add_no_store))
         .with_state(ProjectState { service })
@@ -112,49 +112,67 @@ async fn get_project_bootstrap(
     Ok(Json(state.service.bootstrap(project_id).await?))
 }
 
-async fn create_project_harness_session(
+async fn list_project_sessions(
+    State(state): State<ProjectState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Vec<super::model::ProjectSession>>, ApiError> {
+    Ok(Json(state.service.list_sessions(project_id).await?))
+}
+
+async fn create_project_session(
     State(state): State<ProjectState>,
     Path(project_id): Path<Uuid>,
     headers: HeaderMap,
-    payload: Result<Json<CreateProjectHarnessSessionRequest>, JsonRejection>,
+    payload: Result<Json<CreateProjectSessionRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let idempotency_key = idempotency_key(&headers)?;
     let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
     let response = state
         .service
-        .create_harness_session(project_id, idempotency_key, &request)
+        .create_session(project_id, idempotency_key, &request)
         .await?;
     Ok((StatusCode::ACCEPTED, Json(response)).into_response())
 }
 
-async fn start_project_harness_session_run(
+async fn start_project_session_run(
     State(state): State<ProjectState>,
     Path((project_id, session_id)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
-    payload: Result<Json<StartProjectHarnessSessionRunRequest>, JsonRejection>,
+    payload: Result<Json<StartProjectSessionRunRequest>, JsonRejection>,
 ) -> Result<Response, ApiError> {
     let idempotency_key = idempotency_key(&headers)?;
     let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
     let response = state
         .service
-        .start_harness_session_run(project_id, session_id, idempotency_key, &request)
+        .start_session_run(project_id, session_id, idempotency_key, &request)
         .await?;
     Ok((StatusCode::ACCEPTED, Json(response)).into_response())
 }
 
-async fn get_project_harness_session(
+async fn get_project_session(
     State(state): State<ProjectState>,
     Path((project_id, session_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<super::model::ProjectHarnessSessionResponse>, ApiError> {
+) -> Result<Json<super::model::ProjectSessionResponse>, ApiError> {
+    Ok(Json(
+        state.service.get_session(project_id, session_id).await?,
+    ))
+}
+
+async fn update_project_session(
+    State(state): State<ProjectState>,
+    Path((project_id, session_id)): Path<(Uuid, Uuid)>,
+    payload: Result<Json<UpdateProjectSessionRequest>, JsonRejection>,
+) -> Result<Json<super::model::ProjectSession>, ApiError> {
+    let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
     Ok(Json(
         state
             .service
-            .get_harness_session(project_id, session_id)
+            .update_session(project_id, session_id, request)
             .await?,
     ))
 }
 
-async fn list_project_harness_session_messages(
+async fn list_project_session_messages(
     State(state): State<ProjectState>,
     Path((project_id, session_id)): Path<(Uuid, Uuid)>,
     query: Result<Query<AgentSessionMessageListQuery>, QueryRejection>,
@@ -163,12 +181,12 @@ async fn list_project_harness_session_messages(
     Ok(Json(
         state
             .service
-            .list_harness_session_messages(project_id, session_id, &query)
+            .list_session_messages(project_id, session_id, &query)
             .await?,
     ))
 }
 
-async fn list_project_harness_session_runs(
+async fn list_project_session_runs(
     State(state): State<ProjectState>,
     Path((project_id, session_id)): Path<(Uuid, Uuid)>,
     query: Result<Query<AgentSessionRunListQuery>, QueryRejection>,
@@ -177,24 +195,24 @@ async fn list_project_harness_session_runs(
     Ok(Json(
         state
             .service
-            .list_harness_session_runs(project_id, session_id, &query)
+            .list_session_runs(project_id, session_id, &query)
             .await?,
     ))
 }
 
-async fn get_project_harness_run(
+async fn get_project_run(
     State(state): State<ProjectState>,
     Path((project_id, session_id, run_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<agent_contracts::Run>, ApiError> {
     Ok(Json(
         state
             .service
-            .get_harness_run(project_id, session_id, run_id)
+            .get_run(project_id, session_id, run_id)
             .await?,
     ))
 }
 
-async fn list_project_harness_run_events(
+async fn list_project_run_events(
     State(state): State<ProjectState>,
     Path((project_id, session_id, run_id)): Path<(Uuid, Uuid, Uuid)>,
     query: Result<Query<crate::upstream::agent::AgentRunEventListQuery>, QueryRejection>,
@@ -203,12 +221,12 @@ async fn list_project_harness_run_events(
     Ok(Json(
         state
             .service
-            .list_harness_run_events(project_id, session_id, run_id, &query)
+            .list_run_events(project_id, session_id, run_id, &query)
             .await?,
     ))
 }
 
-async fn stream_project_harness_run_events(
+async fn stream_project_run_events(
     State(state): State<ProjectState>,
     Path((project_id, session_id, run_id)): Path<(Uuid, Uuid, Uuid)>,
     headers: HeaderMap,
@@ -225,7 +243,7 @@ async fn stream_project_harness_run_events(
         .transpose()?;
     let upstream = state
         .service
-        .stream_harness_run_events(project_id, session_id, run_id, &query, last_event_id)
+        .stream_run_events(project_id, session_id, run_id, &query, last_event_id)
         .await?;
     let status = upstream.status();
     let content_type = upstream.headers().get(CONTENT_TYPE).cloned();
@@ -245,7 +263,7 @@ async fn stream_project_harness_run_events(
     Ok(response)
 }
 
-async fn abort_project_harness_run(
+async fn abort_project_run(
     State(state): State<ProjectState>,
     Path((project_id, session_id, run_id)): Path<(Uuid, Uuid, Uuid)>,
     payload: Result<Json<crate::upstream::agent::AgentRunAbortRequest>, JsonRejection>,
@@ -253,7 +271,7 @@ async fn abort_project_harness_run(
     let Json(request) = payload.map_err(|error| ApiError::invalid_request(error.body_text()))?;
     let response = state
         .service
-        .abort_harness_run(project_id, session_id, run_id, &request)
+        .abort_run(project_id, session_id, run_id, &request)
         .await?;
     Ok((StatusCode::ACCEPTED, Json(response)).into_response())
 }

@@ -61,6 +61,13 @@ Likewise, `PLATFORM_EXECUTION_GATEWAY_CONTROL_TOKEN` must match
 services load the root `.env`.
 `PLATFORM_AGENT_CONTROL_TOKEN` must likewise match `AGENT_CONTROL_TOKEN`.
 
+Ordinary execution-gateway requests use
+`PLATFORM_EXECUTION_GATEWAY_TIMEOUT_SECONDS` (30 seconds by default). Sandbox
+template materialization has a separate
+`PLATFORM_EXECUTION_GATEWAY_MATERIALIZATION_TIMEOUT_SECONDS` deadline (660
+seconds by default), because provisioning and preparing a remote sandbox can
+legitimately take several minutes.
+
 ```sh
 cp apps/platform/.env.example .env.platform
 set -a
@@ -81,33 +88,39 @@ GET    /api/projects/{project_id}
 PATCH  /api/projects/{project_id}
 DELETE /api/projects/{project_id}
 GET    /api/projects/{project_id}/environments
-POST   /api/projects/{project_id}/harness-sessions
-GET    /api/projects/{project_id}/harness-sessions/{session_id}
-GET    /api/projects/{project_id}/harness-sessions/{session_id}/messages
-GET    /api/projects/{project_id}/harness-sessions/{session_id}/runs
-POST   /api/projects/{project_id}/harness-sessions/{session_id}/runs
-GET    /api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}
-GET    /api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}/events
-GET    /api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}/events/stream
-POST   /api/projects/{project_id}/harness-sessions/{session_id}/runs/{run_id}/abort
+GET    /api/projects/{project_id}/bootstrap
+GET    /api/projects/{project_id}/sessions
+POST   /api/projects/{project_id}/sessions
+GET    /api/projects/{project_id}/sessions/{session_id}
+PATCH  /api/projects/{project_id}/sessions/{session_id}
+GET    /api/projects/{project_id}/sessions/{session_id}/messages
+GET    /api/projects/{project_id}/sessions/{session_id}/runs
+POST   /api/projects/{project_id}/sessions/{session_id}/runs
+GET    /api/projects/{project_id}/sessions/{session_id}/runs/{run_id}
+GET    /api/projects/{project_id}/sessions/{session_id}/runs/{run_id}/events
+GET    /api/projects/{project_id}/sessions/{session_id}/runs/{run_id}/events/stream
+POST   /api/projects/{project_id}/sessions/{session_id}/runs/{run_id}/abort
 ```
 
 Create a project with `{"name":"Agent Pane","avatar":null}`. `avatar` may be
 omitted, supplied as a string, or set to `null` in a PATCH request to clear it.
 The project environments endpoint combines configured machine environments and
 sandbox templates. Its items expose `id`, `name`, `host_name`, an optional
-`machine_id`, `path`, `type`, an optional `snapshot_id`, an optional
+`machine_id`, an optional `workspace_root_id`, `path`, `type`, an optional `snapshot_id`, an optional
 `setup_script`, and `created_at`.
 
-Create a project-scoped harness session and its initial run with an
+Create a durable project session and its initial run with an
 `Idempotency-Key` header. Platform reserves stable session, run, and message
 IDs, creates the Agent session, and starts the run against the harness's active
-revision. `config_override` is forwarded without Platform interpreting its
-harness-specific shape:
+revision. `config_override` remains harness-specific and is forwarded only for
+this first run. When `title` is omitted, Platform uses the first eight words of
+the first non-empty prompt line. Optional `environment_ids` are validated against the project
+and stored as ordered immutable environment snapshots:
 
 ```json
 {
   "harness_id": "environment",
+  "title": "TypeScript environment",
   "prompt": "Create a TypeScript environment",
   "attachments": [
     {
@@ -118,6 +131,7 @@ harness-specific shape:
       "detail": "high"
     }
   ],
+  "environment_ids": [],
   "config_override": {
     "project_id": "0198f88e-2ff3-7000-8000-000000000010",
     "provider": "openai",
@@ -134,13 +148,18 @@ Attachments are image content without the outer `{"type":"image"}` wrapper.
 Their source may be an HTTP(S) URL or base64 data with a MIME type. Platform
 places non-blank prompt text first, followed by image content in request order.
 At least one prompt or attachment is required. A successful request returns
-`202 Accepted` with the Agent session, trigger message, and accepted run.
+`202 Accepted` with the durable project session, trigger message, and accepted
+run. Platform stores Agent's exact `harness_revision_id` and complete
+`resolved_config`; these values become immutable session configuration.
 
-Session reads are scoped through Platform's project/session ownership mapping
-before Agent is called. The session detail response contains `session`, the
-session's `harness_id`, `latest_run`, and `active_run`; waiting runs count as
-active, and both run fields are nullable. Canonical transcript messages retain
-Agent's revision pagination:
+`GET .../sessions` returns non-archived sessions in most-recently-active order
+for the sidebar. Each session includes its fixed harness revision/config,
+environment snapshots, current transcript revision, nullable `active_run_id`,
+and derived `is_active`. Session reads are scoped through Platform's
+project/session ownership mapping before Agent is called. The session detail
+response contains `session`, `latest_run`, and `active_run`; waiting runs count
+as active, and both run fields are nullable. Canonical transcript messages
+retain Agent's revision pagination:
 
 ```text
 GET .../messages?after_revision={revision}&limit={limit}
@@ -153,19 +172,14 @@ GET .../runs?status={active|waiting|aborted|completed|failed}&cursor={cursor}&li
 ```
 
 Start another run in an existing session with a new `Idempotency-Key`. Platform
-reuses the session's harness ID and forwards the opaque `config_override` to
-the active harness revision. `expected_session_revision` is required so Agent
-can reject stale submissions or concurrent changes:
+reuses the stored exact harness revision and fixed resolved config. Follow-up
+requests cannot replace `config_override`. `expected_session_revision` is
+required so Agent can reject stale submissions or concurrent changes:
 
 ```json
 {
   "prompt": "Now add a PostgreSQL service",
   "attachments": [],
-  "config_override": {
-    "provider": "openai",
-    "model_id": "gpt-5.6-sol",
-    "reasoning_level": "high"
-  },
   "limits": {
     "max_turns": 100
   },
@@ -176,7 +190,13 @@ can reject stale submissions or concurrent changes:
 The response is `202 Accepted` with `trigger_message` and `run`. Exact retries
 reuse the reserved message and run IDs. Reusing an idempotency key with a
 different body returns `409 Conflict`; an active run or stale session revision
-is also returned as Agent's `409 Conflict` response.
+returns `409 Conflict`.
+
+Platform persists run status and exposes session activity independently from
+the browser connection. A background reconciler checks only sessions with a
+non-null `active_run_id`, treats waiting runs as active, clears activity on a
+completed, failed, or aborted run, and refreshes the durable transcript
+revision after terminal runs.
 
 Run detail and lifecycle operations are scoped through the complete
 project/session/run ownership mapping before Platform calls Agent. Persisted
