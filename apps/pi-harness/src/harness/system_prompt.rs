@@ -17,28 +17,46 @@ Guidelines:
 - Be concise in your responses
 - Show file paths clearly when working with files"#;
 
-pub fn generate_system_prompt(external_prompt: Option<&str>, is_replaced: bool) -> String {
+const WEB_SEARCH_GUIDELINE: &str = "- Use search to discover current public information and scrape to read the full content of a specific webpage or PDF.";
+
+pub fn generate_system_prompt(
+    external_prompt: Option<&str>,
+    is_replaced: bool,
+    web_search_enabled: bool,
+) -> String {
+    let default_prompt = if web_search_enabled {
+        format!("{DEFAULT_SYSTEM_PROMPT}\n{WEB_SEARCH_GUIDELINE}")
+    } else {
+        DEFAULT_SYSTEM_PROMPT.to_owned()
+    };
     match external_prompt {
         Some(prompt) if is_replaced => prompt.to_owned(),
-        Some(prompt) => format!("{DEFAULT_SYSTEM_PROMPT}\n\n{prompt}"),
-        None => DEFAULT_SYSTEM_PROMPT.to_owned(),
+        Some(prompt) => format!("{default_prompt}\n\n{prompt}"),
+        None => default_prompt,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_SYSTEM_PROMPT, generate_system_prompt};
+    use super::{DEFAULT_SYSTEM_PROMPT, WEB_SEARCH_GUIDELINE, generate_system_prompt};
 
     #[test]
     fn returns_default_prompt_without_external_prompt() {
-        assert_eq!(generate_system_prompt(None, false), DEFAULT_SYSTEM_PROMPT);
-        assert_eq!(generate_system_prompt(None, true), DEFAULT_SYSTEM_PROMPT);
+        assert_eq!(
+            generate_system_prompt(None, false, false),
+            DEFAULT_SYSTEM_PROMPT
+        );
+        assert_eq!(
+            generate_system_prompt(None, true, false),
+            DEFAULT_SYSTEM_PROMPT
+        );
+        assert!(generate_system_prompt(None, false, true).contains(WEB_SEARCH_GUIDELINE));
     }
 
     #[test]
     fn appends_external_prompt_to_default_prompt() {
         assert_eq!(
-            generate_system_prompt(Some("Follow the repository conventions."), false),
+            generate_system_prompt(Some("Follow the repository conventions."), false, false),
             format!("{DEFAULT_SYSTEM_PROMPT}\n\nFollow the repository conventions.")
         );
     }
@@ -46,7 +64,7 @@ mod tests {
     #[test]
     fn replaces_default_prompt_with_external_prompt() {
         assert_eq!(
-            generate_system_prompt(Some("You are a focused Rust assistant."), true),
+            generate_system_prompt(Some("You are a focused Rust assistant."), true, true),
             "You are a focused Rust assistant."
         );
     }

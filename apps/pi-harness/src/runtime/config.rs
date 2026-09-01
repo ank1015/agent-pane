@@ -27,6 +27,12 @@ pub struct PiHarnessConfig {
     pub external_prompt: Option<String>,
     #[serde(default, alias = "isReplaced")]
     pub is_replaced: bool,
+    #[serde(default = "default_true", alias = "webSearchEnabled")]
+    pub web_search_enabled: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 impl PiHarnessConfig {
@@ -79,6 +85,7 @@ mod tests {
         assert_eq!(config.execution.workspace_root_id.as_str(), "root");
         assert_eq!(config.execution.cwd, "project");
         assert!(!config.is_replaced);
+        assert!(config.web_search_enabled);
     }
 
     #[test]
@@ -96,6 +103,7 @@ mod tests {
             "accountId": account_id,
             "externalPrompt": "Follow the project rules.",
             "isReplaced": true,
+            "webSearchEnabled": false,
             "future_setting": true
         }));
 
@@ -110,6 +118,7 @@ mod tests {
             Some("Follow the project rules.")
         );
         assert!(config.is_replaced);
+        assert!(!config.web_search_enabled);
     }
 
     #[test]

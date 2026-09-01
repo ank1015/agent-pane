@@ -13,6 +13,8 @@ pub struct ToolExecutionContext<'a> {
     pub runtime: &'a dyn ExecutionRuntime,
     pub cwd: &'a WorkspaceCwd,
     pub operation: &'a OperationContext,
+    pub search: &'a tool_firecrawl_search::FirecrawlSearchToolContext,
+    pub scrape: &'a tool_firecrawl_scrape::FirecrawlScrapeToolContext,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,6 +113,28 @@ impl From<tool_pi_write::WriteToolError> for ToolExecutionError {
     }
 }
 
+impl From<tool_firecrawl_search::FirecrawlSearchToolError> for ToolExecutionError {
+    fn from(error: tool_firecrawl_search::FirecrawlSearchToolError) -> Self {
+        let (name, message, details) = error.into_parts();
+        Self {
+            name,
+            message,
+            details,
+        }
+    }
+}
+
+impl From<tool_firecrawl_scrape::FirecrawlScrapeToolError> for ToolExecutionError {
+    fn from(error: tool_firecrawl_scrape::FirecrawlScrapeToolError) -> Self {
+        let (name, message, details) = error.into_parts();
+        Self {
+            name,
+            message,
+            details,
+        }
+    }
+}
+
 pub struct ToolOutput {
     pub content: Vec<ContentPart>,
     pub details: Option<Value>,
@@ -152,13 +176,38 @@ impl From<tool_pi_write::WriteToolOutput> for ToolOutput {
     }
 }
 
-pub fn default_tool_definitions() -> Vec<ToolDefinition> {
-    vec![
+impl From<tool_firecrawl_search::FirecrawlSearchToolOutput> for ToolOutput {
+    fn from(output: tool_firecrawl_search::FirecrawlSearchToolOutput) -> Self {
+        Self {
+            content: output.content,
+            details: output.details,
+        }
+    }
+}
+
+impl From<tool_firecrawl_scrape::FirecrawlScrapeToolOutput> for ToolOutput {
+    fn from(output: tool_firecrawl_scrape::FirecrawlScrapeToolOutput) -> Self {
+        Self {
+            content: output.content,
+            details: output.details,
+        }
+    }
+}
+
+pub fn default_tool_definitions(web_search_enabled: bool) -> Vec<ToolDefinition> {
+    let mut tools = vec![
         tool_pi_read::definition(),
         tool_pi_bash::definition(),
         tool_pi_edit::definition(),
         tool_pi_write::definition(),
-    ]
+    ];
+    if web_search_enabled {
+        tools.extend([
+            tool_firecrawl_search::definition(),
+            tool_firecrawl_scrape::definition(),
+        ]);
+    }
+    tools
 }
 
 pub async fn execute_tool_call(
@@ -182,6 +231,18 @@ pub async fn execute_tool_call(
         "read" => execute_read_tool(arguments, context).await,
         "write" => execute_write_tool(arguments, context).await,
         "edit" => execute_edit_tool(arguments, context).await,
+        tool_firecrawl_search::TOOL_NAME => {
+            tool_firecrawl_search::execute_search_tool(arguments, context.search)
+                .await
+                .map(Into::into)
+                .map_err(Into::into)
+        }
+        tool_firecrawl_scrape::TOOL_NAME => {
+            tool_firecrawl_scrape::execute_scrape_tool(arguments, context.scrape)
+                .await
+                .map(Into::into)
+                .map_err(Into::into)
+        }
         _ => Err(ToolExecutionError::new(
             "unknown_tool",
             format!("Unknown tool `{name}`"),
@@ -348,12 +409,20 @@ mod tests {
 
     #[test]
     fn default_definitions_are_valid_and_ordered() {
-        let tools = default_tool_definitions();
+        let tools = default_tool_definitions(true);
         let names: Vec<_> = tools.iter().map(|tool| tool.name()).collect();
 
-        assert_eq!(names, ["read", "bash", "edit", "write"]);
+        assert_eq!(names, ["read", "bash", "edit", "write", "search", "scrape"]);
         for tool in tools {
             tool.validate().expect("default tool definition is valid");
         }
+    }
+
+    #[test]
+    fn omits_web_tools_when_disabled() {
+        let tools = default_tool_definitions(false);
+        let names = tools.iter().map(|tool| tool.name()).collect::<Vec<_>>();
+
+        assert_eq!(names, ["read", "bash", "edit", "write"]);
     }
 }

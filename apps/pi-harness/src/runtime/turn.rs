@@ -43,6 +43,8 @@ const AGENT_RETRY_BASE: Duration = Duration::from_millis(250);
 pub struct PiRuntime {
     llm: LlmGatewayClient,
     execution: ExecutionClient,
+    search: tool_firecrawl_search::FirecrawlSearchToolContext,
+    scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext,
     retry: RetryPolicy,
 }
 
@@ -51,14 +53,25 @@ impl PiRuntime {
         Ok(Self::new(
             LlmGatewayClient::new(config.llm_gateway.clone())?,
             ExecutionClient::new(config.execution_gateway.clone())?,
+            tool_firecrawl_search::FirecrawlSearchToolContext::from_package_env()
+                .map_err(PiRuntimeBuildError::SearchTool)?,
+            tool_firecrawl_scrape::FirecrawlScrapeToolContext::from_package_env()
+                .map_err(PiRuntimeBuildError::ScrapeTool)?,
         ))
     }
 
     #[must_use]
-    pub fn new(llm: LlmGatewayClient, execution: ExecutionClient) -> Self {
+    pub fn new(
+        llm: LlmGatewayClient,
+        execution: ExecutionClient,
+        search: tool_firecrawl_search::FirecrawlSearchToolContext,
+        scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext,
+    ) -> Self {
         Self {
             llm,
             execution,
+            search,
+            scrape,
             retry: RetryPolicy::pi_default(),
         }
     }
@@ -255,6 +268,8 @@ impl PiRuntime {
                 runtime: &machine,
                 cwd: &cwd,
                 operation: run.operation(),
+                search: &self.search,
+                scrape: &self.scrape,
             };
             join_all(
                 tool_calls
@@ -362,9 +377,10 @@ fn main_request(
         instructions: Some(generate_system_prompt(
             config.external_prompt.as_deref(),
             config.is_replaced,
+            config.web_search_enabled,
         )),
         messages,
-        tools: default_tool_definitions(),
+        tools: default_tool_definitions(config.web_search_enabled),
         provider_options: model.provider_options,
         metadata: BTreeMap::new(),
     })

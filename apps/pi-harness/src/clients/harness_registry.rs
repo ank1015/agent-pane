@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::harness::model_catalog::{SUPPORTED_PROVIDERS, model_ids};
 
 pub const PI_HARNESS_ID: &str = "pi";
-pub const PI_HARNESS_REVISION_ID: &str = "pi-2026-08-28-deepseek";
+pub const PI_HARNESS_REVISION_ID: &str = "pi-2026-09-01-configurable-web-tools";
 pub const PI_HARNESS_DESCRIPTOR: HarnessDescriptor =
     HarnessDescriptor::new(PI_HARNESS_ID, "pi", "pi-harness-turns-v1");
 
@@ -66,7 +66,7 @@ fn pi_supported_providers() -> Vec<HarnessProvider> {
 }
 
 fn pi_harness_description() -> &'static str {
-    "Minimalistic pi agent with four tools. Single agent, Single machine."
+    "Minimalistic pi coding agent with execution and optional web tools."
 }
 
 fn pi_revision() -> RegisterHarnessRevisionRequest {
@@ -85,13 +85,14 @@ fn pi_revision() -> RegisterHarnessRevisionRequest {
         .collect::<Vec<_>>();
     RegisterHarnessRevisionRequest {
         harness_revision_id: PI_HARNESS_REVISION_ID.to_owned(),
-        revision: "2026-08-28-deepseek".to_owned(),
+        revision: "2026-09-01-configurable-web-tools".to_owned(),
         contract_version: 1,
         default_config: object(json!({
             "provider": "openai",
             "model_id": "gpt-5.6-sol",
             "reasoning_level": "high",
-            "is_replaced": false
+            "is_replaced": false,
+            "web_search_enabled": true
         })),
         config_schema: Some(object(json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -114,7 +115,8 @@ fn pi_revision() -> RegisterHarnessRevisionRequest {
                 },
                 "account_id": {"type": "string", "minLength": 1},
                 "external_prompt": {"type": ["string", "null"]},
-                "is_replaced": {"type": "boolean"}
+                "is_replaced": {"type": "boolean"},
+                "web_search_enabled": {"type": "boolean", "default": true}
             },
             "oneOf": provider_model_schemas,
             "required": ["provider", "model_id", "reasoning_level", "is_replaced"],

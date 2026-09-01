@@ -17,6 +17,10 @@ pub enum PiRuntimeBuildError {
     Llm(#[from] LlmGatewayClientError),
     #[error(transparent)]
     Execution(#[from] ExecutionGatewayClientError),
+    #[error("could not configure the search tool: {0}")]
+    SearchTool(#[source] tool_firecrawl_search::FirecrawlSearchToolError),
+    #[error("could not configure the scrape tool: {0}")]
+    ScrapeTool(#[source] tool_firecrawl_scrape::FirecrawlScrapeToolError),
 }
 
 #[derive(Debug, thiserror::Error)]
