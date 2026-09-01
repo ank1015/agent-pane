@@ -6,13 +6,14 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { getJson, postJson } from '../../lib/api-client'
+import { getJson, patchJson, postJson } from '../../lib/api-client'
 import { projectKeys } from './project-queries'
 import {
   type AbortProjectHarnessRunRequest,
   type CreateProjectHarnessSessionRequest,
   type CreateProjectHarnessSessionResponse,
-  type ProjectHarnessSession,
+  type ProjectSessionDetail,
+  type ProjectSession,
   type ProjectRun,
   type ProjectRunPage,
   type ProjectRunSummary,
@@ -33,10 +34,12 @@ const RUN_PAGE_SIZE = 100
 const EVENT_PAGE_SIZE = 500
 
 export const projectSessionKeys = {
-  all: (projectId: string) =>
-    [...projectKeys.detail(projectId), 'harness-sessions'] as const,
+  collection: (projectId: string) =>
+    [...projectKeys.detail(projectId), 'sessions'] as const,
+  list: (projectId: string) =>
+    [...projectSessionKeys.collection(projectId), 'list'] as const,
   detail: (projectId: string, sessionId: string) =>
-    [...projectSessionKeys.all(projectId), 'detail', sessionId] as const,
+    [...projectSessionKeys.collection(projectId), 'detail', sessionId] as const,
   messages: (projectId: string, sessionId: string) =>
     [...projectSessionKeys.detail(projectId, sessionId), 'messages'] as const,
   runsRoot: (projectId: string, sessionId: string) =>
@@ -47,6 +50,46 @@ export const projectSessionKeys = {
     [...projectSessionKeys.detail(projectId, sessionId), 'run', runId] as const,
   events: (projectId: string, sessionId: string, runId: string) =>
     [...projectSessionKeys.run(projectId, sessionId, runId), 'events'] as const,
+}
+
+export function useProjectSessions(projectId: string) {
+  return useQuery({
+    queryKey: projectSessionKeys.list(projectId),
+    queryFn: ({ signal }) =>
+      getJson<ProjectSession[]>(durableProjectSessionsEndpoint(projectId), signal),
+    enabled: projectId.length > 0,
+    staleTime: 5_000,
+    refetchInterval: (query) =>
+      query.state.data?.some((session) => session.is_active) === true
+        ? 3_000
+        : 30_000,
+  })
+}
+
+export function useArchiveProjectSession(projectId: string) {
+  const queryClient = useQueryClient()
+  const queryKey = projectSessionKeys.list(projectId)
+
+  return useMutation({
+    mutationFn: (sessionId: string) =>
+      patchJson<ProjectSession>(durableProjectSessionEndpoint(projectId, sessionId), {
+        archived: true,
+      }),
+    onMutate: async (sessionId) => {
+      await queryClient.cancelQueries({ queryKey })
+      const previous = queryClient.getQueryData<ProjectSession[]>(queryKey)
+      queryClient.setQueryData<ProjectSession[]>(queryKey, (current) =>
+        current?.filter((session) => session.id !== sessionId),
+      )
+      return { previous }
+    },
+    onError: (_error, _sessionId, context) => {
+      if (context?.previous !== undefined) {
+        queryClient.setQueryData(queryKey, context.previous)
+      }
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey }),
+  })
 }
 
 export type CreateProjectHarnessSessionVariables = {
@@ -73,14 +116,17 @@ export function useCreateProjectHarnessSession(projectId: string) {
         request,
         { headers: { 'Idempotency-Key': idempotencyKey } },
       ),
-    onSuccess: (response, variables) => {
+    onSuccess: (response) => {
       seedAcceptedRun(
         queryClient,
         projectId,
         response,
         response.session,
-        variables.request.harness_id,
       )
+      void queryClient.invalidateQueries({
+        queryKey: projectSessionKeys.list(projectId),
+        refetchType: 'none',
+      })
     },
   })
 }
@@ -92,7 +138,7 @@ export function useProjectHarnessSession(
   return useQuery({
     queryKey: projectSessionKeys.detail(projectId, sessionId),
     queryFn: ({ signal }) =>
-      getJson<ProjectHarnessSession>(
+      getJson<ProjectSessionDetail>(
         projectSessionEndpoint(projectId, sessionId),
         signal,
       ),
@@ -202,14 +248,15 @@ export function useStartProjectHarnessRun(
         { headers: { 'Idempotency-Key': idempotencyKey } },
       ),
     onSuccess: (response) => {
-      const current = queryClient.getQueryData<ProjectHarnessSession>(
+      const current = queryClient.getQueryData<ProjectSessionDetail>(
         projectSessionKeys.detail(projectId, sessionId),
       )
-      seedAcceptedRun(queryClient, projectId, response, {
-        session_id: sessionId,
-        current_revision: response.trigger_message.revision,
-        created_at: current?.session.created_at ?? response.run.created_at,
-      }, current?.harness_id ?? '')
+      seedAcceptedRun(
+        queryClient,
+        projectId,
+        response,
+        current?.session,
+      )
     },
   })
 }
@@ -361,6 +408,9 @@ export async function settleProjectRunQueries(
     queryClient.invalidateQueries({
       queryKey: projectSessionKeys.run(projectId, sessionId, runId),
     }),
+    queryClient.invalidateQueries({
+      queryKey: projectSessionKeys.list(projectId),
+    }),
     queryClient.invalidateQueries({ queryKey: projectKeys.environments(projectId) }),
     queryClient.invalidateQueries({ queryKey: projectKeys.bootstrap(projectId) }),
   ])
@@ -372,22 +422,33 @@ function seedAcceptedRun(
   response:
     | CreateProjectHarnessSessionResponse
     | StartProjectHarnessRunResponse,
-  session: CreateProjectHarnessSessionResponse['session'],
-  harnessId: string,
+  session: ProjectSession | undefined,
 ) {
-  const sessionId = session.session_id
-  const existing = queryClient.getQueryData<ProjectHarnessSession>(
-    projectSessionKeys.detail(projectId, sessionId),
-  )
-  const detail: ProjectHarnessSession = {
-    session,
-    harness_id: existing?.harness_id ?? harnessId,
+  if (session === undefined) return
+  const sessionId = session.id
+  const updatedSession: ProjectSession = {
+    ...session,
+    active_run_id: isLiveRunStatus(response.run.status)
+      ? response.run.run_id
+      : null,
+    is_active: isLiveRunStatus(response.run.status),
+    current_revision: response.trigger_message.revision,
+    last_activity_at: response.run.activated_at,
+  }
+  const detail: ProjectSessionDetail = {
+    session: updatedSession,
     latest_run: response.run,
     active_run: isLiveRunStatus(response.run.status) ? response.run : null,
   }
-  if (detail.harness_id.length > 0) {
-    queryClient.setQueryData(projectSessionKeys.detail(projectId, sessionId), detail)
-  }
+  queryClient.setQueryData(projectSessionKeys.detail(projectId, sessionId), detail)
+  queryClient.setQueryData<ProjectSession[]>(
+    projectSessionKeys.list(projectId),
+    (current) => {
+      const remaining =
+        current?.filter((candidate) => candidate.id !== sessionId) ?? []
+      return [updatedSession, ...remaining]
+    },
+  )
   appendSessionMessage(queryClient, projectId, sessionId, response.trigger_message)
   setProjectRunData(queryClient, projectId, sessionId, response.run)
   appendSessionRun(queryClient, projectId, sessionId, response.run)
@@ -483,13 +544,18 @@ function setProjectRunData(
     projectSessionKeys.run(projectId, sessionId, run.run_id),
     run,
   )
-  queryClient.setQueryData<ProjectHarnessSession>(
+  queryClient.setQueryData<ProjectSessionDetail>(
     projectSessionKeys.detail(projectId, sessionId),
     (current) =>
       current === undefined
         ? current
         : {
             ...current,
+            session: {
+              ...current.session,
+              active_run_id: isLiveRunStatus(run.status) ? run.run_id : null,
+              is_active: isLiveRunStatus(run.status),
+            },
             latest_run: run,
             active_run: isLiveRunStatus(run.status) ? run : null,
           },
@@ -523,7 +589,7 @@ function applyProjectRunEvent(
       }
     },
   )
-  queryClient.setQueryData<ProjectHarnessSession>(
+  queryClient.setQueryData<ProjectSessionDetail>(
     projectSessionKeys.detail(projectId, sessionId),
     (current) => {
       if (current === undefined) {
@@ -548,10 +614,30 @@ function applyProjectRunEvent(
       }
       return {
         ...current,
+        session: {
+          ...current.session,
+          active_run_id: !isTerminalRunStatus(event.run_status) ? runId : null,
+          is_active: !isTerminalRunStatus(event.run_status),
+        },
         latest_run: candidate,
         active_run: !isTerminalRunStatus(event.run_status) ? candidate : null,
       }
     },
+  )
+  queryClient.setQueryData<ProjectSession[]>(
+    projectSessionKeys.list(projectId),
+    (current) =>
+      current?.map((session) =>
+        session.id === sessionId
+          ? {
+              ...session,
+              active_run_id: !isTerminalRunStatus(event.run_status)
+                ? runId
+                : null,
+              is_active: !isTerminalRunStatus(event.run_status),
+            }
+          : session,
+      ),
   )
 }
 
@@ -561,11 +647,19 @@ function runSummary(run: ProjectRun): ProjectRunSummary {
 }
 
 function projectSessionsEndpoint(projectId: string) {
-  return `/api/projects/${encodeURIComponent(projectId)}/harness-sessions`
+  return durableProjectSessionsEndpoint(projectId)
+}
+
+function durableProjectSessionsEndpoint(projectId: string) {
+  return `/api/projects/${encodeURIComponent(projectId)}/sessions`
+}
+
+function durableProjectSessionEndpoint(projectId: string, sessionId: string) {
+  return `${durableProjectSessionsEndpoint(projectId)}/${encodeURIComponent(sessionId)}`
 }
 
 function projectSessionEndpoint(projectId: string, sessionId: string) {
-  return `${projectSessionsEndpoint(projectId)}/${encodeURIComponent(sessionId)}`
+  return durableProjectSessionEndpoint(projectId, sessionId)
 }
 
 function projectRunEndpoint(

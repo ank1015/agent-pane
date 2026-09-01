@@ -1,3 +1,5 @@
+import type { ProjectEnvironment } from './project-queries'
+
 export type JsonObject = Record<string, unknown>
 
 export type RunStatus =
@@ -109,11 +111,32 @@ export type ProjectRunPage = {
   next_cursor: string | null
 }
 
-export type ProjectHarnessSession = {
-  session: AgentSession
-  harness_id: string
+export type ProjectSessionDetail = {
+  session: ProjectSession
   latest_run: ProjectRun | null
   active_run: ProjectRun | null
+}
+
+export type ProjectSessionCreationState = 'pending' | 'accepted' | 'failed'
+
+export type ProjectSession = {
+  id: string
+  project_id: string
+  title: string
+  harness_id: string
+  harness_revision_id: string | null
+  harness_config: JsonObject
+  web_search_enabled: boolean
+  environments: ProjectEnvironment[]
+  active_run_id: string | null
+  is_active: boolean
+  current_revision: number
+  creation_state: ProjectSessionCreationState
+  creation_error: unknown | null
+  created_at: string
+  accepted_at: string | null
+  last_activity_at: string
+  archived_at: string | null
 }
 
 export type RunEventType =
@@ -167,14 +190,16 @@ export type ProjectRunLimits = {
 
 export type CreateProjectHarnessSessionRequest = {
   harness_id: string
+  title?: string
   prompt: string
   attachments?: ImageContent[]
   config_override?: JsonObject
+  environment_ids?: string[]
   limits?: ProjectRunLimits
 }
 
 export type CreateProjectHarnessSessionResponse = {
-  session: AgentSession
+  session: ProjectSession
   trigger_message: SessionMessage
   run: ProjectRun
 }
@@ -182,7 +207,6 @@ export type CreateProjectHarnessSessionResponse = {
 export type StartProjectHarnessRunRequest = {
   prompt: string
   attachments?: ImageContent[]
-  config_override?: JsonObject
   limits?: ProjectRunLimits
   expected_session_revision: number
 }

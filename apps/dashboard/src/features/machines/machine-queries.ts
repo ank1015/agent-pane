@@ -57,10 +57,19 @@ export type MachineInventory = {
 
 export type MachineEnvironment = {
   environment_id: string
+  project_id: string
   machine_id: string
   name: string
   workspace_root_id: string
   path: string
+  created_at: number
+}
+
+export type SandboxEnvironmentInstance = {
+  template_id: string
+  provider: SandboxProvider
+  provider_sandbox_id: string
+  environment: MachineEnvironment
   created_at: number
 }
 
@@ -209,6 +218,16 @@ export function useMachineEnvironments(machineId: string) {
         signal,
       ),
     enabled: machineId.length > 0,
+  })
+}
+
+export function useMaterializeSandboxEnvironmentTemplate() {
+  return useMutation({
+    mutationFn: (templateId: string) =>
+      postJson<SandboxEnvironmentInstance>(
+        `/api/machines/sandbox-environment-templates/${encodeURIComponent(templateId)}/environments`,
+        {},
+      ),
   })
 }
 
