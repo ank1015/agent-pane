@@ -52,6 +52,8 @@ pub struct ToolExecutionContext<'a> {
     pub execution: &'a ExecutionClient,
     pub operation: &'a OperationContext,
     pub project_id: Uuid,
+    pub search: &'a tool_firecrawl_search::FirecrawlSearchToolContext,
+    pub scrape: &'a tool_firecrawl_scrape::FirecrawlScrapeToolContext,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -134,6 +136,28 @@ impl From<tool_pi_write::WriteToolError> for ToolExecutionError {
     }
 }
 
+impl From<tool_firecrawl_search::FirecrawlSearchToolError> for ToolExecutionError {
+    fn from(error: tool_firecrawl_search::FirecrawlSearchToolError) -> Self {
+        let (name, message, details) = error.into_parts();
+        Self {
+            name,
+            message,
+            details,
+        }
+    }
+}
+
+impl From<tool_firecrawl_scrape::FirecrawlScrapeToolError> for ToolExecutionError {
+    fn from(error: tool_firecrawl_scrape::FirecrawlScrapeToolError) -> Self {
+        let (name, message, details) = error.into_parts();
+        Self {
+            name,
+            message,
+            details,
+        }
+    }
+}
+
 pub struct ToolOutput {
     pub content: Vec<ContentPart>,
     pub details: Option<Value>,
@@ -175,6 +199,24 @@ impl From<tool_pi_write::WriteToolOutput> for ToolOutput {
     }
 }
 
+impl From<tool_firecrawl_search::FirecrawlSearchToolOutput> for ToolOutput {
+    fn from(output: tool_firecrawl_search::FirecrawlSearchToolOutput) -> Self {
+        Self {
+            content: output.content,
+            details: output.details,
+        }
+    }
+}
+
+impl From<tool_firecrawl_scrape::FirecrawlScrapeToolOutput> for ToolOutput {
+    fn from(output: tool_firecrawl_scrape::FirecrawlScrapeToolOutput) -> Self {
+        Self {
+            content: output.content,
+            details: output.details,
+        }
+    }
+}
+
 pub fn default_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         get_tunnel_machines_list_definition(),
@@ -189,6 +231,8 @@ pub fn default_tool_definitions() -> Vec<ToolDefinition> {
         bash_definition(),
         edit_definition(),
         write_definition(),
+        tool_firecrawl_search::definition(),
+        tool_firecrawl_scrape::definition(),
     ]
 }
 
@@ -224,6 +268,18 @@ pub async fn execute_tool_call(
             execute_create_sandbox_template_environment(arguments, context).await
         }
         "update_environment" => execute_update_environment(arguments, context).await,
+        tool_firecrawl_search::TOOL_NAME => {
+            tool_firecrawl_search::execute_search_tool(arguments, context.search)
+                .await
+                .map(Into::into)
+                .map_err(Into::into)
+        }
+        tool_firecrawl_scrape::TOOL_NAME => {
+            tool_firecrawl_scrape::execute_scrape_tool(arguments, context.scrape)
+                .await
+                .map(Into::into)
+                .map_err(Into::into)
+        }
         _ => match targeted_arguments(name, arguments) {
             Ok((machine_id, arguments)) => match context.execution.machine(&machine_id).await {
                 Ok(machine) => {
@@ -618,7 +674,9 @@ mod tests {
                 "read",
                 "bash",
                 "edit",
-                "write"
+                "write",
+                "search",
+                "scrape"
             ]
         );
         for tool in tools {
@@ -698,6 +756,16 @@ mod tests {
                     "string"
                 );
                 assert_eq!(tool.parameters["required"], json!(["environment_id"]));
+                continue;
+            }
+            if tool.name == "search" {
+                assert_eq!(tool.parameters["required"], json!(["query"]));
+                assert!(tool.parameters["properties"].get("machineId").is_none());
+                continue;
+            }
+            if tool.name == "scrape" {
+                assert_eq!(tool.parameters["required"], json!(["url"]));
+                assert!(tool.parameters["properties"].get("machineId").is_none());
                 continue;
             }
             assert_eq!(tool.parameters["properties"]["machineId"]["type"], "string");

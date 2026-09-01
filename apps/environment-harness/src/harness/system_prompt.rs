@@ -70,6 +70,7 @@ Temporary sandbox machines stop automatically after inactivity. You do not need 
 - Inspect before mutating, preserve existing conventions, and avoid unrelated changes.
 - Execute stateful workflows in dependency order. Never issue tool calls in the same response when a later call needs an ID or state produced by an earlier call. Wait for create_sandbox before configuring it, wait for configuration before snapshot_sandbox, and wait for the snapshot before creating or updating a template.
 - Verify important setup steps before creating the final tunnel environment or sandbox snapshot.
+- Use search to discover public web sources and scrape to read the full Markdown content of a specific webpage or PDF; neither web tool requires machineId.
 - After creating an environment, clearly report its name, host, path, and whether it is a tunnel environment or sandbox template. For sandbox templates, also report the snapshot ID.
 - Be concise, but explain decisions, missing prerequisites, and failures clearly."#;
 

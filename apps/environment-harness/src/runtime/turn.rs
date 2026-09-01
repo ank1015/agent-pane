@@ -42,6 +42,8 @@ const AGENT_RETRY_BASE: Duration = Duration::from_millis(250);
 pub struct EnvironmentRuntime {
     llm: LlmGatewayClient,
     execution: ExecutionClient,
+    search: tool_firecrawl_search::FirecrawlSearchToolContext,
+    scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext,
     retry: RetryPolicy,
 }
 
@@ -50,14 +52,25 @@ impl EnvironmentRuntime {
         Ok(Self::new(
             LlmGatewayClient::new(config.llm_gateway.clone())?,
             ExecutionClient::new(config.execution_gateway.clone())?,
+            tool_firecrawl_search::FirecrawlSearchToolContext::from_package_env()
+                .map_err(EnvironmentRuntimeBuildError::SearchTool)?,
+            tool_firecrawl_scrape::FirecrawlScrapeToolContext::from_package_env()
+                .map_err(EnvironmentRuntimeBuildError::ScrapeTool)?,
         ))
     }
 
     #[must_use]
-    pub fn new(llm: LlmGatewayClient, execution: ExecutionClient) -> Self {
+    pub fn new(
+        llm: LlmGatewayClient,
+        execution: ExecutionClient,
+        search: tool_firecrawl_search::FirecrawlSearchToolContext,
+        scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext,
+    ) -> Self {
         Self {
             llm,
             execution,
+            search,
+            scrape,
             retry: RetryPolicy::environment_default(),
         }
     }
@@ -232,6 +245,8 @@ impl EnvironmentRuntime {
                 execution: &self.execution,
                 operation: run.operation(),
                 project_id,
+                search: &self.search,
+                scrape: &self.scrape,
             };
             let mut results = Vec::with_capacity(tool_calls.len());
             for tool_call in tool_calls {
