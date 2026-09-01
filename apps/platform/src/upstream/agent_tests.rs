@@ -27,6 +27,21 @@ struct ListQuery {
 
 type HarnessListRequest = (String, u32, Option<String>, Option<bool>);
 
+#[test]
+fn exact_harness_revision_selection_matches_the_agent_contract() {
+    let selection = AgentHarnessSelection::ExactRevision {
+        harness_revision_id: "codex-2026-09-01".to_owned(),
+    };
+
+    assert_eq!(
+        serde_json::to_value(selection).unwrap(),
+        json!({
+            "selection": "exact_revision",
+            "harness_revision_id": "codex-2026-09-01"
+        })
+    );
+}
+
 #[tokio::test]
 async fn harness_detail_authenticates_and_encodes_the_harness_id() {
     let (request_tx, mut request_rx) = mpsc::unbounded_channel();

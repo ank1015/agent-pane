@@ -35,6 +35,7 @@ struct CreateAgentSession {
 #[serde(tag = "selection", rename_all = "snake_case")]
 pub enum AgentHarnessSelection {
     ActiveRevision { harness_id: String },
+    ExactRevision { harness_revision_id: String },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
