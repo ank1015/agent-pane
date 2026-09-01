@@ -13,6 +13,12 @@ pub struct EnvironmentHarnessConfig {
     pub account_id: Option<Uuid>,
     #[serde(alias = "projectId")]
     pub project_id: Uuid,
+    #[serde(default = "default_true", alias = "webSearchEnabled")]
+    pub web_search_enabled: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 impl EnvironmentHarnessConfig {
@@ -49,6 +55,7 @@ mod tests {
         assert_eq!(config.provider, "openai");
         assert_eq!(config.model_id, "gpt-5.6-sol");
         assert_eq!(config.reasoning_level, "high");
+        assert!(config.web_search_enabled);
         assert_eq!(
             config.project_id,
             "019d2aa0-0000-7000-8000-000000000010"
@@ -67,6 +74,7 @@ mod tests {
             "reasoningLevel": "xhigh",
             "accountId": account_id,
             "projectId": project_id,
+            "webSearchEnabled": false,
             "future_setting": true
         }));
 
@@ -74,6 +82,7 @@ mod tests {
 
         assert_eq!(config.account_id, Some(account_id));
         assert_eq!(config.project_id, project_id);
+        assert!(!config.web_search_enabled);
     }
 
     #[test]

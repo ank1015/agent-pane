@@ -217,8 +217,8 @@ impl From<tool_firecrawl_scrape::FirecrawlScrapeToolOutput> for ToolOutput {
     }
 }
 
-pub fn default_tool_definitions() -> Vec<ToolDefinition> {
-    vec![
+pub fn default_tool_definitions(web_search_enabled: bool) -> Vec<ToolDefinition> {
+    let mut tools = vec![
         get_tunnel_machines_list_definition(),
         get_sandbox_accounts_list_definition(),
         list_environments_definition(),
@@ -231,9 +231,14 @@ pub fn default_tool_definitions() -> Vec<ToolDefinition> {
         bash_definition(),
         edit_definition(),
         write_definition(),
-        tool_firecrawl_search::definition(),
-        tool_firecrawl_scrape::definition(),
-    ]
+    ];
+    if web_search_enabled {
+        tools.extend([
+            tool_firecrawl_search::definition(),
+            tool_firecrawl_scrape::definition(),
+        ]);
+    }
+    tools
 }
 
 pub async fn execute_tool_call(
@@ -657,7 +662,7 @@ mod tests {
 
     #[test]
     fn default_definitions_are_valid_and_ordered() {
-        let tools = default_tool_definitions();
+        let tools = default_tool_definitions(true);
         let names: Vec<_> = tools.iter().map(|tool| tool.name()).collect();
 
         assert_eq!(
@@ -777,5 +782,15 @@ mod tests {
                     .any(|field| field == "machineId")
             );
         }
+    }
+
+    #[test]
+    fn omits_web_tools_when_disabled() {
+        let tools = default_tool_definitions(false);
+        let names = tools.iter().map(|tool| tool.name()).collect::<Vec<_>>();
+
+        assert_eq!(names.len(), 12);
+        assert!(!names.contains(&"search"));
+        assert!(!names.contains(&"scrape"));
     }
 }

@@ -74,16 +74,34 @@ Temporary sandbox machines stop automatically after inactivity. You do not need 
 - After creating an environment, clearly report its name, host, path, and whether it is a tunnel environment or sandbox template. For sandbox templates, also report the snapshot ID.
 - Be concise, but explain decisions, missing prerequisites, and failures clearly."#;
 
-pub fn generate_system_prompt() -> String {
-    DEFAULT_SYSTEM_PROMPT.to_owned()
+const WEB_SEARCH_GUIDELINE: &str = "- Use search to discover public web sources and scrape to read the full Markdown content of a specific webpage or PDF; neither web tool requires machineId.";
+
+pub fn generate_system_prompt(web_search_enabled: bool) -> String {
+    if web_search_enabled {
+        DEFAULT_SYSTEM_PROMPT.to_owned()
+    } else {
+        DEFAULT_SYSTEM_PROMPT
+            .lines()
+            .filter(|line| *line != WEB_SEARCH_GUIDELINE)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_SYSTEM_PROMPT, generate_system_prompt};
+    use super::{DEFAULT_SYSTEM_PROMPT, WEB_SEARCH_GUIDELINE, generate_system_prompt};
 
     #[test]
     fn returns_the_environment_system_prompt() {
-        assert_eq!(generate_system_prompt(), DEFAULT_SYSTEM_PROMPT);
+        assert_eq!(generate_system_prompt(true), DEFAULT_SYSTEM_PROMPT);
+    }
+
+    #[test]
+    fn removes_web_guidance_when_web_search_is_disabled() {
+        let prompt = generate_system_prompt(false);
+
+        assert!(!prompt.contains(WEB_SEARCH_GUIDELINE));
+        assert!(prompt.contains("## Operating principles"));
     }
 }

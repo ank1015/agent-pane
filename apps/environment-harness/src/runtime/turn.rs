@@ -348,9 +348,9 @@ fn main_request(
     )?;
     Ok(LlmRequest {
         model: model.model,
-        instructions: Some(generate_system_prompt()),
+        instructions: Some(generate_system_prompt(config.web_search_enabled)),
         messages,
-        tools: default_tool_definitions(),
+        tools: default_tool_definitions(config.web_search_enabled),
         provider_options: model.provider_options,
         metadata: BTreeMap::new(),
     })
