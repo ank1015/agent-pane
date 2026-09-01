@@ -1,11 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
 use execution_contracts::{
-    CommandSpec, CreateDirectoryRequest, EnvironmentId, ExecutionId, ExecutionPersistence,
-    ExecutionPolicy, ExecutionState, MachineId, NetworkMode, OperationId, PathSpec,
-    ProcessOutputPolicy, SandboxMode, StartExecutionRequest, StdinMode, WorkspaceRootId,
+    CommandSpec, CreateDirectoryRequest, EnvironmentId, ExecutionError, ExecutionId,
+    ExecutionPersistence, ExecutionPolicy, ExecutionState, MachineId, NetworkMode, OperationId,
+    PathSpec, ProcessOutputPolicy, SandboxMode, StartExecutionRequest, StdinMode, WorkspaceRootId,
 };
-use execution_runtime::{ExecutionRuntime, OperationContext};
+use execution_runtime::{BasicFileSystem, ExecutionRuntime, OperationContext};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -26,6 +26,10 @@ use crate::{
     },
     sandbox_templates::{SandboxEnvironmentInstance, environment_path},
 };
+
+const PREPARE_MAX_ATTEMPTS: u32 = 5;
+const PREPARE_INITIAL_RETRY_DELAY: Duration = Duration::from_millis(500);
+const PREPARE_MAX_RETRY_DELAY: Duration = Duration::from_secs(4);
 
 #[derive(Clone)]
 pub struct SandboxMaterializer {
@@ -284,16 +288,16 @@ async fn prepare_environment(
     let filesystem = runtime
         .filesystem()
         .ok_or_else(|| "sandbox runtime does not implement filesystem operations".to_owned())?;
-    filesystem
-        .create_directory(
-            &context,
-            CreateDirectoryRequest {
-                path: cwd.clone(),
-                recursive: true,
-            },
-        )
-        .await
-        .map_err(|error| format!("could not create template cwd: {error:?}"))?;
+    create_template_directory(
+        filesystem,
+        &context,
+        CreateDirectoryRequest {
+            path: cwd.clone(),
+            recursive: true,
+        },
+    )
+    .await
+    .map_err(|error| format!("could not create template cwd: {error:?}"))?;
     if creation_script.is_empty() {
         return Ok(());
     }
@@ -360,6 +364,31 @@ async fn prepare_environment(
             }
         }
     }
+}
+
+async fn create_template_directory(
+    filesystem: &dyn BasicFileSystem,
+    context: &OperationContext,
+    request: CreateDirectoryRequest,
+) -> Result<(), ExecutionError> {
+    let mut retry_delay = PREPARE_INITIAL_RETRY_DELAY;
+    for attempt in 1..=PREPARE_MAX_ATTEMPTS {
+        match filesystem.create_directory(context, request.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(error) if error.retryable && attempt < PREPARE_MAX_ATTEMPTS => {
+                tracing::warn!(
+                    %error,
+                    attempt,
+                    retry_delay_ms = retry_delay.as_millis(),
+                    "sandbox filesystem is not ready; retrying template setup"
+                );
+                tokio::time::sleep(retry_delay).await;
+                retry_delay = (retry_delay * 2).min(PREPARE_MAX_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the bounded retry loop always returns on its final attempt")
 }
 
 fn id<T>(value: String) -> Result<T, SandboxMaterializationError>

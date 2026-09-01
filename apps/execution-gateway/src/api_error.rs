@@ -89,6 +89,18 @@ impl ApiError {
         }
     }
 
+    pub(crate) fn background_task(error: impl std::fmt::Display) -> Self {
+        tracing::error!(%error, "background task failed");
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            error: execution_error(
+                ExecutionErrorCode::Internal,
+                "internal background task error",
+                true,
+            ),
+        }
+    }
+
     pub(crate) fn sandbox_materialization(error: SandboxMaterializationError) -> Self {
         match error {
             SandboxMaterializationError::SnapshotAccountMismatch => Self::bad(error.to_string()),

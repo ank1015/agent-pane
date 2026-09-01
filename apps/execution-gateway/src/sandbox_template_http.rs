@@ -240,10 +240,13 @@ async fn materialize_template(
     Path(template_id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<SandboxEnvironmentInstance>), ApiError> {
     require(&headers, &state.control_token)?;
-    state
-        .sandbox_materializer
-        .materialize(template_id)
+    let materializer = state.sandbox_materializer.clone();
+    // Remote sandbox provisioning may outlive the HTTP caller. Running the
+    // workflow in an owned task lets it finish its normal success or cleanup
+    // path even if the client disconnects while waiting for the response.
+    tokio::spawn(async move { materializer.materialize(template_id).await })
         .await
+        .map_err(ApiError::background_task)?
         .map(|instance| (StatusCode::CREATED, Json(instance)))
         .map_err(ApiError::sandbox_materialization)
 }
