@@ -78,8 +78,41 @@ impl IntoResponse for ApiError {
                 Json(ErrorResponse::new("project_not_found", "project not found")),
             )
                 .into_response(),
-            Self::Project(error @ ProjectError::Database(_)) => {
-                tracing::error!(%error, "project database operation failed");
+            Self::Project(ProjectError::HarnessSessionNotFound) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new(
+                    "harness_session_not_found",
+                    "project harness session not found",
+                )),
+            )
+                .into_response(),
+            Self::Project(ProjectError::HarnessRunNotFound) => (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new(
+                    "harness_run_not_found",
+                    "project harness run not found",
+                )),
+            )
+                .into_response(),
+            Self::Project(ProjectError::IdempotencyConflict) => (
+                StatusCode::CONFLICT,
+                Json(ErrorResponse::new(
+                    "idempotency_key_conflict",
+                    "the Idempotency-Key is already associated with a different request",
+                )),
+            )
+                .into_response(),
+            Self::Project(ProjectError::InvalidMessage(message)) => (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new("invalid_message", message)),
+            )
+                .into_response(),
+            Self::Project(
+                error @ (ProjectError::Database(_)
+                | ProjectError::InvalidSystemClock
+                | ProjectError::RequestSerialization(_)),
+            ) => {
+                tracing::error!(%error, "project harness session operation failed");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse::new(
@@ -89,10 +122,11 @@ impl IntoResponse for ApiError {
                 )
                     .into_response()
             }
-            Self::Agent(AgentError::Rejected { status, body }) => {
+            Self::Agent(AgentError::Rejected { status, body })
+            | Self::Project(ProjectError::Agent(AgentError::Rejected { status, body })) => {
                 (status, Json(body)).into_response()
             }
-            Self::Agent(error) => {
+            Self::Agent(error) | Self::Project(ProjectError::Agent(error)) => {
                 tracing::error!(%error, "Agent request failed");
                 (
                     StatusCode::BAD_GATEWAY,
