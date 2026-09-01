@@ -5,6 +5,8 @@ import {
   Delete03Icon,
   Folder03Icon,
   Globe02Icon,
+  MoreHorizontalIcon,
+  SquarePenIcon,
   ZapIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -19,7 +21,6 @@ import {
 } from 'react'
 import {
   Link,
-  Navigate,
   NavLink,
   matchPath,
   useLocation,
@@ -35,14 +36,20 @@ import {
   UpdateProjectEnvironmentNameDialog,
 } from './ProjectEnvironmentDialogs'
 import {
+  type ProjectBootstrapHarness,
   type ProjectEnvironment,
+  harnessModelOptions,
   useProject,
+  useProjectBootstrap,
   useProjectEnvironments,
 } from './project-queries'
 import {
   ProjectEnvironmentPromptComposer,
   type ProjectEnvironmentPromptSubmission,
 } from './ProjectEnvironmentPromptComposer'
+import { ProjectEnvironmentSelector } from './ProjectEnvironmentSelector'
+import { ProjectHarnessSelector } from './ProjectHarnessSelector'
+import { harnessUiDefinition } from './project-harness-ui'
 import { buildProjectConversation } from './project-conversation'
 import { useProjectRunEventStream } from './project-run-event-stream'
 import {
@@ -67,6 +74,8 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
 const ENVIRONMENT_HARNESS_ID = 'environment'
 const EMPTY_REASONING_LEVELS: readonly string[] = []
 const EMPTY_PROVIDER_MODEL_OPTIONS: readonly HarnessProviderModelOptions[] = []
+const EMPTY_PROJECT_BOOTSTRAP_HARNESSES: readonly ProjectBootstrapHarness[] = []
+const EMPTY_PROJECT_ENVIRONMENTS: readonly ProjectEnvironment[] = []
 const EMPTY_SESSION_MESSAGES: readonly SessionMessage[] = []
 const EMPTY_SESSION_RUNS: readonly ProjectRunSummary[] = []
 const ProjectEnvironmentConversation = lazy(() =>
@@ -96,10 +105,6 @@ export function ProjectPage({ projectId }: { projectId: string }) {
     '/projects/:projectId/environments/sessions/:sessionId',
     pathname,
   )
-
-  if (isProjectRoot) {
-    return <Navigate to={environmentsPath} replace />
-  }
 
   return (
     <div className="cursor-shell machine-detail-shell">
@@ -146,6 +151,43 @@ export function ProjectPage({ projectId }: { projectId: string }) {
               <span className="nav-item-label">{item.label}</span>
             </NavLink>
           ))}
+
+          <div className="project-recents">
+            <div className="project-recents-header">
+              <span className="project-recents-label">Recents</span>
+
+              <span className="project-recents-actions">
+                <button
+                  type="button"
+                  className="project-recents-action"
+                  aria-label="Recent options"
+                  title="Recent options"
+                >
+                  <HugeiconsIcon
+                    icon={MoreHorizontalIcon}
+                    size={16}
+                    color="currentColor"
+                    strokeWidth={1.5}
+                    aria-hidden="true"
+                  />
+                </button>
+                <Link
+                  className="project-recents-action"
+                  to={projectPath}
+                  aria-label="New chat"
+                  title="New chat"
+                >
+                  <HugeiconsIcon
+                    icon={SquarePenIcon}
+                    size={16}
+                    color="currentColor"
+                    strokeWidth={1.5}
+                    aria-hidden="true"
+                  />
+                </Link>
+              </span>
+            </div>
+          </div>
         </nav>
       </aside>
 
@@ -156,7 +198,9 @@ export function ProjectPage({ projectId }: { projectId: string }) {
             : ''
         }`}
       >
-        {isCreateEnvironmentPage ? (
+        {isProjectRoot ? (
+          <ProjectLandingPage projectId={projectId} />
+        ) : isCreateEnvironmentPage ? (
           <CreateProjectEnvironmentPage
             projectId={projectId}
             environmentsPath={environmentsPath}
@@ -171,6 +215,75 @@ export function ProjectPage({ projectId }: { projectId: string }) {
           <ProjectEnvironments projectId={projectId} />
         ) : null}
       </main>
+    </div>
+  )
+}
+
+function ProjectLandingPage({ projectId }: { projectId: string }) {
+  const bootstrap = useProjectBootstrap(projectId)
+  const [selectedHarnessId, setSelectedHarnessId] = useState<string | null>(
+    null,
+  )
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<
+    string | null
+  >(null)
+  const harnesses =
+    bootstrap.data?.harnesses ?? EMPTY_PROJECT_BOOTSTRAP_HARNESSES
+  const environments =
+    bootstrap.data?.project_environments ?? EMPTY_PROJECT_ENVIRONMENTS
+  const resolvedHarnessId =
+    selectedHarnessId !== null &&
+    harnesses.some((harness) => harness.harness_id === selectedHarnessId)
+      ? selectedHarnessId
+      : (harnesses.find(
+          (harness) => harness.harness_id === ENVIRONMENT_HARNESS_ID,
+        )?.harness_id ??
+        harnesses[0]?.harness_id ??
+        null)
+  const resolvedEnvironmentId =
+    selectedEnvironmentId !== null &&
+    environments.some(
+      (environment) => environment.id === selectedEnvironmentId,
+    )
+      ? selectedEnvironmentId
+      : (environments[0]?.id ?? null)
+  const harnessUi = harnessUiDefinition(resolvedHarnessId)
+  const modelOptions =
+    bootstrap.data === undefined || resolvedHarnessId === null
+      ? null
+      : harnessModelOptions(bootstrap.data, resolvedHarnessId)
+
+  return (
+    <div className="project-landing-page">
+      <div className="project-landing-composer-stack">
+        <div className="project-landing-context-row">
+          <ProjectHarnessSelector
+            harnesses={harnesses}
+            selectedHarnessId={resolvedHarnessId}
+            isPending={bootstrap.isPending}
+            onSelect={setSelectedHarnessId}
+          />
+          {harnessUi.environmentSelection === 'single' ? (
+            <ProjectEnvironmentSelector
+              environments={environments}
+              selectedEnvironmentId={resolvedEnvironmentId}
+              isPending={bootstrap.isPending}
+              onSelect={setSelectedEnvironmentId}
+            />
+          ) : null}
+        </div>
+        <ProjectEnvironmentPromptComposer
+          providerAccounts={
+            modelOptions?.providers ?? EMPTY_PROVIDER_MODEL_OPTIONS
+          }
+          reasoningLevels={
+            modelOptions?.reasoning_levels ?? EMPTY_REASONING_LEVELS
+          }
+          isModelOptionsPending={bootstrap.isPending}
+          isModelOptionsError={bootstrap.isError}
+          onRetryModelOptions={() => void bootstrap.refetch()}
+        />
+      </div>
     </div>
   )
 }
@@ -418,6 +531,7 @@ function CreateProjectEnvironmentPage({
         reasoning_level: submission.reasoningLevel,
         account_id: submission.accountId,
         project_id: projectId,
+        web_search_enabled: submission.webSearchEnabled,
       },
     }
     const fingerprint = JSON.stringify(request)
@@ -580,6 +694,7 @@ function ProjectEnvironmentSessionPage({
         reasoning_level: submission.reasoningLevel,
         account_id: submission.accountId,
         project_id: projectId,
+        web_search_enabled: submission.webSearchEnabled,
       },
       expected_session_revision: currentRevision,
     }

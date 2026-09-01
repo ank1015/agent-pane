@@ -1,6 +1,7 @@
 import {
   ArrowDown01Icon,
   ArrowUp02Icon,
+  FilterHorizontalIcon,
   PlusSignIcon,
   Tick02Icon,
 } from '@hugeicons/core-free-icons'
@@ -28,6 +29,7 @@ export type ProjectEnvironmentPromptSubmission = {
   provider: HarnessProviderModelOptions['provider']
   modelId: string
   reasoningLevel: string
+  webSearchEnabled: boolean
 }
 
 type AccountTooltip = {
@@ -51,12 +53,15 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
   const [model, setModel] = useState<string | null>(null)
   const [accountId, setAccountId] = useState<string | null>(null)
   const [modelPickerOpen, setModelPickerOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [activeModel, setActiveModel] = useState<string | null>(null)
   const [reasoningLevel, setReasoningLevel] = useState<string | null>(null)
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true)
   const [accountTooltip, setAccountTooltip] =
     useState<AccountTooltip | null>(null)
   const modelListId = useId()
   const modelTriggerRef = useRef<HTMLButtonElement>(null)
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null)
   const selectedAccount =
     providerAccounts.find((account) => account.account_id === accountId) ??
     providerAccounts[0] ??
@@ -102,6 +107,7 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
       provider: selectedAccount.provider,
       modelId: selectedModel,
       reasoningLevel: selectedReasoningLevel,
+      webSearchEnabled,
     })
   }
 
@@ -415,6 +421,64 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
             </span>
           </button>
         ) : null}
+        <div
+          className={`project-environment-settings${
+            settingsOpen ? ' project-environment-settings--open' : ''
+          }`}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) {
+              setSettingsOpen(false)
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              setSettingsOpen(false)
+              settingsTriggerRef.current?.focus()
+            }
+          }}
+        >
+          <button
+            ref={settingsTriggerRef}
+            type="button"
+            className="project-environment-settings-trigger"
+            aria-label="Prompt settings"
+            aria-haspopup="dialog"
+            aria-expanded={settingsOpen}
+            title="Prompt settings"
+            onClick={() => setSettingsOpen((open) => !open)}
+          >
+            <HugeiconsIcon
+              icon={FilterHorizontalIcon}
+              size={15}
+              strokeWidth={1.6}
+              aria-hidden="true"
+            />
+          </button>
+          {settingsOpen ? (
+            <div
+              className="project-environment-settings-popover"
+              role="dialog"
+              aria-label="Prompt settings"
+            >
+              <button
+                type="button"
+                className="project-environment-settings-option"
+                role="switch"
+                aria-checked={webSearchEnabled}
+                onClick={() =>
+                  setWebSearchEnabled((enabled) => !enabled)
+                }
+              >
+                <span>Web search</span>
+                <span
+                  className="project-environment-settings-switch"
+                  aria-hidden="true"
+                />
+              </button>
+            </div>
+          ) : null}
+        </div>
         <button
           type="button"
           className="project-environment-send-button"
