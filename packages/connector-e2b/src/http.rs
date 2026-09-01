@@ -265,11 +265,7 @@ fn decode_connect_stream(response: Response) -> RemoteProcessStream {
                         if let Ok(value) = serde_json::from_slice::<Value>(&payload)
                             && let Some(error) = value.get("error")
                         {
-                            let message = error
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .unwrap_or("E2B Connect stream failed");
-                            return Some((Err(E2bTransportError::new(message)), state));
+                            return Some((Err(connect_stream_error(error)), state));
                         }
                         state.done = true;
                         continue;
@@ -289,7 +285,15 @@ fn decode_connect_stream(response: Response) -> RemoteProcessStream {
                 Some(Ok(chunk)) => state.buffer.extend_from_slice(&chunk),
                 Some(Err(source)) => {
                     state.done = true;
-                    return Some((Err(request_error(source)), state));
+                    // This error is produced while consuming an already
+                    // established Connect stream. Reqwest does not classify
+                    // every prematurely closed HTTP/2 body as `is_body()`, so
+                    // preserve the transport context here and always surface
+                    // it as a retryable disconnect.
+                    return Some((
+                        Err(E2bTransportError::disconnected(source.to_string())),
+                        state,
+                    ));
                 }
                 None if state.buffer.is_empty() => return None,
                 None => {
@@ -304,6 +308,26 @@ fn decode_connect_stream(response: Response) -> RemoteProcessStream {
             }
         }
     }))
+}
+
+fn connect_stream_error(error: &Value) -> E2bTransportError {
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("E2B Connect stream failed");
+    let code = error
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(
+        code,
+        "unavailable" | "deadline_exceeded" | "resource_exhausted"
+    ) || message.contains("ended before the stream completed")
+    {
+        E2bTransportError::disconnected(message)
+    } else {
+        E2bTransportError::new(message)
+    }
 }
 
 fn parse_process_event(value: Value) -> Result<RemoteProcessEvent, E2bTransportError> {
@@ -423,5 +447,16 @@ mod tests {
             serde_json::from_slice::<Value>(&envelope[5..]).unwrap(),
             json!({"process": {"cmd": "echo"}})
         );
+    }
+
+    #[test]
+    fn classifies_early_sandbox_stream_closure_as_retryable_disconnect() {
+        let error = connect_stream_error(&json!({
+            "code": "internal",
+            "message": "the connection to sandbox sandbox-1 ended before the stream completed"
+        }));
+
+        assert!(error.retryable);
+        assert!(error.disconnected);
     }
 }
