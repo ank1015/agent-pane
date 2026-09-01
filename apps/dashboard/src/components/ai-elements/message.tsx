@@ -1,10 +1,17 @@
 import { cn } from '@/lib/utils'
 import { cjk } from '@streamdown/cjk'
 import { code } from '@streamdown/code'
+import { CheckIcon, CopyIcon, TextWrapIcon } from 'lucide-react'
 import type { UIMessage } from 'ai'
 import type { ComponentProps, HTMLAttributes } from 'react'
-import { memo } from 'react'
-import { Streamdown } from 'streamdown'
+import { memo, useState } from 'react'
+import {
+  CodeBlock,
+  CodeBlockCopyButton,
+  Streamdown,
+  type ExtraProps,
+  useIsCodeFenceIncomplete,
+} from 'streamdown'
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage['role']
@@ -48,6 +55,96 @@ export function MessageContent({
 export type MessageResponseProps = ComponentProps<typeof Streamdown>
 
 const streamdownPlugins = { cjk, code }
+const codeThemes: NonNullable<MessageResponseProps['shikiTheme']> = [
+  'one-dark-pro',
+  'one-dark-pro',
+]
+const streamdownIcons: NonNullable<MessageResponseProps['icons']> = {
+  CheckIcon,
+  CopyIcon,
+}
+
+type MarkdownCodeProps = ComponentProps<'code'> &
+  ExtraProps & {
+    'data-block'?: string
+  }
+
+function MarkdownCode({
+  children,
+  className,
+  node: _node,
+  ...props
+}: MarkdownCodeProps) {
+  const isIncomplete = useIsCodeFenceIncomplete()
+  const { 'data-block': dataBlock, ...codeProps } = props
+
+  if (dataBlock === undefined) {
+    return (
+      <code
+        className={className}
+        data-streamdown="inline-code"
+        {...codeProps}
+      >
+        {children}
+      </code>
+    )
+  }
+
+  const language = className?.match(/language-([\w-]+)/)?.[1] ?? 'text'
+  const rawCode = Array.isArray(children)
+    ? children.join('')
+    : String(children ?? '')
+  const codeText = rawCode.replace(/\n$/, '')
+
+  return (
+    <MarkdownCodeBlock
+      code={codeText}
+      isIncomplete={isIncomplete}
+      language={language}
+    />
+  )
+}
+
+function MarkdownCodeBlock({
+  code: codeText,
+  isIncomplete,
+  language,
+}: {
+  code: string
+  isIncomplete: boolean
+  language: string
+}) {
+  const [isWrapped, setIsWrapped] = useState(false)
+
+  return (
+    <CodeBlock
+      className={isWrapped ? 'project-session-code-is-wrapped' : undefined}
+      code={codeText}
+      isIncomplete={isIncomplete}
+      language={language}
+      lineNumbers={false}
+    >
+      <button
+        type="button"
+        className="project-session-code-control"
+        aria-label={isWrapped ? 'Disable code wrapping' : 'Wrap code'}
+        aria-pressed={isWrapped}
+        title={isWrapped ? 'Disable code wrapping' : 'Wrap code'}
+        onClick={() => setIsWrapped((wrapped) => !wrapped)}
+      >
+        <TextWrapIcon aria-hidden="true" size={13} />
+      </button>
+      <CodeBlockCopyButton
+        className="project-session-code-control"
+        timeout={1600}
+      />
+    </CodeBlock>
+  )
+}
+
+const markdownComponents: NonNullable<MessageResponseProps['components']> = {
+  code: MarkdownCode,
+}
 
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
@@ -56,7 +153,11 @@ export const MessageResponse = memo(
         'size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0',
         className,
       )}
+      components={markdownComponents}
+      icons={streamdownIcons}
+      lineNumbers={false}
       plugins={streamdownPlugins}
+      shikiTheme={codeThemes}
       {...props}
     />
   ),
