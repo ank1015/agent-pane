@@ -1,5 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { getJson, postJson } from '../../lib/api-client'
+import {
+  deleteRequest,
+  getJson,
+  patchJson,
+  postJson,
+} from '../../lib/api-client'
 
 export type Project = {
   id: string
@@ -70,6 +75,59 @@ export function useProjectEnvironments(projectId: string) {
   })
 }
 
+export function useUpdateProjectEnvironmentName(projectId: string) {
+  const queryClient = useQueryClient()
+  const queryKey = projectKeys.environments(projectId)
+
+  return useMutation({
+    mutationFn: ({
+      environment,
+      name,
+    }: {
+      environment: ProjectEnvironment
+      name: string
+    }) => patchJson<unknown>(projectEnvironmentEndpoint(environment), { name }),
+    onMutate: async ({ environment, name }) => {
+      await queryClient.cancelQueries({ queryKey })
+      const previousEnvironments =
+        queryClient.getQueryData<ProjectEnvironment[]>(queryKey)
+      queryClient.setQueryData<ProjectEnvironment[]>(queryKey, (environments) =>
+        environments?.map((candidate) =>
+          candidate.id === environment.id ? { ...candidate, name } : candidate,
+        ),
+      )
+      return { previousEnvironments }
+    },
+    onError: (_error, _variables, context) => {
+      queryClient.setQueryData(queryKey, context?.previousEnvironments)
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey }),
+  })
+}
+
+export function useDeleteProjectEnvironment(projectId: string) {
+  const queryClient = useQueryClient()
+  const queryKey = projectKeys.environments(projectId)
+
+  return useMutation({
+    mutationFn: (environment: ProjectEnvironment) =>
+      deleteRequest(projectEnvironmentEndpoint(environment)),
+    onMutate: async (environment) => {
+      await queryClient.cancelQueries({ queryKey })
+      const previousEnvironments =
+        queryClient.getQueryData<ProjectEnvironment[]>(queryKey)
+      queryClient.setQueryData<ProjectEnvironment[]>(queryKey, (environments) =>
+        environments?.filter((candidate) => candidate.id !== environment.id),
+      )
+      return { previousEnvironments }
+    },
+    onError: (_error, _environment, context) => {
+      queryClient.setQueryData(queryKey, context?.previousEnvironments)
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey }),
+  })
+}
+
 export function useCreateProject() {
   const queryClient = useQueryClient()
 
@@ -81,4 +139,12 @@ export function useCreateProject() {
       return queryClient.invalidateQueries({ queryKey: projectKeys.list() })
     },
   })
+}
+
+function projectEnvironmentEndpoint(environment: ProjectEnvironment) {
+  const resource =
+    environment.type === 'template'
+      ? 'sandbox-environment-templates'
+      : 'environments'
+  return `/api/machines/${resource}/${encodeURIComponent(environment.id)}`
 }
