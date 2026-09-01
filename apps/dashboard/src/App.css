@@ -1652,23 +1652,24 @@
 }
 
 .project-session-workspace {
+  position: relative;
   min-height: 0;
   flex: 1;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
 .project-session-conversation {
   min-height: 0;
   width: 100%;
+  height: 100%;
 }
 
 .project-session-conversation-content {
-  width: min(100%, 760px);
+  width: min(calc(100% - 48px), 640px);
   min-height: 100%;
   gap: 24px;
   margin: 0 auto;
-  padding: 44px 24px 36px;
+  padding: 44px 0 180px;
 }
 
 .project-session-message {
@@ -1690,9 +1691,71 @@
   max-width: min(78%, 560px);
   gap: 8px;
   padding: 9px 13px;
-  border: 1px solid #303030;
+  border: 0;
   border-radius: 12px;
-  background: #222222;
+  color: #cfcecf;
+  background: #242424;
+}
+
+.project-session-message-actions {
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  color: #777777;
+  font-size: 13px;
+  line-height: 18px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-2px);
+  transition:
+    opacity 100ms var(--cursor-ease),
+    transform 100ms var(--cursor-ease),
+    visibility 100ms;
+}
+
+.project-session-message-actions[data-from='user'] {
+  align-self: flex-end;
+}
+
+.project-session-message-actions[data-from='assistant'] {
+  align-self: flex-start;
+}
+
+.project-session-message-actions[data-from='assistant'] button {
+  order: -1;
+}
+
+.project-session-message:hover .project-session-message-actions,
+.project-session-message:focus-within .project-session-message-actions {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.project-session-message-actions time {
+  white-space: nowrap;
+}
+
+.project-session-message-actions button {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: #858585;
+  background: transparent;
+  cursor: pointer;
+}
+
+.project-session-message-actions button:hover,
+.project-session-message-actions button:focus-visible {
+  color: #c0c0c0;
+  background: #242424;
+  outline: none;
 }
 
 .project-session-assistant-message {
@@ -1767,284 +1830,58 @@
   object-fit: contain;
 }
 
-.project-session-thinking,
-.project-session-tool-call,
-.project-session-tool-result {
-  width: 100%;
-  color: #929292;
-  font-size: 13px;
-}
-
-.project-session-thinking > summary,
-.project-session-tool-call > summary,
-.project-session-tool-result > summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: fit-content;
-  padding: 2px 0;
-  border-radius: 4px;
-  outline: 0;
-  cursor: pointer;
-  list-style: none;
-}
-
-.project-session-thinking > summary::-webkit-details-marker,
-.project-session-tool-call > summary::-webkit-details-marker,
-.project-session-tool-result > summary::-webkit-details-marker,
-.project-session-run-summary::-webkit-details-marker {
-  display: none;
-}
-
-.project-session-thinking > summary:hover,
-.project-session-thinking > summary:focus-visible,
-.project-session-tool-call > summary:hover,
-.project-session-tool-call > summary:focus-visible,
-.project-session-tool-result > summary:hover,
-.project-session-tool-result > summary:focus-visible {
-  color: #c2c2c2;
-}
-
-.project-session-thinking[open] > summary > svg:first-child,
-.project-session-tool-call[open] .project-session-disclosure-chevron,
-.project-session-tool-result[open] .project-session-disclosure-chevron {
-  transform: rotate(180deg);
-}
-
-.project-session-thinking-content,
-.project-session-tool-result-content,
-.project-session-tool-call pre {
-  margin: 7px 0 0 19px;
-  padding: 8px 10px;
-  overflow-x: auto;
-  border-left: 1px solid #303030;
-  color: #8e8e8e;
-  background: transparent;
-  font-size: 12px;
-  line-height: 18px;
-  white-space: pre-wrap;
-}
-
-.project-session-disclosure-chevron,
-.project-session-thinking summary svg {
-  transition: transform 120ms var(--cursor-ease);
-}
-
-.project-session-system-message {
-  align-self: center;
-  color: #777777;
-  font-size: 12px;
-  text-align: center;
-}
-
-.project-session-run-progress {
-  position: relative;
+.project-session-run-error {
   width: min(100%, 610px);
-  contain: layout style;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 76px;
-}
-
-.project-session-run-progress > details {
-  position: relative;
-  border: 1px solid #292929;
-  border-radius: 10px;
-  background: #171717;
-}
-
-.project-session-run-summary {
-  min-height: 54px;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
+  display: flex;
+  align-items: flex-start;
   gap: 9px;
-  padding: 9px 12px;
-  color: #a2a2a2;
-  outline: 0;
-  cursor: pointer;
-  list-style: none;
-}
-
-.project-session-run-summary:focus-visible {
-  border-radius: 10px;
-  box-shadow: inset 0 0 0 1px #4b4b4b;
-}
-
-.project-session-run-summary > svg:first-child {
-  color: #8f8f8f;
-}
-
-.project-session-run-progress[data-status='active']
-  .project-session-run-summary
-  > svg:first-child,
-.project-session-run-progress[data-status='waiting']
-  .project-session-run-summary
-  > svg:first-child {
-  animation: project-session-spin 900ms linear infinite;
-}
-
-.project-session-run-progress[data-status='completed']
-  .project-session-run-summary
-  > svg:first-child {
-  color: #6fa47a;
-}
-
-.project-session-run-progress[data-status='failed']
-  .project-session-run-summary
-  > svg:first-child,
-.project-session-run-progress[data-status='aborted']
-  .project-session-run-summary
-  > svg:first-child {
+  padding: 10px 12px;
+  border: 1px solid rgb(168 115 115 / 28%);
+  border-radius: 9px;
   color: #a87373;
+  background: rgb(168 115 115 / 6%);
+  contain: layout style;
 }
 
-.project-session-run-summary-copy {
+.project-session-run-error > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.project-session-run-error > span {
   min-width: 0;
   display: grid;
-  gap: 1px;
+  gap: 2px;
 }
 
-.project-session-run-summary-copy strong {
-  overflow: hidden;
-  color: #d3d3d3;
+.project-session-run-error strong {
+  color: #c69393;
   font-size: 13px;
   font-weight: 500;
   line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.project-session-run-summary-copy > span {
-  overflow: hidden;
-  color: #797979;
+.project-session-run-error span span {
+  color: #8f6b6b;
   font-size: 12px;
   line-height: 17px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.project-session-run-chevron {
-  color: #6f6f6f;
-  transition: transform 140ms var(--cursor-ease);
-}
-
-.project-session-run-progress details[open] .project-session-run-chevron {
-  transform: rotate(180deg);
-}
-
-.project-session-stop-button {
-  position: absolute;
-  z-index: 2;
-  top: 15px;
-  right: 36px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 7px;
-  border: 1px solid #343434;
-  border-radius: 6px;
-  color: #929292;
-  background: #1d1d1d;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.project-session-stop-button:hover:not(:disabled),
-.project-session-stop-button:focus-visible {
-  color: #d0d0d0;
-  border-color: #484848;
-  outline: 0;
-}
-
-.project-session-stop-button:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.project-session-run-progress:has(.project-session-stop-button)
-  .project-session-run-summary-copy {
-  padding-right: 72px;
-}
-
-.project-session-event-list {
-  position: relative;
-  display: grid;
-  gap: 0;
-  margin: 0;
-  padding: 1px 12px 12px 38px;
-  list-style: none;
-}
-
-.project-session-event-list::before {
-  position: absolute;
-  top: 7px;
-  bottom: 20px;
-  left: 19px;
-  width: 1px;
-  background: #2e2e2e;
-  content: '';
-}
-
-.project-session-event-row {
-  position: relative;
-  min-height: 27px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
-  padding: 4px 0;
-  color: #848484;
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.project-session-event-marker {
-  position: absolute;
-  top: 10px;
-  left: -22px;
-  width: 5px;
-  height: 5px;
-  border: 1px solid #555555;
-  border-radius: 50%;
-  background: #171717;
-}
-
-.project-session-event-row[data-current='true'] {
-  color: #b0b0b0;
-}
-
-.project-session-event-row[data-current='true'] .project-session-event-marker {
-  border-color: #a3a3a3;
-  background: #a3a3a3;
-  box-shadow: 0 0 0 3px rgb(163 163 163 / 10%);
-  animation: project-session-pulse 1.5s ease-in-out infinite;
-}
-
-.project-session-event-copy {
-  min-width: 0;
-  display: grid;
-}
-
-.project-session-event-copy > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.project-session-event-copy > span + span {
-  color: #666666;
-}
-
-.project-session-event-row time {
-  color: #555555;
-  font-size: 10px;
+.project-session-run-duration {
+  width: 100%;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #282828;
+  color: #858585;
+  font-size: 14px;
+  line-height: 1.65;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .project-session-composer-wrap {
-  position: relative;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 5;
   display: grid;
   justify-items: center;
@@ -2087,32 +1924,13 @@
 }
 
 .project-session-scroll-button {
-  bottom: 14px;
+  bottom: 162px;
   width: 30px;
   height: 30px;
   border-color: #333333;
   color: #b8b8b8;
   background: #1d1d1d;
   box-shadow: 0 5px 16px rgb(0 0 0 / 35%);
-}
-
-@keyframes project-session-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes project-session-pulse {
-  50% {
-    opacity: 0.55;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .project-session-run-summary > svg:first-child,
-  .project-session-event-marker {
-    animation: none !important;
-  }
 }
 
 .create-snapshot-dialog {
@@ -2874,8 +2692,9 @@
   }
 
   .project-session-conversation-content {
+    width: min(calc(100% - 28px), 640px);
     gap: 20px;
-    padding: 28px 14px 24px;
+    padding: 28px 0 168px;
   }
 
   .project-session-user-message {
@@ -2884,14 +2703,6 @@
 
   .project-session-composer-wrap {
     padding: 10px 12px 14px;
-  }
-
-  .project-session-event-row time {
-    display: none;
-  }
-
-  .project-session-run-progress {
-    width: 100%;
   }
 
 }
