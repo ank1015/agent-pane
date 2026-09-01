@@ -6,11 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+agent-contracts.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 dotenvy.workspace = true
 execution-protocol.workspace = true
+llm-contracts.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
