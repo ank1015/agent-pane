@@ -47,6 +47,8 @@ tool-codex-apply-patch = { path = "packages/tool-codex-apply-patch", version = "
 tool-codex-unified-exec = { path = "packages/tool-codex-unified-exec", version = "0.1.0" }
 tool-codex-code-mode = { path = "packages/tool-codex-code-mode", version = "0.1.0" }
 tool-codex-web-search = { path = "packages/tool-codex-web-search", version = "0.1.0" }
+tool-firecrawl-search = { path = "packages/tool-firecrawl-search", version = "0.1.0" }
+tool-firecrawl-scrape = { path = "packages/tool-firecrawl-scrape", version = "0.1.0" }
 codex-code-mode-runtime = { path = "packages/codex-code-mode-runtime", version = "0.1.0" }
 provider-anthropic = { path = "packages/provider-anthropic", version = "0.1.0" }
 provider-chatgpt = { path = "packages/provider-chatgpt", version = "0.1.0" }
