@@ -362,6 +362,7 @@ export async function settleProjectRunQueries(
       queryKey: projectSessionKeys.run(projectId, sessionId, runId),
     }),
     queryClient.invalidateQueries({ queryKey: projectKeys.environments(projectId) }),
+    queryClient.invalidateQueries({ queryKey: projectKeys.bootstrap(projectId) }),
   ])
 }
 
