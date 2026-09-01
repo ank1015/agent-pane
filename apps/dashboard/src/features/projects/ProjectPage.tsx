@@ -510,7 +510,7 @@ function ProjectEnvironmentSessionPage({
   const currentRun = run.data ?? sessionRun
   const latestEvent = events.data?.pages.at(-1)?.items.at(-1)
   const currentRunStatus = latestEvent?.run_status ?? currentRun?.status
-  const stream = useProjectRunEventStream({
+  useProjectRunEventStream({
     projectId,
     sessionId,
     runId,
@@ -665,28 +665,8 @@ function ProjectEnvironmentSessionPage({
             submitError={startRun.isError ? startRun.error.message : null}
             onSubmit={submit}
           />
-          {isRunLive ? (
-            <p className="project-session-composer-hint" role="status">
-              {environmentRunStatusLabel(currentRunStatus, stream.state)}
-            </p>
-          ) : null}
         </div>
       </div>
     </div>
   )
-}
-
-function environmentRunStatusLabel(
-  status: 'active' | 'waiting' | 'aborted' | 'completed' | 'failed' | undefined,
-  streamState: ReturnType<typeof useProjectRunEventStream>['state'],
-) {
-  if (status === 'completed') return 'Environment run completed.'
-  if (status === 'failed') return 'Environment run failed.'
-  if (status === 'aborted') return 'Environment run stopped.'
-  if (status === 'waiting') return 'Environment run is waiting.'
-  if (streamState === 'reconnecting' || streamState === 'error') {
-    return 'Reconnecting to environment progress…'
-  }
-  if (status === 'active') return 'Creating environment…'
-  return 'Preparing environment session…'
 }
