@@ -1,8 +1,10 @@
 use agent_contracts::{Run, SessionMessage};
+use execution_protocol::ProjectEnvironment;
 use llm_contracts::{ImageContent, JsonObject};
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
+use crate::providers::model::{Provider, ProviderKind};
 use crate::upstream::agent::AgentSession;
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -10,6 +12,45 @@ pub struct Project {
     pub id: Uuid,
     pub name: String,
     pub avatar: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectBootstrap {
+    pub harnesses: Vec<ProjectBootstrapHarness>,
+    pub provider_accounts: Vec<ProjectBootstrapProviderAccount>,
+    pub project_environments: Vec<ProjectEnvironment>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectBootstrapHarness {
+    pub harness_id: String,
+    pub active_revision_id: String,
+    pub config_schema: Option<JsonObject>,
+    pub supported_providers: Vec<ProjectBootstrapHarnessProvider>,
+    pub supported_reasoning_levels: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectBootstrapHarnessProvider {
+    pub provider_id: String,
+    pub model_ids: Vec<String>,
+}
+
+#[derive(Debug, Eq, PartialEq, Serialize)]
+pub struct ProjectBootstrapProviderAccount {
+    pub account_id: Uuid,
+    pub name: String,
+    pub provider: ProviderKind,
+}
+
+impl From<Provider> for ProjectBootstrapProviderAccount {
+    fn from(account: Provider) -> Self {
+        Self {
+            account_id: account.id,
+            name: account.name,
+            provider: account.provider,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
