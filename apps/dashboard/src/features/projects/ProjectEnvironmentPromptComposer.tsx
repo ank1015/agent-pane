@@ -1,10 +1,11 @@
 import {
   ArrowDown01Icon,
   ArrowUp02Icon,
+  PlusSignIcon,
   Tick02Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useId, useRef, useState } from 'react'
+import { memo, useId, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { HarnessProviderModelOptions } from '../harnesses/harness-queries'
@@ -16,6 +17,17 @@ type ProjectEnvironmentPromptComposerProps = {
   isModelOptionsPending: boolean
   isModelOptionsError: boolean
   onRetryModelOptions: () => void
+  isSubmitting?: boolean
+  submitError?: string | null
+  onSubmit?: (submission: ProjectEnvironmentPromptSubmission) => void
+}
+
+export type ProjectEnvironmentPromptSubmission = {
+  prompt: string
+  accountId: string
+  provider: HarnessProviderModelOptions['provider']
+  modelId: string
+  reasoningLevel: string
 }
 
 type AccountTooltip = {
@@ -25,12 +37,15 @@ type AccountTooltip = {
   left: number
 }
 
-export function ProjectEnvironmentPromptComposer({
+export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironmentPromptComposer({
   providerAccounts,
   reasoningLevels,
   isModelOptionsPending,
   isModelOptionsError,
   onRetryModelOptions,
+  isSubmitting = false,
+  submitError = null,
+  onSubmit,
 }: ProjectEnvironmentPromptComposerProps) {
   const [prompt, setPrompt] = useState('')
   const [model, setModel] = useState<string | null>(null)
@@ -65,6 +80,30 @@ export function ProjectEnvironmentPromptComposer({
     reasoningLevelIndex === -1
       ? null
       : reasoningLevels[(reasoningLevelIndex + 1) % reasoningLevels.length]
+  const canSubmit =
+    prompt.trim().length > 0 &&
+    selectedAccount !== null &&
+    selectedModel !== null &&
+    selectedReasoningLevel !== null &&
+    !isSubmitting
+
+  const submit = () => {
+    if (
+      !canSubmit ||
+      selectedAccount === null ||
+      selectedModel === null ||
+      selectedReasoningLevel === null
+    ) {
+      return
+    }
+    onSubmit?.({
+      prompt,
+      accountId: selectedAccount.account_id,
+      provider: selectedAccount.provider,
+      modelId: selectedModel,
+      reasoningLevel: selectedReasoningLevel,
+    })
+  }
 
   const openModelPicker = () => {
     setActiveModel(null)
@@ -160,9 +199,32 @@ export function ProjectEnvironmentPromptComposer({
         aria-label="Environment instructions"
         spellCheck
         onChange={(event) => setPrompt(event.target.value)}
+        onKeyDown={(event) => {
+          if (
+            event.key === 'Enter' &&
+            !event.shiftKey &&
+            !event.nativeEvent.isComposing
+          ) {
+            event.preventDefault()
+            submit()
+          }
+        }}
       />
 
       <div className="project-environment-composer-footer">
+        <button
+          type="button"
+          className="project-environment-attachment-button"
+          aria-label="Add attachment"
+          title="Add attachment"
+        >
+          <HugeiconsIcon
+            icon={PlusSignIcon}
+            size={15}
+            strokeWidth={1.6}
+            aria-hidden="true"
+          />
+        </button>
         <div
           className={`project-environment-model-selector${
             modelPickerOpen ? ' project-environment-model-selector--open' : ''
@@ -353,21 +415,26 @@ export function ProjectEnvironmentPromptComposer({
             </span>
           </button>
         ) : null}
-        {prompt.trim().length > 0 ? (
-          <button
-            type="button"
-            className="project-environment-send-button"
-            aria-label="Send prompt"
-          >
-            <HugeiconsIcon
-              icon={ArrowUp02Icon}
-              size={17}
-              strokeWidth={2}
-              aria-hidden="true"
-            />
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className="project-environment-send-button"
+          aria-label={isSubmitting ? 'Starting environment run' : 'Send prompt'}
+          disabled={!canSubmit}
+          onClick={submit}
+        >
+          <HugeiconsIcon
+            icon={ArrowUp02Icon}
+            size={17}
+            strokeWidth={2}
+            aria-hidden="true"
+          />
+        </button>
       </div>
+      {submitError === null ? null : (
+        <p className="project-environment-submit-error" role="alert">
+          {submitError}
+        </p>
+      )}
       {accountTooltip === null
         ? null
         : createPortal(
@@ -385,7 +452,7 @@ export function ProjectEnvironmentPromptComposer({
           )}
     </section>
   )
-}
+})
 
 function modelLabel(modelId: string) {
   const leaf = modelId.split('/').at(-1) ?? modelId

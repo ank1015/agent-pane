@@ -268,10 +268,6 @@
   width: 110px;
 }
 
-.project-environment-snapshot-column {
-  width: 230px;
-}
-
 .project-environment-created-column {
   width: 150px;
 }
@@ -1182,13 +1178,19 @@
 .project-environment-composer-stage {
   min-height: 0;
   flex: 1;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  justify-items: center;
   padding: 24px 24px 16px;
 }
 
+.project-environment-create-title {
+  align-self: center;
+  text-align: center;
+}
+
 .project-environment-composer {
+  position: relative;
   width: min(100%, 640px);
   height: 120px;
   display: grid;
@@ -1200,6 +1202,16 @@
   transition:
     border-color var(--cursor-duration-fast) var(--cursor-ease),
     box-shadow var(--cursor-duration-fast) var(--cursor-ease);
+}
+
+.project-environment-submit-error {
+  position: absolute;
+  right: 2px;
+  bottom: -24px;
+  margin: 0;
+  color: var(--cursor-danger, #d97b7b);
+  font-size: var(--cursor-font-xs);
+  line-height: 18px;
 }
 
 .project-environment-composer:focus-within {
@@ -1235,6 +1247,36 @@
   display: flex;
   align-items: flex-end;
   gap: 5px;
+}
+
+.project-environment-attachment-button {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  flex: 0 0 24px;
+  display: grid;
+  place-items: center;
+  margin-right: 15px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  outline: 0;
+  color: #a0a0a0;
+  background: #252525;
+  cursor: pointer;
+  transition:
+    color var(--cursor-duration-fast) var(--cursor-ease),
+    background var(--cursor-duration-fast) var(--cursor-ease);
+}
+
+.project-environment-attachment-button:hover,
+.project-environment-attachment-button:focus-visible {
+  color: #c7c7c7;
+  background: #2e2e2e;
+}
+
+.project-environment-attachment-button:focus-visible {
+  box-shadow: 0 0 0 1px #666666;
 }
 
 .project-environment-model-selector {
@@ -1564,12 +1606,18 @@
     transform 80ms var(--cursor-ease);
 }
 
-.project-environment-send-button:hover {
+.project-environment-send-button:hover:not(:disabled) {
   background: #ffffff;
 }
 
-.project-environment-send-button:active {
+.project-environment-send-button:active:not(:disabled) {
   transform: scale(0.94);
+}
+
+.project-environment-send-button:disabled {
+  color: #666666;
+  background: #2e2e2e;
+  cursor: default;
 }
 
 .project-environment-send-button:focus-visible {
@@ -1585,6 +1633,485 @@
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+.project-session-page {
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.machine-detail-shell:has(.project-session-page) {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.machine-detail-main:has(.project-session-page) {
+  min-height: 0;
+}
+
+.project-session-workspace {
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.project-session-conversation {
+  min-height: 0;
+  width: 100%;
+}
+
+.project-session-conversation-content {
+  width: min(100%, 760px);
+  min-height: 100%;
+  gap: 24px;
+  margin: 0 auto;
+  padding: 44px 24px 36px;
+}
+
+.project-session-message {
+  max-width: 100%;
+  gap: 0;
+  contain: layout style;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 80px;
+}
+
+.project-session-user-message,
+.project-session-assistant-message {
+  color: #d8d8d8;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.project-session-user-message {
+  max-width: min(78%, 560px);
+  gap: 8px;
+  padding: 9px 13px;
+  border: 1px solid #303030;
+  border-radius: 12px;
+  background: #222222;
+}
+
+.project-session-assistant-message {
+  width: 100%;
+  gap: 12px;
+}
+
+.project-session-markdown {
+  width: 100%;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.project-session-markdown > :first-child {
+  margin-top: 0;
+}
+
+.project-session-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.project-session-markdown p,
+.project-session-markdown ul,
+.project-session-markdown ol,
+.project-session-markdown pre,
+.project-session-markdown blockquote {
+  margin-block: 8px;
+}
+
+.project-session-markdown h1,
+.project-session-markdown h2,
+.project-session-markdown h3 {
+  margin: 20px 0 8px;
+  color: #eeeeee;
+  font-weight: 550;
+  line-height: 1.3;
+}
+
+.project-session-markdown h1 {
+  font-size: 20px;
+}
+
+.project-session-markdown h2 {
+  font-size: 17px;
+}
+
+.project-session-markdown h3 {
+  font-size: 15px;
+}
+
+.project-session-markdown a {
+  color: #bcbcbc;
+  text-decoration-color: #686868;
+  text-underline-offset: 3px;
+}
+
+.project-session-markdown code:not(pre code) {
+  padding: 1px 4px;
+  border: 1px solid #303030;
+  border-radius: 4px;
+  color: #dedede;
+  background: #202020;
+  font-size: 0.9em;
+}
+
+.project-session-message-image {
+  width: min(100%, 460px);
+  max-height: 360px;
+  border: 1px solid #333333;
+  border-radius: 9px;
+  object-fit: contain;
+}
+
+.project-session-thinking,
+.project-session-tool-call,
+.project-session-tool-result {
+  width: 100%;
+  color: #929292;
+  font-size: 13px;
+}
+
+.project-session-thinking > summary,
+.project-session-tool-call > summary,
+.project-session-tool-result > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 2px 0;
+  border-radius: 4px;
+  outline: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.project-session-thinking > summary::-webkit-details-marker,
+.project-session-tool-call > summary::-webkit-details-marker,
+.project-session-tool-result > summary::-webkit-details-marker,
+.project-session-run-summary::-webkit-details-marker {
+  display: none;
+}
+
+.project-session-thinking > summary:hover,
+.project-session-thinking > summary:focus-visible,
+.project-session-tool-call > summary:hover,
+.project-session-tool-call > summary:focus-visible,
+.project-session-tool-result > summary:hover,
+.project-session-tool-result > summary:focus-visible {
+  color: #c2c2c2;
+}
+
+.project-session-thinking[open] > summary > svg:first-child,
+.project-session-tool-call[open] .project-session-disclosure-chevron,
+.project-session-tool-result[open] .project-session-disclosure-chevron {
+  transform: rotate(180deg);
+}
+
+.project-session-thinking-content,
+.project-session-tool-result-content,
+.project-session-tool-call pre {
+  margin: 7px 0 0 19px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-left: 1px solid #303030;
+  color: #8e8e8e;
+  background: transparent;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+}
+
+.project-session-disclosure-chevron,
+.project-session-thinking summary svg {
+  transition: transform 120ms var(--cursor-ease);
+}
+
+.project-session-system-message {
+  align-self: center;
+  color: #777777;
+  font-size: 12px;
+  text-align: center;
+}
+
+.project-session-run-progress {
+  position: relative;
+  width: min(100%, 610px);
+  contain: layout style;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 76px;
+}
+
+.project-session-run-progress > details {
+  position: relative;
+  border: 1px solid #292929;
+  border-radius: 10px;
+  background: #171717;
+}
+
+.project-session-run-summary {
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  color: #a2a2a2;
+  outline: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.project-session-run-summary:focus-visible {
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px #4b4b4b;
+}
+
+.project-session-run-summary > svg:first-child {
+  color: #8f8f8f;
+}
+
+.project-session-run-progress[data-status='active']
+  .project-session-run-summary
+  > svg:first-child,
+.project-session-run-progress[data-status='waiting']
+  .project-session-run-summary
+  > svg:first-child {
+  animation: project-session-spin 900ms linear infinite;
+}
+
+.project-session-run-progress[data-status='completed']
+  .project-session-run-summary
+  > svg:first-child {
+  color: #6fa47a;
+}
+
+.project-session-run-progress[data-status='failed']
+  .project-session-run-summary
+  > svg:first-child,
+.project-session-run-progress[data-status='aborted']
+  .project-session-run-summary
+  > svg:first-child {
+  color: #a87373;
+}
+
+.project-session-run-summary-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.project-session-run-summary-copy strong {
+  overflow: hidden;
+  color: #d3d3d3;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-session-run-summary-copy > span {
+  overflow: hidden;
+  color: #797979;
+  font-size: 12px;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-session-run-chevron {
+  color: #6f6f6f;
+  transition: transform 140ms var(--cursor-ease);
+}
+
+.project-session-run-progress details[open] .project-session-run-chevron {
+  transform: rotate(180deg);
+}
+
+.project-session-stop-button {
+  position: absolute;
+  z-index: 2;
+  top: 15px;
+  right: 36px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid #343434;
+  border-radius: 6px;
+  color: #929292;
+  background: #1d1d1d;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.project-session-stop-button:hover:not(:disabled),
+.project-session-stop-button:focus-visible {
+  color: #d0d0d0;
+  border-color: #484848;
+  outline: 0;
+}
+
+.project-session-stop-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.project-session-run-progress:has(.project-session-stop-button)
+  .project-session-run-summary-copy {
+  padding-right: 72px;
+}
+
+.project-session-event-list {
+  position: relative;
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 1px 12px 12px 38px;
+  list-style: none;
+}
+
+.project-session-event-list::before {
+  position: absolute;
+  top: 7px;
+  bottom: 20px;
+  left: 19px;
+  width: 1px;
+  background: #2e2e2e;
+  content: '';
+}
+
+.project-session-event-row {
+  position: relative;
+  min-height: 27px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 4px 0;
+  color: #848484;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.project-session-event-marker {
+  position: absolute;
+  top: 10px;
+  left: -22px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid #555555;
+  border-radius: 50%;
+  background: #171717;
+}
+
+.project-session-event-row[data-current='true'] {
+  color: #b0b0b0;
+}
+
+.project-session-event-row[data-current='true'] .project-session-event-marker {
+  border-color: #a3a3a3;
+  background: #a3a3a3;
+  box-shadow: 0 0 0 3px rgb(163 163 163 / 10%);
+  animation: project-session-pulse 1.5s ease-in-out infinite;
+}
+
+.project-session-event-copy {
+  min-width: 0;
+  display: grid;
+}
+
+.project-session-event-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-session-event-copy > span + span {
+  color: #666666;
+}
+
+.project-session-event-row time {
+  color: #555555;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.project-session-composer-wrap {
+  position: relative;
+  z-index: 5;
+  display: grid;
+  justify-items: center;
+  padding: 12px 24px 16px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    var(--cursor-chrome) 18px
+  );
+}
+
+.project-session-composer-hint {
+  position: absolute;
+  bottom: 2px;
+  margin: 0;
+  color: #626262;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.project-session-conversation-state,
+.project-session-empty-state {
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #777777;
+  font-size: 13px;
+}
+
+.project-session-conversation-state button {
+  padding: 2px 6px;
+  border: 0;
+  color: #bdbdbd;
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.project-session-scroll-button {
+  bottom: 14px;
+  width: 30px;
+  height: 30px;
+  border-color: #333333;
+  color: #b8b8b8;
+  background: #1d1d1d;
+  box-shadow: 0 5px 16px rgb(0 0 0 / 35%);
+}
+
+@keyframes project-session-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes project-session-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-session-run-summary > svg:first-child,
+  .project-session-event-marker {
+    animation: none !important;
   }
 }
 
@@ -2344,6 +2871,27 @@
 
   .project-environment-composer {
     padding: 10px 11px;
+  }
+
+  .project-session-conversation-content {
+    gap: 20px;
+    padding: 28px 14px 24px;
+  }
+
+  .project-session-user-message {
+    max-width: 90%;
+  }
+
+  .project-session-composer-wrap {
+    padding: 10px 12px 14px;
+  }
+
+  .project-session-event-row time {
+    display: none;
+  }
+
+  .project-session-run-progress {
+    width: 100%;
   }
 
 }
