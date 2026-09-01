@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::harness::model_catalog::{SUPPORTED_PROVIDERS, model_ids};
 
 pub const ENVIRONMENT_HARNESS_ID: &str = "environment";
-pub const ENVIRONMENT_HARNESS_REVISION_ID: &str = "environment-2026-09-01-web-tools";
+pub const ENVIRONMENT_HARNESS_REVISION_ID: &str = "environment-2026-09-01-configurable-web-tools";
 pub const ENVIRONMENT_HARNESS_DESCRIPTOR: HarnessDescriptor = HarnessDescriptor::new(
     ENVIRONMENT_HARNESS_ID,
     "environment",
@@ -88,12 +88,13 @@ fn environment_revision() -> RegisterHarnessRevisionRequest {
         .collect::<Vec<_>>();
     RegisterHarnessRevisionRequest {
         harness_revision_id: ENVIRONMENT_HARNESS_REVISION_ID.to_owned(),
-        revision: "2026-09-01-web-tools".to_owned(),
+        revision: "2026-09-01-configurable-web-tools".to_owned(),
         contract_version: 1,
         default_config: object(json!({
             "provider": "openai",
             "model_id": "gpt-5.6-sol",
-            "reasoning_level": "high"
+            "reasoning_level": "high",
+            "web_search_enabled": true
         })),
         config_schema: Some(object(json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -105,7 +106,8 @@ fn environment_revision() -> RegisterHarnessRevisionRequest {
                     "enum": ["low", "medium", "high", "xhigh", "max"]
                 },
                 "account_id": {"type": "string", "minLength": 1},
-                "project_id": {"type": "string", "format": "uuid"}
+                "project_id": {"type": "string", "format": "uuid"},
+                "web_search_enabled": {"type": "boolean", "default": true}
             },
             "oneOf": provider_model_schemas,
             "required": ["provider", "model_id", "reasoning_level"],

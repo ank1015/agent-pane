@@ -116,6 +116,29 @@ async fn retries_a_transient_llm_failure_inside_the_harness_and_completes() {
 }
 
 #[tokio::test]
+async fn omits_web_tools_and_guidance_when_disabled() {
+    let agent = Arc::new(AgentState::new().with_web_search_enabled(false));
+    let llm = Arc::new(LlmState::new(0));
+    let runtime = runtime(&llm).await;
+    let turn = active_turn(&agent).await;
+
+    runtime.execute(&turn).await.expect("runtime outcome");
+
+    let requests = llm.requests.lock().expect("LLM requests");
+    let request = &requests[0]["request"];
+    let tools = request["tools"].as_array().expect("tool definitions");
+    assert_eq!(tools.len(), 12);
+    assert!(tools.iter().all(|tool| tool["name"] != "search"));
+    assert!(tools.iter().all(|tool| tool["name"] != "scrape"));
+    assert!(
+        !request["instructions"]
+            .as_str()
+            .expect("instructions")
+            .contains("Use search to discover public web sources")
+    );
+}
+
+#[tokio::test]
 async fn sends_the_chatgpt_provider_profile_to_the_gateway() {
     let agent = Arc::new(AgentState::for_provider("chatgpt"));
     let llm = Arc::new(LlmState::new(0));
@@ -304,6 +327,7 @@ struct AgentState {
     trigger_session_message_id: Uuid,
     account_id: Uuid,
     provider: &'static str,
+    web_search_enabled: bool,
     revision: AtomicU64,
     appends: Mutex<Vec<AppendSessionMessages>>,
 }
@@ -320,9 +344,15 @@ impl AgentState {
             trigger_session_message_id: Uuid::now_v7(),
             account_id: Uuid::now_v7(),
             provider,
+            web_search_enabled: true,
             revision: AtomicU64::new(1),
             appends: Mutex::new(Vec::new()),
         }
+    }
+
+    fn with_web_search_enabled(mut self, enabled: bool) -> Self {
+        self.web_search_enabled = enabled;
+        self
     }
 
     fn request(&self) -> TurnRequested {
@@ -348,7 +378,8 @@ impl AgentState {
                 "model_id": model_id,
                 "reasoning_level": "high",
                 "account_id": self.account_id,
-                "project_id": "019d2aa0-0000-7000-8000-000000000010"
+                "project_id": "019d2aa0-0000-7000-8000-000000000010",
+                "web_search_enabled": self.web_search_enabled
             })
             .as_object()
             .unwrap()

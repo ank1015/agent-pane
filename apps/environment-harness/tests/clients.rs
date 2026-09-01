@@ -201,6 +201,11 @@ async fn registers_and_activates_the_packaged_environment_harness() {
         ENVIRONMENT_HARNESS_REVISION_ID
     );
     assert_eq!(calls[2].body["default_config"]["model_id"], "gpt-5.6-sol");
+    assert_eq!(calls[2].body["default_config"]["web_search_enabled"], true);
+    assert_eq!(
+        calls[2].body["config_schema"]["properties"]["web_search_enabled"],
+        json!({"type": "boolean", "default": true})
+    );
     assert!(
         calls[2].body["default_config"]
             .get("external_prompt")
