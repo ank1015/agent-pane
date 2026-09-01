@@ -1,6 +1,8 @@
 mod http;
 pub mod model;
 
+use std::collections::HashSet;
+
 use agent_contracts::{NewRunMessage, Run, RunEventPage, RunStatus, SessionMessagePage};
 use chrono::Utc;
 use execution_protocol::ProjectEnvironment;
@@ -10,6 +12,8 @@ use llm_contracts::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use tokio::task::JoinError;
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::upstream::{
@@ -19,11 +23,14 @@ use crate::upstream::{
         AgentSessionMessageListQuery, AgentSessionRunListQuery, AgentSessionRunPage, AgentStartRun,
     },
     execution_gateway::{ExecutionGatewayClient, ExecutionGatewayError},
+    llm_gateway::{LlmGatewayClient, LlmGatewayError},
 };
 use model::{
     CreateProjectHarnessSessionRequest, CreateProjectHarnessSessionResponse, CreateProjectRequest,
-    Project, ProjectHarnessSessionResponse, StartProjectHarnessSessionRunRequest,
-    StartProjectHarnessSessionRunResponse, UpdateProjectRequest,
+    Project, ProjectBootstrap, ProjectBootstrapHarness, ProjectBootstrapHarnessProvider,
+    ProjectBootstrapProviderAccount, ProjectHarnessSessionResponse,
+    StartProjectHarnessSessionRunRequest, StartProjectHarnessSessionRunResponse,
+    UpdateProjectRequest,
 };
 
 const MAX_NAME_LENGTH: usize = 128;
@@ -34,15 +41,22 @@ pub struct ProjectService {
     pool: PgPool,
     gateway: ExecutionGatewayClient,
     agent: AgentClient,
+    llm_gateway: LlmGatewayClient,
 }
 
 impl ProjectService {
     #[must_use]
-    pub const fn new(pool: PgPool, gateway: ExecutionGatewayClient, agent: AgentClient) -> Self {
+    pub const fn new(
+        pool: PgPool,
+        gateway: ExecutionGatewayClient,
+        agent: AgentClient,
+        llm_gateway: LlmGatewayClient,
+    ) -> Self {
         Self {
             pool,
             gateway,
             agent,
+            llm_gateway,
         }
     }
 
@@ -73,6 +87,94 @@ impl ProjectService {
         project_id: Uuid,
     ) -> Result<Vec<ProjectEnvironment>, ExecutionGatewayError> {
         self.gateway.list_project_environments(project_id).await
+    }
+
+    async fn bootstrap(&self, project_id: Uuid) -> Result<ProjectBootstrap, ProjectError> {
+        self.get(project_id).await?;
+
+        let (harnesses, accounts, project_environments) = tokio::join!(
+            self.list_bootstrap_harnesses(),
+            self.llm_gateway.list_providers(None),
+            self.gateway.list_project_environments(project_id),
+        );
+        let mut provider_accounts = accounts?
+            .accounts
+            .into_iter()
+            .filter(|account| account.enabled)
+            .map(ProjectBootstrapProviderAccount::from)
+            .collect::<Vec<_>>();
+        provider_accounts.sort_by(|left, right| {
+            left.provider
+                .as_str()
+                .cmp(right.provider.as_str())
+                .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+                .then_with(|| left.account_id.cmp(&right.account_id))
+        });
+
+        Ok(ProjectBootstrap {
+            harnesses: harnesses?,
+            provider_accounts,
+            project_environments: project_environments?,
+        })
+    }
+
+    async fn list_bootstrap_harnesses(&self) -> Result<Vec<ProjectBootstrapHarness>, ProjectError> {
+        let mut harnesses = Vec::new();
+        let mut cursor = None;
+        let mut seen_cursors = HashSet::new();
+
+        loop {
+            let page = self
+                .agent
+                .list_harnesses(cursor.as_deref(), Some(true))
+                .await?;
+            harnesses.extend(page.items);
+            match page.next_cursor {
+                Some(next_cursor) if seen_cursors.insert(next_cursor.clone()) => {
+                    cursor = Some(next_cursor);
+                }
+                Some(_) => return Err(ProjectError::Agent(AgentError::InvalidPagination)),
+                None => break,
+            }
+        }
+
+        let mut tasks = JoinSet::new();
+        for harness in harnesses {
+            let revision_id = harness.active_revision_id.clone().ok_or_else(|| {
+                ProjectError::InvalidHarnessMetadata(format!(
+                    "enabled harness {} has no active revision",
+                    harness.harness_id
+                ))
+            })?;
+            let agent = self.agent.clone();
+            tasks.spawn(async move {
+                let revision = agent
+                    .get_harness_revision(&harness.harness_id, &revision_id)
+                    .await?;
+                Ok::<_, AgentError>((harness, revision))
+            });
+        }
+
+        let mut resolved = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            let (harness, revision) = result??;
+            resolved.push(ProjectBootstrapHarness {
+                harness_id: harness.harness_id,
+                active_revision_id: revision.harness_revision_id,
+                config_schema: revision.config_schema,
+                supported_providers: harness
+                    .supported_providers
+                    .into_iter()
+                    .map(|provider| ProjectBootstrapHarnessProvider {
+                        provider_id: provider.provider_id,
+                        model_ids: provider.model_ids,
+                    })
+                    .collect(),
+                supported_reasoning_levels: harness.supported_reasoning_levels,
+            });
+        }
+        resolved.sort_by(|left, right| left.harness_id.cmp(&right.harness_id));
+        Ok(resolved)
     }
 
     async fn create_harness_session(
@@ -744,12 +846,20 @@ pub enum ProjectError {
     IdempotencyConflict,
     #[error("invalid harness session message: {0}")]
     InvalidMessage(String),
+    #[error("invalid harness metadata: {0}")]
+    InvalidHarnessMetadata(String),
     #[error("the system clock is before the Unix epoch")]
     InvalidSystemClock,
     #[error("could not serialize the harness session request")]
     RequestSerialization(#[source] serde_json::Error),
     #[error(transparent)]
     Agent(#[from] AgentError),
+    #[error(transparent)]
+    ExecutionGateway(#[from] ExecutionGatewayError),
+    #[error(transparent)]
+    LlmGateway(#[from] LlmGatewayError),
+    #[error("harness metadata task failed")]
+    HarnessMetadataTask(#[from] JoinError),
     #[error("project database operation failed")]
     Database(#[from] sqlx::Error),
 }
@@ -944,7 +1054,13 @@ mod tests {
             std::time::Duration::from_secs(1),
         )
         .unwrap();
-        let service = ProjectService::new(pool, gateway, agent);
+        let llm_gateway = crate::upstream::llm_gateway::LlmGatewayClient::new(
+            "http://127.0.0.1:1".parse().unwrap(),
+            "test-admin-token",
+            std::time::Duration::from_secs(1),
+        )
+        .unwrap();
+        let service = ProjectService::new(pool, gateway, agent, llm_gateway);
 
         let created = service
             .create(&CreateProjectRequest {

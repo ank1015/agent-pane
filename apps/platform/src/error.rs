@@ -122,9 +122,31 @@ impl IntoResponse for ApiError {
                 )
                     .into_response()
             }
+            Self::Project(error @ ProjectError::HarnessMetadataTask(_)) => {
+                tracing::error!(%error, "project bootstrap task failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse::new(
+                        "project_bootstrap_unavailable",
+                        "the project bootstrap data is unavailable",
+                    )),
+                )
+                    .into_response()
+            }
             Self::Agent(AgentError::Rejected { status, body })
             | Self::Project(ProjectError::Agent(AgentError::Rejected { status, body })) => {
                 (status, Json(body)).into_response()
+            }
+            Self::Project(error @ ProjectError::InvalidHarnessMetadata(_)) => {
+                tracing::error!(%error, "Agent returned invalid harness metadata");
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorResponse::new(
+                        "agent_unavailable",
+                        "Agent is unavailable or returned an invalid response",
+                    )),
+                )
+                    .into_response()
             }
             Self::Agent(error) | Self::Project(ProjectError::Agent(error)) => {
                 tracing::error!(%error, "Agent request failed");
@@ -137,10 +159,13 @@ impl IntoResponse for ApiError {
                 )
                     .into_response()
             }
-            Self::ExecutionGateway(ExecutionGatewayError::Rejected { status, body }) => {
-                (status, Json(body)).into_response()
-            }
-            Self::ExecutionGateway(error) => {
+            Self::ExecutionGateway(ExecutionGatewayError::Rejected { status, body })
+            | Self::Project(ProjectError::ExecutionGateway(ExecutionGatewayError::Rejected {
+                status,
+                body,
+            })) => (status, Json(body)).into_response(),
+            Self::ExecutionGateway(error)
+            | Self::Project(ProjectError::ExecutionGateway(error)) => {
                 tracing::error!(%error, "execution gateway request failed");
                 (
                     StatusCode::BAD_GATEWAY,
@@ -151,10 +176,11 @@ impl IntoResponse for ApiError {
                 )
                     .into_response()
             }
-            Self::LlmGateway(LlmGatewayError::Rejected { status, body }) => {
+            Self::LlmGateway(LlmGatewayError::Rejected { status, body })
+            | Self::Project(ProjectError::LlmGateway(LlmGatewayError::Rejected { status, body })) => {
                 (status, Json(body)).into_response()
             }
-            Self::LlmGateway(error) => {
+            Self::LlmGateway(error) | Self::Project(ProjectError::LlmGateway(error)) => {
                 tracing::error!(%error, "llm gateway request failed");
                 (
                     StatusCode::BAD_GATEWAY,

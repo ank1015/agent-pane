@@ -59,12 +59,13 @@ pub fn router(
         )))
         .merge(harnesses::router(harnesses::HarnessService::new(
             agent.clone(),
-            gateway,
+            gateway.clone(),
         )))
         .merge(projects::router(projects::ProjectService::new(
             database.pool().clone(),
             execution_gateway,
             agent,
+            gateway,
         )))
         .layer(DefaultBodyLimit::max(max_request_bytes))
         .with_state(state)
