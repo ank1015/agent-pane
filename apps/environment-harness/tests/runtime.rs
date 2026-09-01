@@ -53,7 +53,7 @@ async fn retries_a_transient_llm_failure_inside_the_harness_and_completes() {
         1
     );
     let tools = requests[1]["request"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 12);
+    assert_eq!(tools.len(), 14);
     assert_eq!(tools[0]["name"], "get_tunnel_machines_list");
     assert_eq!(tools[0]["parameters"]["required"], json!([]));
     assert_eq!(tools[1]["name"], "get_sandbox_accounts_list");
@@ -89,7 +89,7 @@ async fn retries_a_transient_llm_failure_inside_the_harness_and_completes() {
         tools[7]["parameters"]["required"],
         json!(["environment_id"])
     );
-    for tool in &tools[8..] {
+    for tool in &tools[8..12] {
         assert!(
             tool["parameters"]["required"]
                 .as_array()
@@ -97,6 +97,10 @@ async fn retries_a_transient_llm_failure_inside_the_harness_and_completes() {
                 .contains(&json!("machineId"))
         );
     }
+    assert_eq!(tools[12]["name"], "search");
+    assert_eq!(tools[12]["parameters"]["required"], json!(["query"]));
+    assert_eq!(tools[13]["name"], "scrape");
+    assert_eq!(tools[13]["parameters"]["required"], json!(["url"]));
     drop(requests);
 
     let appends = agent.appends.lock().expect("Agent appends");
@@ -265,7 +269,13 @@ async fn runtime(llm: &Arc<LlmState>) -> EnvironmentRuntime {
         "execution-secret",
     ))
     .expect("execution client");
-    EnvironmentRuntime::new(llm_client, execution_client).with_retry_policy(RetryPolicy {
+    EnvironmentRuntime::new(
+        llm_client,
+        execution_client,
+        tool_firecrawl_search::FirecrawlSearchToolContext::new("test-key").expect("search context"),
+        tool_firecrawl_scrape::FirecrawlScrapeToolContext::new("test-key").expect("scrape context"),
+    )
+    .with_retry_policy(RetryPolicy {
         max_retries: 1,
         base_delay: Duration::from_millis(1),
         max_retry_delay: Duration::from_millis(5),

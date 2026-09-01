@@ -1,6 +1,6 @@
 use std::{
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -118,6 +118,8 @@ async fn lists_only_connected_online_tunneled_machines() {
             execution: &execution,
             operation: &operation,
             project_id: project_id(),
+            search: test_search_context(),
+            scrape: test_scrape_context(),
         },
     )
     .await
@@ -171,6 +173,8 @@ async fn lists_configured_sandbox_accounts() {
             execution: &execution,
             operation: &operation,
             project_id: project_id(),
+            search: test_search_context(),
+            scrape: test_scrape_context(),
         },
     )
     .await
@@ -270,6 +274,8 @@ async fn discovery_tools_reject_arguments_without_calling_the_gateway() {
                 execution: &execution,
                 operation: &operation,
                 project_id: project_id(),
+                search: test_search_context(),
+                scrape: test_scrape_context(),
             },
         )
         .await
@@ -278,6 +284,102 @@ async fn discovery_tools_reject_arguments_without_calling_the_gateway() {
         assert_error(&result, "invalid_arguments");
         assert!(text(&result).contains("does not accept arguments"));
     }
+}
+
+#[tokio::test]
+async fn executes_web_tools_without_a_machine_target() {
+    let app = Router::new()
+        .route(
+            "/v2/search",
+            post(|| async {
+                Json(json!({
+                    "success": true,
+                    "data": {
+                        "web": [{
+                            "title": "Environment documentation",
+                            "description": "Relevant documentation",
+                            "url": "https://example.com/docs"
+                        }]
+                    },
+                    "id": "search-1",
+                    "creditsUsed": 1
+                }))
+            }),
+        )
+        .route(
+            "/v2/scrape",
+            post(|| async {
+                Json(json!({
+                    "success": true,
+                    "data": {
+                        "markdown": "# Environment documentation\n\nUseful content.",
+                        "metadata": {
+                            "title": "Environment documentation",
+                            "sourceURL": "https://example.com/docs",
+                            "statusCode": 200,
+                            "contentType": "text/html"
+                        }
+                    }
+                }))
+            }),
+        );
+    let base_url = serve(app).await;
+    let search = tool_firecrawl_search::FirecrawlSearchToolContext::with_client(
+        "test-key",
+        base_url.join("/v2/search").expect("search URL"),
+        reqwest::Client::new(),
+    )
+    .expect("search context");
+    let scrape = tool_firecrawl_scrape::FirecrawlScrapeToolContext::with_client(
+        "test-key",
+        base_url.join("/v2/scrape").expect("scrape URL"),
+        reqwest::Client::new(),
+    )
+    .expect("scrape context");
+    let execution =
+        execution_client("http://127.0.0.1:1".parse().expect("URL")).expect("execution client");
+    let operation = OperationContext::new();
+    let context = GatewayToolExecutionContext {
+        execution: &execution,
+        operation: &operation,
+        project_id: project_id(),
+        search: &search,
+        scrape: &scrape,
+    };
+
+    let search_result = execute_tool_call(
+        &AssistantContent::ToolCall {
+            name: "search".to_owned(),
+            arguments: ToolArguments::Object(
+                [("query".to_owned(), json!("environment documentation"))]
+                    .into_iter()
+                    .collect(),
+            ),
+            tool_call_id: ToolCallId::new("search-call").expect("tool call id"),
+        },
+        &context,
+    )
+    .await
+    .expect("search tool call");
+    assert_success(&search_result);
+    assert!(text(&search_result).contains("Environment documentation"));
+
+    let scrape_result = execute_tool_call(
+        &AssistantContent::ToolCall {
+            name: "scrape".to_owned(),
+            arguments: ToolArguments::Object(
+                [("url".to_owned(), json!("https://example.com/docs"))]
+                    .into_iter()
+                    .collect(),
+            ),
+            tool_call_id: ToolCallId::new("scrape-call").expect("tool call id"),
+        },
+        &context,
+    )
+    .await
+    .expect("scrape tool call");
+    assert_success(&scrape_result);
+    assert!(text(&scrape_result).contains("# Environment documentation"));
 }
 
 #[tokio::test]
@@ -1039,6 +1141,8 @@ async fn execute_gateway_tool_with_project(
             execution,
             operation,
             project_id,
+            search: test_search_context(),
+            scrape: test_scrape_context(),
         },
     )
     .await
@@ -1047,6 +1151,22 @@ async fn execute_gateway_tool_with_project(
 
 fn project_id() -> Uuid {
     PROJECT_ID.parse().expect("valid project ID")
+}
+
+fn test_search_context() -> &'static tool_firecrawl_search::FirecrawlSearchToolContext {
+    static CONTEXT: OnceLock<tool_firecrawl_search::FirecrawlSearchToolContext> = OnceLock::new();
+    CONTEXT.get_or_init(|| {
+        tool_firecrawl_search::FirecrawlSearchToolContext::new("test-key")
+            .expect("test search context")
+    })
+}
+
+fn test_scrape_context() -> &'static tool_firecrawl_scrape::FirecrawlScrapeToolContext {
+    static CONTEXT: OnceLock<tool_firecrawl_scrape::FirecrawlScrapeToolContext> = OnceLock::new();
+    CONTEXT.get_or_init(|| {
+        tool_firecrawl_scrape::FirecrawlScrapeToolContext::new("test-key")
+            .expect("test scrape context")
+    })
 }
 
 fn text(message: &ToolResultMessage) -> &str {
