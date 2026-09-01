@@ -18,6 +18,7 @@ type ProjectEnvironmentPromptComposerProps = {
   isModelOptionsPending: boolean
   isModelOptionsError: boolean
   onRetryModelOptions: () => void
+  isSubmissionReady?: boolean
   isSubmitting?: boolean
   submitError?: string | null
   onSubmit?: (submission: ProjectEnvironmentPromptSubmission) => void
@@ -45,6 +46,7 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
   isModelOptionsPending,
   isModelOptionsError,
   onRetryModelOptions,
+  isSubmissionReady = true,
   isSubmitting = false,
   submitError = null,
   onSubmit,
@@ -90,6 +92,7 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
     selectedAccount !== null &&
     selectedModel !== null &&
     selectedReasoningLevel !== null &&
+    isSubmissionReady &&
     !isSubmitting
 
   const submit = () => {

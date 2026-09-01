@@ -220,11 +220,20 @@
 }
 
 .machine-detail-nav {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   margin-top: 9px;
 }
 
 .project-recents {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   margin-top: 18px;
+  overflow: hidden;
 }
 
 .project-recents-header {
@@ -282,6 +291,142 @@
 .project-recents-action:focus-visible {
   outline: 1px solid color-mix(in oklab, var(--cursor-accent) 70%, transparent);
   outline-offset: 1px;
+}
+
+.project-session-list {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.project-session-list::-webkit-scrollbar {
+  display: none;
+}
+
+.project-session-list-state {
+  padding: 7px 8px;
+  color: var(--cursor-text-quaternary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.project-session-item {
+  min-width: 0;
+  height: 32px;
+  flex: 0 0 32px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: center;
+  border-radius: 7px;
+  color: var(--cursor-text-secondary);
+  transition:
+    color var(--cursor-duration-fast) var(--cursor-ease),
+    background-color var(--cursor-duration-fast) var(--cursor-ease);
+}
+
+.project-session-item:hover {
+  color: var(--cursor-text-primary);
+  background: var(--cursor-overlay-04);
+}
+
+.project-session-item--active {
+  background: var(--cursor-overlay-06);
+  color: var(--cursor-text-primary);
+}
+
+.project-session-link {
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding-left: 8px;
+  color: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  text-decoration: none;
+}
+
+.project-session-link:focus-visible {
+  outline: 1px solid color-mix(in oklab, var(--cursor-accent) 70%, transparent);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+.project-session-name {
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - 30px),
+    transparent calc(100% - 8px)
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - 30px),
+    transparent calc(100% - 8px)
+  );
+}
+
+.project-session-trailing {
+  width: 24px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  color: var(--cursor-text-tertiary);
+}
+
+.project-session-spinner {
+  animation: project-session-spin 700ms linear infinite;
+}
+
+.project-session-archive {
+  width: 24px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--cursor-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--cursor-duration-fast) var(--cursor-ease),
+    color var(--cursor-duration-fast) var(--cursor-ease);
+}
+
+.project-session-item:hover .project-session-archive,
+.project-session-archive:focus-visible,
+.project-session-archive:disabled {
+  opacity: 1;
+}
+
+.project-session-archive:hover {
+  color: var(--cursor-text-primary);
+}
+
+.project-session-archive:focus-visible {
+  outline: 1px solid color-mix(in oklab, var(--cursor-accent) 70%, transparent);
+  outline-offset: -2px;
+}
+
+.project-session-archive:disabled {
+  cursor: default;
+}
+
+@keyframes project-session-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .project-landing-page {

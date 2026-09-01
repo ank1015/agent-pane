@@ -1,10 +1,12 @@
 import {
+  Archive03Icon,
   ArrowLeft01Icon,
   ArrowRight01Icon,
   AtIcon,
   Delete03Icon,
   Folder03Icon,
   Globe02Icon,
+  Loading03Icon,
   MoreHorizontalIcon,
   SquarePenIcon,
   ZapIcon,
@@ -32,6 +34,10 @@ import {
   useHarnessModelOptions,
 } from '../harnesses/harness-queries'
 import {
+  type MachineEnvironment,
+  useMaterializeSandboxEnvironmentTemplate,
+} from '../machines/machine-queries'
+import {
   DeleteProjectEnvironmentDialog,
   UpdateProjectEnvironmentNameDialog,
 } from './ProjectEnvironmentDialogs'
@@ -54,10 +60,12 @@ import { buildProjectConversation } from './project-conversation'
 import { useProjectRunEventStream } from './project-run-event-stream'
 import {
   createIdempotencyKey,
+  useArchiveProjectSession,
   useCreateProjectHarnessSession,
   useProjectHarnessRun,
   useProjectHarnessSession,
   useProjectRunEvents,
+  useProjectSessions,
   useProjectSessionMessages,
   useProjectSessionRuns,
   useStartProjectHarnessRun,
@@ -78,6 +86,86 @@ const EMPTY_PROJECT_BOOTSTRAP_HARNESSES: readonly ProjectBootstrapHarness[] = []
 const EMPTY_PROJECT_ENVIRONMENTS: readonly ProjectEnvironment[] = []
 const EMPTY_SESSION_MESSAGES: readonly SessionMessage[] = []
 const EMPTY_SESSION_RUNS: readonly ProjectRunSummary[] = []
+
+type HarnessExecutionTarget = {
+  machine_id: string
+  workspace_root_id: string
+  cwd: string
+}
+
+type LandingSessionRetry = {
+  fingerprint: string
+  idempotencyKey: string
+  execution: HarnessExecutionTarget | null
+}
+
+function executionTargetFromProjectEnvironment(
+  environment: ProjectEnvironment,
+): HarnessExecutionTarget {
+  if (
+    environment.machine_id === undefined ||
+    environment.workspace_root_id === undefined
+  ) {
+    throw new Error('The selected environment is missing execution details.')
+  }
+  return {
+    machine_id: environment.machine_id,
+    workspace_root_id: environment.workspace_root_id,
+    cwd: environment.path,
+  }
+}
+
+function executionTargetFromEnvironment(
+  environment: MachineEnvironment,
+): HarnessExecutionTarget {
+  return {
+    machine_id: environment.machine_id,
+    workspace_root_id: environment.workspace_root_id,
+    cwd: environment.path,
+  }
+}
+
+function buildHarnessConfig({
+  harnessId,
+  projectId,
+  submission,
+  execution,
+}: {
+  harnessId: string
+  projectId: string
+  submission: ProjectEnvironmentPromptSubmission
+  execution: HarnessExecutionTarget | null
+}) {
+  const model = {
+    provider: submission.provider,
+    model_id: submission.modelId,
+    reasoning_level: submission.reasoningLevel,
+    account_id: submission.accountId,
+    web_search_enabled: submission.webSearchEnabled,
+  }
+  if (harnessId === ENVIRONMENT_HARNESS_ID) {
+    return { ...model, project_id: projectId }
+  }
+  if (harnessId === 'codex' || harnessId === 'pi') {
+    if (execution === null) {
+      throw new Error(`${harnessId} requires an execution environment.`)
+    }
+    return {
+      ...model,
+      execution,
+      is_replaced: false,
+    }
+  }
+  return execution === null ? model : { ...model, execution }
+}
+
+function isSessionId(value: string | undefined) {
+  return value !== undefined &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+}
+
 const ProjectEnvironmentConversation = lazy(() =>
   import('./ProjectEnvironmentConversation').then((module) => ({
     default: module.ProjectEnvironmentConversation,
@@ -95,6 +183,9 @@ export function ProjectPage({ projectId }: { projectId: string }) {
   const environmentsPath = `${projectPath}/environments`
   const createEnvironmentPath = `${environmentsPath}/create`
   const { pathname } = useLocation()
+  const navigate = useNavigate()
+  const sessions = useProjectSessions(projectId)
+  const archiveSession = useArchiveProjectSession(projectId)
   const isProjectRoot = pathname === projectPath || pathname === `${projectPath}/`
   const isEnvironmentsPage =
     pathname === environmentsPath || pathname === `${environmentsPath}/`
@@ -105,6 +196,15 @@ export function ProjectPage({ projectId }: { projectId: string }) {
     '/projects/:projectId/environments/sessions/:sessionId',
     pathname,
   )
+  const possibleProjectSessionMatch = matchPath(
+    '/projects/:projectId/:sessionId',
+    pathname,
+  )
+  const projectSessionMatch = isSessionId(
+    possibleProjectSessionMatch?.params.sessionId,
+  )
+    ? possibleProjectSessionMatch
+    : null
 
   return (
     <div className="cursor-shell machine-detail-shell">
@@ -187,13 +287,96 @@ export function ProjectPage({ projectId }: { projectId: string }) {
                 </Link>
               </span>
             </div>
+
+            <div className="project-session-list" aria-label="Recent sessions">
+              {sessions.isPending ? (
+                <div className="project-session-list-state">Loading sessions…</div>
+              ) : sessions.isError ? (
+                <div className="project-session-list-state">
+                  Couldn’t load sessions
+                </div>
+              ) : (
+                sessions.data.map((session) => {
+                  const sessionPath = `${projectPath}/${encodeURIComponent(session.id)}`
+                  const isSelected =
+                    pathname === sessionPath || pathname === `${sessionPath}/`
+                  const isArchiving =
+                    archiveSession.isPending &&
+                    archiveSession.variables === session.id
+
+                  return (
+                    <div
+                      className={`project-session-item${
+                        isSelected ? ' project-session-item--active' : ''
+                      }`}
+                      key={session.id}
+                    >
+                      <NavLink
+                        className="project-session-link"
+                        to={sessionPath}
+                        title={session.title}
+                      >
+                        <span className="project-session-name">
+                          {session.title}
+                        </span>
+                      </NavLink>
+
+                      <span className="project-session-trailing">
+                        {session.is_active ? (
+                          <HugeiconsIcon
+                            className="project-session-spinner"
+                            icon={Loading03Icon}
+                            size={15}
+                            color="currentColor"
+                            strokeWidth={1.6}
+                            aria-label="Session is running"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            className="project-session-archive"
+                            aria-label={`Archive ${session.title}`}
+                            title="Archive"
+                            disabled={isArchiving}
+                            onClick={() => {
+                              archiveSession.mutate(session.id, {
+                                onSuccess: () => {
+                                  if (isSelected) {
+                                    navigate(projectPath)
+                                  }
+                                },
+                              })
+                            }}
+                          >
+                            <HugeiconsIcon
+                              className={
+                                isArchiving ? 'project-session-spinner' : undefined
+                              }
+                              icon={
+                                isArchiving ? Loading03Icon : Archive03Icon
+                              }
+                              size={15}
+                              color="currentColor"
+                              strokeWidth={1.5}
+                              aria-hidden="true"
+                            />
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                  )
+                })
+              )}
+            </div>
           </div>
         </nav>
       </aside>
 
       <main
         className={`cursor-main machine-detail-main${
-          isCreateEnvironmentPage || environmentSessionMatch !== null
+          isCreateEnvironmentPage ||
+          environmentSessionMatch !== null ||
+          projectSessionMatch !== null
             ? ' project-create-main'
             : ''
         }`}
@@ -213,6 +396,11 @@ export function ProjectPage({ projectId }: { projectId: string }) {
           />
         ) : isEnvironmentsPage ? (
           <ProjectEnvironments projectId={projectId} />
+        ) : projectSessionMatch !== null ? (
+          <ProjectEnvironmentSessionPage
+            projectId={projectId}
+            sessionId={projectSessionMatch.params.sessionId ?? ''}
+          />
         ) : null}
       </main>
     </div>
@@ -221,6 +409,11 @@ export function ProjectPage({ projectId }: { projectId: string }) {
 
 function ProjectLandingPage({ projectId }: { projectId: string }) {
   const bootstrap = useProjectBootstrap(projectId)
+  const createSession = useCreateProjectHarnessSession(projectId)
+  const materializeTemplate = useMaterializeSandboxEnvironmentTemplate()
+  const navigate = useNavigate()
+  const retryRef = useRef<LandingSessionRetry | null>(null)
+  const [submissionError, setSubmissionError] = useState<string | null>(null)
   const [selectedHarnessId, setSelectedHarnessId] = useState<string | null>(
     null,
   )
@@ -248,10 +441,82 @@ function ProjectLandingPage({ projectId }: { projectId: string }) {
       ? selectedEnvironmentId
       : (environments[0]?.id ?? null)
   const harnessUi = harnessUiDefinition(resolvedHarnessId)
+  const selectedEnvironment =
+    environments.find(
+      (environment) => environment.id === resolvedEnvironmentId,
+    ) ?? null
   const modelOptions =
     bootstrap.data === undefined || resolvedHarnessId === null
       ? null
       : harnessModelOptions(bootstrap.data, resolvedHarnessId)
+
+  const submit = async (submission: ProjectEnvironmentPromptSubmission) => {
+    if (resolvedHarnessId === null) return
+    setSubmissionError(null)
+    const environmentId =
+      harnessUi.environmentSelection === 'single'
+        ? selectedEnvironment?.id ?? null
+        : null
+    const fingerprint = JSON.stringify({
+      harnessId: resolvedHarnessId,
+      environmentId,
+      submission,
+    })
+    if (retryRef.current?.fingerprint !== fingerprint) {
+      retryRef.current = {
+        fingerprint,
+        idempotencyKey: createIdempotencyKey(),
+        execution: null,
+      }
+    }
+    const retry = retryRef.current
+
+    try {
+      let execution = retry.execution
+      if (harnessUi.environmentSelection === 'single') {
+        if (selectedEnvironment === null) {
+          throw new Error('Select an environment before starting the session.')
+        }
+        if (execution === null) {
+          execution =
+            selectedEnvironment.type === 'template'
+              ? executionTargetFromEnvironment(
+                  (
+                    await materializeTemplate.mutateAsync(
+                      selectedEnvironment.id,
+                    )
+                  ).environment,
+                )
+              : executionTargetFromProjectEnvironment(selectedEnvironment)
+          retry.execution = execution
+        }
+      }
+
+      const response = await createSession.mutateAsync({
+        idempotencyKey: retry.idempotencyKey,
+        request: {
+          harness_id: resolvedHarnessId,
+          prompt: submission.prompt,
+          attachments: [],
+          environment_ids: environmentId === null ? [] : [environmentId],
+          config_override: buildHarnessConfig({
+            harnessId: resolvedHarnessId,
+            projectId,
+            submission,
+            execution,
+          }),
+        },
+      })
+      retryRef.current = null
+      navigate(
+        `/projects/${encodeURIComponent(projectId)}/${encodeURIComponent(response.session.id)}`,
+      )
+    } catch (error) {
+      setSubmissionError(
+        error instanceof Error ? error.message : 'Could not start the session.',
+      )
+    }
+  }
 
   return (
     <div className="project-landing-page">
@@ -282,6 +547,16 @@ function ProjectLandingPage({ projectId }: { projectId: string }) {
           isModelOptionsPending={bootstrap.isPending}
           isModelOptionsError={bootstrap.isError}
           onRetryModelOptions={() => void bootstrap.refetch()}
+          isSubmissionReady={
+            resolvedHarnessId !== null &&
+            (harnessUi.environmentSelection !== 'single' ||
+              selectedEnvironment !== null)
+          }
+          isSubmitting={
+            createSession.isPending || materializeTemplate.isPending
+          }
+          submitError={submissionError}
+          onSubmit={(submission) => void submit(submission)}
         />
       </div>
     </div>
@@ -547,7 +822,7 @@ function CreateProjectEnvironmentPage({
         onSuccess: ({ session }) => {
           retryRef.current = null
           navigate(
-            `/projects/${encodeURIComponent(projectId)}/environments/sessions/${encodeURIComponent(session.session_id)}`,
+            `/projects/${encodeURIComponent(projectId)}/environments/sessions/${encodeURIComponent(session.id)}`,
             { replace: true },
           )
         },
@@ -609,13 +884,13 @@ function ProjectEnvironmentSessionPage({
 }: {
   projectId: string
   sessionId: string
-  environmentsPath: string
+  environmentsPath?: string
 }) {
   const session = useProjectHarnessSession(projectId, sessionId)
   const messages = useProjectSessionMessages(projectId, sessionId)
   const runs = useProjectSessionRuns(projectId, sessionId)
   const modelOptions = useHarnessModelOptions(
-    session.data?.harness_id ?? ENVIRONMENT_HARNESS_ID,
+    session.data?.session.harness_id ?? ENVIRONMENT_HARNESS_ID,
   )
   const sessionRun = session.data?.active_run ?? session.data?.latest_run ?? null
   const runId = sessionRun?.run_id ?? ''
@@ -688,14 +963,6 @@ function ProjectEnvironmentSessionPage({
     const request = {
       prompt: submission.prompt,
       attachments: [],
-      config_override: {
-        provider: submission.provider,
-        model_id: submission.modelId,
-        reasoning_level: submission.reasoningLevel,
-        account_id: submission.accountId,
-        project_id: projectId,
-        web_search_enabled: submission.webSearchEnabled,
-      },
       expected_session_revision: currentRevision,
     }
     const fingerprint = JSON.stringify(request)
@@ -713,7 +980,6 @@ function ProjectEnvironmentSessionPage({
     )
   }, [
     isRunLive,
-    projectId,
     session.data?.session.current_revision,
     startRunMutate,
   ])
@@ -727,6 +993,7 @@ function ProjectEnvironmentSessionPage({
 
   return (
     <div className="project-environment-create-page project-session-page">
+      {environmentsPath === undefined ? null : (
       <nav className="project-breadcrumbs" aria-label="Breadcrumb">
         <ol>
           <li>
@@ -749,6 +1016,7 @@ function ProjectEnvironmentSessionPage({
           </li>
         </ol>
       </nav>
+      )}
       <div className="project-session-workspace">
         <Suspense
           fallback={
