@@ -81,6 +81,7 @@ impl LlmTransport for ChatGptProvider {
         let model = find_model(request.model.id.as_str())
             .ok_or_else(|| invalid_model(request.model.id.as_str()))?;
         let body = build_response_request(&request)?;
+        let cache_affinity = prompt_cache_affinity_header(&body)?;
         let started = Instant::now();
 
         let mut http_request = self
@@ -100,6 +101,14 @@ impl LlmTransport for ChatGptProvider {
             )
             .header("openai-beta", OPENAI_BETA)
             .json(&body);
+        if let Some(cache_affinity) = cache_affinity {
+            // The Codex backend uses these headers to keep an append-only
+            // conversation on the same prompt-cache route. Both the official
+            // Codex client and Pi send them alongside prompt_cache_key.
+            http_request = http_request
+                .header("session-id", cache_affinity.clone())
+                .header("x-client-request-id", cache_affinity);
+        }
         if provider_openai::uses_codex_responses_lite(&request) {
             http_request = http_request.header("x-openai-internal-codex-responses-lite", "true");
         }
@@ -273,6 +282,22 @@ fn sensitive_header(value: &str, label: &str) -> Result<HeaderValue, LlmError> {
         .map_err(|_| invalid_config(format!("{label} contains invalid header characters.")))?;
     value.set_sensitive(true);
     Ok(value)
+}
+
+fn prompt_cache_affinity_header(body: &serde_json::Value) -> Result<Option<HeaderValue>, LlmError> {
+    match body.get("prompt_cache_key") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(value)) => {
+            HeaderValue::from_str(value).map(Some).map_err(|_| {
+                invalid_request(
+                    "provider_options.prompt_cache_key contains invalid header characters",
+                )
+            })
+        }
+        Some(_) => Err(invalid_request(
+            "provider_options.prompt_cache_key must be a string",
+        )),
+    }
 }
 
 fn request_header(value: &str) -> Result<HeaderValue, LlmError> {

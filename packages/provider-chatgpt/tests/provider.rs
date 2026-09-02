@@ -71,6 +71,23 @@ fn request_rejects_the_api_only_max_output_tokens_option() {
     assert!(error.message.contains("does not support"));
 }
 
+#[tokio::test]
+async fn request_rejects_a_non_string_prompt_cache_key_before_transport() {
+    let mut request = request("gpt-5.6-terra");
+    request
+        .provider_options
+        .insert("prompt_cache_key".into(), json!(123));
+    let provider = provider_chatgpt::ChatGptProvider::from_credentials("token", "account")
+        .expect("valid provider");
+
+    let error = llm_contracts::LlmTransport::complete(&provider, request)
+        .await
+        .expect_err("non-string cache key must fail locally");
+
+    assert_eq!(error.provider_type.as_deref(), Some("invalid_request"));
+    assert!(error.message.contains("prompt_cache_key must be a string"));
+}
+
 #[test]
 fn response_aggregates_native_items_and_preserves_every_event() {
     let model = find_model("gpt-5.6-luna").expect("catalog model");

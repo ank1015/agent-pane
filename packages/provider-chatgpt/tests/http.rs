@@ -55,9 +55,13 @@ async fn complete_buffers_sse_and_sends_chatgpt_credentials() {
         .with_base_url(format!("{base_url}/backend-api"))
         .expect("valid test URL");
     let provider = ChatGptProvider::new(config).expect("valid provider");
+    let mut request = request();
+    request
+        .provider_options
+        .insert("prompt_cache_key".into(), json!("session-123"));
 
     let message = provider
-        .complete(request())
+        .complete(request)
         .await
         .expect("successful response");
     let raw_request = captured.await.expect("mock server completed");
@@ -72,14 +76,48 @@ async fn complete_buffers_sse_and_sends_chatgpt_credentials() {
     assert!(lower.contains("originator: agent-pane\r\n"));
     assert!(lower.contains("accept: text/event-stream\r\n"));
     assert!(lower.contains("openai-beta: responses=experimental\r\n"));
+    assert!(lower.contains("session-id: session-123\r\n"));
+    assert!(lower.contains("x-client-request-id: session-123\r\n"));
     assert_eq!(body["store"], false);
     assert_eq!(body["stream"], true);
     assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+    assert_eq!(body["prompt_cache_key"], "session-123");
     assert_eq!(message.id.as_str(), "response-http");
     assert_eq!(
         message.native_message["events"].as_array().map(Vec::len),
         Some(2)
     );
+}
+
+#[tokio::test]
+async fn complete_omits_cache_affinity_headers_without_a_prompt_cache_key() {
+    let sse = sse_body(&[json!({
+        "type": "response.completed",
+        "response": {
+            "id": "response-no-cache-key",
+            "model": "gpt-5.6-luna",
+            "status": "completed",
+            "output": [],
+            "usage": {"input_tokens": 1, "output_tokens": 0}
+        }
+    })]);
+    let (base_url, captured) = spawn_server("200 OK", &[], &sse, "text/event-stream").await;
+    let provider = ChatGptProvider::new(
+        ChatGptConfig::new("oauth-token", "account-123")
+            .expect("valid config")
+            .with_base_url(format!("{base_url}/backend-api"))
+            .expect("valid test URL"),
+    )
+    .expect("valid provider");
+
+    provider
+        .complete(request())
+        .await
+        .expect("successful response");
+    let raw_request = captured.await.expect("mock server completed");
+    let lower = raw_request.to_ascii_lowercase();
+    assert!(!lower.contains("session-id:"));
+    assert!(!lower.contains("x-client-request-id:"));
 }
 
 #[tokio::test]
