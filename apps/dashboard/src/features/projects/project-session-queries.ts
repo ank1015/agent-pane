@@ -401,6 +401,11 @@ export function appendProjectRunEvents(
   for (const event of additions) {
     applyProjectRunEvent(queryClient, projectId, sessionId, runId, event)
   }
+  if (additions.some((event) => event.type === 'turn_ended')) {
+    void queryClient.invalidateQueries({
+      queryKey: projectSessionKeys.messages(projectId, sessionId),
+    })
+  }
 }
 
 export function getLastProjectRunEventSequence(
