@@ -13,7 +13,8 @@ use crate::{
     error::rejected_body,
     providers::model::{
         CreateProviderRequest, GatewayProviderResponse, GatewayProvidersResponse, ProviderKind,
-        RotateCredentialsRequest, UpdateProviderRequest,
+        ProviderRequestPage, ProviderRequestsQuery, ProviderUsageSummary, RotateCredentialsRequest,
+        UpdateProviderRequest,
     },
 };
 
@@ -70,6 +71,30 @@ impl LlmGatewayClient {
         self.send_json(
             self.http
                 .get(self.url(&format!("v1/admin/accounts/{provider_id}"))?),
+        )
+        .await
+    }
+
+    pub(crate) async fn provider_usage(
+        &self,
+        provider_id: Uuid,
+    ) -> Result<ProviderUsageSummary, LlmGatewayError> {
+        self.send_json(
+            self.http
+                .get(self.url(&format!("v1/admin/accounts/{provider_id}/usage"))?),
+        )
+        .await
+    }
+
+    pub(crate) async fn provider_requests(
+        &self,
+        provider_id: Uuid,
+        query: &ProviderRequestsQuery,
+    ) -> Result<ProviderRequestPage, LlmGatewayError> {
+        self.send_json(
+            self.http
+                .get(self.url(&format!("v1/admin/accounts/{provider_id}/requests"))?)
+                .query(query),
         )
         .await
     }
@@ -262,8 +287,8 @@ mod tests {
     use axum::{
         Json, Router,
         extract::{Path, State},
-        http::{HeaderMap, StatusCode},
-        routing::{delete, patch, post, put},
+        http::{HeaderMap, StatusCode, Uri},
+        routing::{delete, get, patch, post, put},
     };
     use serde_json::{Value, json};
     use tokio::{net::TcpListener, sync::mpsc};
@@ -271,7 +296,7 @@ mod tests {
 
     use super::{ChatGptGatewayCredentials, LlmGatewayClient};
     use crate::providers::model::{
-        ApiKeyProviderKind, CreateProviderRequest, UpdateProviderRequest,
+        ApiKeyProviderKind, CreateProviderRequest, ProviderRequestsQuery, UpdateProviderRequest,
     };
 
     #[tokio::test]
@@ -507,6 +532,63 @@ mod tests {
         assert!(response.account.is_default);
     }
 
+    #[tokio::test]
+    async fn provider_accounting_calls_authenticated_endpoints_and_forwards_pagination() {
+        let (request_tx, mut request_rx) = mpsc::unbounded_channel();
+        let mock_gateway = Router::new()
+            .route(
+                "/v1/admin/accounts/{account_id}/usage",
+                get(capture_usage_request),
+            )
+            .route(
+                "/v1/admin/accounts/{account_id}/requests",
+                get(capture_requests_request),
+            )
+            .with_state(request_tx);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, mock_gateway).await.unwrap();
+        });
+
+        let client = LlmGatewayClient::new(
+            format!("http://{address}").parse().unwrap(),
+            "platform-admin-token",
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let account_id = Uuid::parse_str("01992aa0-0000-7000-8000-000000000001").unwrap();
+
+        let summary = client.provider_usage(account_id).await.unwrap();
+        let usage_request = request_rx.recv().await.unwrap();
+        assert_eq!(usage_request.0, "Bearer platform-admin-token");
+        assert_eq!(usage_request.1, account_id);
+        assert_eq!(summary.request_count, 2);
+        assert_eq!(summary.costs.total, 0.031);
+        assert_eq!(summary.tokens.input, 10);
+
+        let page = client
+            .provider_requests(
+                account_id,
+                &ProviderRequestsQuery {
+                    cursor: Some("next-page".to_owned()),
+                    limit: Some(20),
+                },
+            )
+            .await
+            .unwrap();
+        let requests_request = request_rx.recv().await.unwrap();
+        assert_eq!(requests_request.0, "Bearer platform-admin-token");
+        assert_eq!(requests_request.1, account_id);
+        assert_eq!(
+            requests_request.2.as_deref(),
+            Some("cursor=next-page&limit=20")
+        );
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].usage.as_ref().unwrap().input, Some(10));
+        assert_eq!(page.next_cursor.as_deref(), Some("another-page"));
+    }
+
     async fn capture_create_request(
         State(request_tx): State<mpsc::UnboundedSender<(String, Value)>>,
         headers: HeaderMap,
@@ -539,6 +621,71 @@ mod tests {
                 }
             })),
         )
+    }
+
+    async fn capture_usage_request(
+        State(request_tx): State<mpsc::UnboundedSender<(String, Uuid, Option<String>)>>,
+        Path(account_id): Path<Uuid>,
+        headers: HeaderMap,
+    ) -> Json<Value> {
+        let authorization = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        request_tx.send((authorization, account_id, None)).unwrap();
+        Json(json!({
+            "account_id": account_id,
+            "request_count": 2,
+            "costs": {
+                "total": 0.031,
+                "input": 0.01,
+                "output": 0.02,
+                "cache_read": 0.001,
+                "cache_write": 0.0
+            },
+            "tokens": {
+                "input": 10,
+                "output": 5,
+                "cache_read": 2,
+                "cache_write": 0
+            }
+        }))
+    }
+
+    async fn capture_requests_request(
+        State(request_tx): State<mpsc::UnboundedSender<(String, Uuid, Option<String>)>>,
+        Path(account_id): Path<Uuid>,
+        headers: HeaderMap,
+        uri: Uri,
+    ) -> Json<Value> {
+        let authorization = headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        request_tx
+            .send((authorization, account_id, uri.query().map(str::to_owned)))
+            .unwrap();
+        Json(json!({
+            "items": [{
+                "request_id": "01992aa0-0000-7000-8000-000000000002",
+                "requested_provider": "openai",
+                "requested_model": "gpt-test",
+                "response_provider": "openai",
+                "response_model": "gpt-test",
+                "assistant_message_id": "message-test",
+                "usage": {
+                    "input": 10,
+                    "output": 5,
+                    "cache_read": 2,
+                    "cost": {"total": 0.031}
+                },
+                "duration_ms": 123,
+                "completed_at": "2026-09-02T12:30:45.123456Z"
+            }],
+            "next_cursor": "another-page"
+        }))
     }
 
     async fn capture_delete_request(

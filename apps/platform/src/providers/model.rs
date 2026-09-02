@@ -1,6 +1,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Utc};
+use llm_contracts::Usage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -170,6 +171,59 @@ pub(crate) struct GatewayProvidersResponse {
 #[derive(Serialize)]
 pub(crate) struct ProviderResponse {
     pub provider: Provider,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ProviderUsageSummary {
+    pub account_id: Uuid,
+    pub request_count: i64,
+    pub costs: ProviderCostTotals,
+    pub tokens: ProviderTokenTotals,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ProviderCostTotals {
+    pub total: f64,
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ProviderTokenTotals {
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ProviderRequestPage {
+    pub items: Vec<ProviderRequest>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ProviderRequest {
+    pub request_id: Uuid,
+    pub requested_provider: String,
+    pub requested_model: String,
+    pub response_provider: String,
+    pub response_model: String,
+    pub assistant_message_id: String,
+    pub usage: Option<Usage>,
+    pub duration_ms: i64,
+    pub completed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderRequestsQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
 }
 
 #[cfg(test)]
