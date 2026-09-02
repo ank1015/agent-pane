@@ -2,7 +2,7 @@ use std::{env, net::SocketAddr, num::ParseIntError, time::Duration};
 
 use crate::{
     auth::{ControlToken, ControlTokenError, HarnessToken, HarnessTokenError},
-    execution::{ExecutionPolicy, ExecutionPolicyError},
+    execution::{EFFECTIVELY_UNLIMITED_MAX_TURNS, ExecutionPolicy, ExecutionPolicyError},
 };
 
 #[derive(Clone)]
@@ -83,8 +83,8 @@ impl AppConfig {
             harness_token: HarnessToken::new(required("AGENT_HARNESS_TOKEN")?)?,
             max_request_bytes,
             execution_policy: ExecutionPolicy::new(
-                parse_u32("AGENT_DEFAULT_MAX_TURNS", 100)?,
-                parse_u32("AGENT_MAX_TURNS", 1_000)?,
+                parse_u32("AGENT_DEFAULT_MAX_TURNS", EFFECTIVELY_UNLIMITED_MAX_TURNS)?,
+                parse_u32("AGENT_MAX_TURNS", EFFECTIVELY_UNLIMITED_MAX_TURNS)?,
                 parse_usize("AGENT_HARNESS_MAX_MESSAGE_BATCH", 100)?,
             )?,
         })

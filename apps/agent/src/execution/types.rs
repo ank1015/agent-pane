@@ -5,6 +5,8 @@ use uuid::Uuid;
 
 use super::ExecutionError;
 
+pub const EFFECTIVELY_UNLIMITED_MAX_TURNS: u32 = 99_999_999;
+
 pub use agent_contracts::{
     AppendSessionMessages, NewRunMessage, Run, RunAbort, RunEventListQuery, RunStatus, RunWait,
     SessionMessage, SessionMessageDelivery, SessionMessageOrigin, SessionMessagesAppended,
@@ -138,8 +140,8 @@ impl ExecutionPolicy {
 impl Default for ExecutionPolicy {
     fn default() -> Self {
         Self {
-            default_max_turns: 100,
-            max_turns: 1_000,
+            default_max_turns: EFFECTIVELY_UNLIMITED_MAX_TURNS,
+            max_turns: EFFECTIVELY_UNLIMITED_MAX_TURNS,
             max_message_batch: 100,
         }
     }
