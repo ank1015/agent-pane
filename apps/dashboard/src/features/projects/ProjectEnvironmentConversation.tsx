@@ -11,10 +11,21 @@ import {
 } from '@/components/ai-elements/message'
 import {
   CheckIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   CopyIcon,
 } from 'lucide-react'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import type { RefObject } from 'react'
+import type { StickToBottomContext } from 'use-stick-to-bottom'
 import type { ProjectConversationItem } from './project-conversation'
 import type {
   ImageContent,
@@ -23,21 +34,68 @@ import type {
 } from './project-session-types'
 
 type ProjectEnvironmentConversationProps = {
+  sessionKey: string
   items: readonly ProjectConversationItem[]
   isPending: boolean
   isError: boolean
   onRetry: () => void
+  onOpenRunDetails: (runId: string) => void
 }
 
-export function ProjectEnvironmentConversation({
+type SessionScrollPosition = {
+  scrollTop: number
+  isAtBottom: boolean
+}
+
+const MAX_REMEMBERED_SESSION_SCROLL_POSITIONS = 50
+const SESSION_BOTTOM_THRESHOLD_PX = 4
+const sessionScrollPositions = new Map<string, SessionScrollPosition>()
+
+function rememberSessionScrollPosition(
+  sessionKey: string,
+  scrollElement: HTMLElement,
+) {
+  if (
+    !sessionScrollPositions.has(sessionKey) &&
+    sessionScrollPositions.size >= MAX_REMEMBERED_SESSION_SCROLL_POSITIONS
+  ) {
+    const oldestSessionKey = sessionScrollPositions.keys().next().value
+    if (oldestSessionKey !== undefined) {
+      sessionScrollPositions.delete(oldestSessionKey)
+    }
+  }
+
+  const distanceFromBottom =
+    scrollElement.scrollHeight -
+    scrollElement.clientHeight -
+    scrollElement.scrollTop
+  sessionScrollPositions.set(sessionKey, {
+    scrollTop: scrollElement.scrollTop,
+    isAtBottom: distanceFromBottom <= SESSION_BOTTOM_THRESHOLD_PX,
+  })
+}
+
+export const ProjectEnvironmentConversation = memo(function ProjectEnvironmentConversation({
+  sessionKey,
   items,
   isPending,
   isError,
   onRetry,
+  onOpenRunDetails,
 }: ProjectEnvironmentConversationProps) {
+  const scrollContextRef = useRef<StickToBottomContext>(null)
+
   return (
-    <Conversation className="project-session-conversation">
-      <ConversationContent className="project-session-conversation-content">
+    <Conversation
+      className="project-session-conversation"
+      contextRef={scrollContextRef}
+      initial="instant"
+      resize="instant"
+    >
+      <ConversationContent
+        className="project-session-conversation-content"
+        scrollClassName="project-session-conversation-scroll"
+      >
         {isPending ? (
           <ConversationState message="Loading conversation…" />
         ) : isError ? (
@@ -63,6 +121,7 @@ export function ProjectEnvironmentConversation({
               <RunDuration
                 key={item.id}
                 run={item.run}
+                onOpenRunDetails={onOpenRunDetails}
               />
             ) : (
               <RunErrorMessage key={item.id} run={item.run} />
@@ -70,12 +129,132 @@ export function ProjectEnvironmentConversation({
           )
         )}
       </ConversationContent>
+      <ConversationScrollMemory
+        scrollContextRef={scrollContextRef}
+        sessionKey={sessionKey}
+        isReady={!isPending && !isError}
+      />
       <ConversationScrollButton
         className="project-session-scroll-button"
         aria-label="Scroll to latest message"
       />
     </Conversation>
   )
+})
+
+function ConversationScrollMemory({
+  scrollContextRef,
+  sessionKey,
+  isReady,
+}: {
+  scrollContextRef: RefObject<StickToBottomContext | null>
+  sessionKey: string
+  isReady: boolean
+}) {
+  useLayoutEffect(() => {
+    if (!isReady) return
+
+    let animationFrame = 0
+    let positionFrame = 0
+    let scrollElement: HTMLElement | null | undefined
+    let rememberPosition: (() => void) | undefined
+    let cancelRestoration: (() => void) | undefined
+    let resizeObserver: ResizeObserver | undefined
+    let restorationPending = false
+
+    const restoreAndTrack = () => {
+      const scrollContext = scrollContextRef.current
+      scrollElement = scrollContext?.scrollRef.current
+      if (scrollContext == null || scrollElement == null) {
+        animationFrame = requestAnimationFrame(restoreAndTrack)
+        return
+      }
+
+      const rememberedPosition = sessionScrollPositions.get(sessionKey)
+      if (rememberedPosition?.isAtBottom === false) {
+        const desiredScrollTop = rememberedPosition.scrollTop
+        const contentElement =
+          scrollContext.contentRef.current ?? scrollElement.firstElementChild
+        restorationPending = true
+        scrollContext.stopScroll()
+
+        const finishRestoration = () => {
+          restorationPending = false
+          resizeObserver?.disconnect()
+          resizeObserver = undefined
+          rememberSessionScrollPosition(sessionKey, scrollElement!)
+        }
+        const applyRememberedPosition = () => {
+          const maximumScrollTop = Math.max(
+            0,
+            scrollElement!.scrollHeight - scrollElement!.clientHeight,
+          )
+          scrollElement!.scrollTop = Math.min(
+            desiredScrollTop,
+            maximumScrollTop,
+          )
+          if (maximumScrollTop >= desiredScrollTop) {
+            finishRestoration()
+          }
+        }
+
+        applyRememberedPosition()
+        if (restorationPending && contentElement instanceof HTMLElement) {
+          resizeObserver = new ResizeObserver(applyRememberedPosition)
+          resizeObserver.observe(contentElement)
+        }
+        cancelRestoration = () => {
+          if (restorationPending) finishRestoration()
+        }
+        scrollElement.addEventListener('wheel', cancelRestoration, {
+          passive: true,
+        })
+        scrollElement.addEventListener('touchstart', cancelRestoration, {
+          passive: true,
+        })
+        scrollElement.addEventListener('pointerdown', cancelRestoration, {
+          passive: true,
+        })
+      } else {
+        const maximumScrollTop = Math.max(
+          0,
+          scrollElement.scrollHeight - scrollElement.clientHeight,
+        )
+        scrollElement.scrollTop = maximumScrollTop
+        rememberSessionScrollPosition(sessionKey, scrollElement)
+      }
+
+      rememberPosition = () => {
+        if (restorationPending) return
+        cancelAnimationFrame(positionFrame)
+        positionFrame = requestAnimationFrame(() => {
+          if (scrollElement !== undefined && scrollElement !== null) {
+            rememberSessionScrollPosition(sessionKey, scrollElement)
+          }
+        })
+      }
+      scrollElement.addEventListener('scroll', rememberPosition, {
+        passive: true,
+      })
+    }
+
+    restoreAndTrack()
+    return () => {
+      cancelAnimationFrame(animationFrame)
+      cancelAnimationFrame(positionFrame)
+      resizeObserver?.disconnect()
+      if (scrollElement != null && rememberPosition !== undefined) {
+        scrollElement.removeEventListener('scroll', rememberPosition)
+      }
+      if (scrollElement != null && cancelRestoration !== undefined) {
+        scrollElement.removeEventListener('wheel', cancelRestoration)
+        scrollElement.removeEventListener('touchstart', cancelRestoration)
+        scrollElement.removeEventListener('pointerdown', cancelRestoration)
+      }
+    }
+  }, [isReady, scrollContextRef, sessionKey])
+
+  return null
 }
 
 const ConversationMessage = memo(function ConversationMessage({
@@ -281,8 +460,10 @@ const RunErrorMessage = memo(function RunErrorMessage({
 
 const RunDuration = memo(function RunDuration({
   run,
+  onOpenRunDetails,
 }: {
   run: Extract<ProjectConversationItem, { kind: 'run-progress' }>['run']
+  onOpenRunDetails: (runId: string) => void
 }) {
   const isRunning = run.status === 'active' || run.status === 'waiting'
   const [now, setNow] = useState(() => Date.now())
@@ -296,9 +477,15 @@ const RunDuration = memo(function RunDuration({
   const duration = runDuration(run, isRunning ? now : undefined)
 
   return (
-    <div className="project-session-run-duration">
-      {isRunning ? 'Working' : 'Worked'} for {duration}
-    </div>
+    <button
+      type="button"
+      className="project-session-run-duration"
+      aria-label={`Open details for run ${run.run_id}`}
+      onClick={() => onOpenRunDetails(run.run_id)}
+    >
+      <span>{isRunning ? 'Working' : 'Worked'} for {duration}</span>
+      <ChevronRightIcon aria-hidden="true" size={14} />
+    </button>
   )
 })
 

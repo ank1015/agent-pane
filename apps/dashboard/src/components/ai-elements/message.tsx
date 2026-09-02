@@ -69,6 +69,8 @@ type MarkdownCodeProps = ComponentProps<'code'> &
     'data-block'?: string
   }
 
+type MarkdownTableProps = ComponentProps<'table'> & ExtraProps
+
 function MarkdownCode({
   children,
   className,
@@ -142,8 +144,24 @@ function MarkdownCodeBlock({
   )
 }
 
+function MarkdownTable({
+  children,
+  className,
+  node: _node,
+  ...props
+}: MarkdownTableProps) {
+  return (
+    <div className="project-session-table-wrap">
+      <table className={cn('project-session-table', className)} {...props}>
+        {children}
+      </table>
+    </div>
+  )
+}
+
 const markdownComponents: NonNullable<MessageResponseProps['components']> = {
   code: MarkdownCode,
+  table: MarkdownTable,
 }
 
 export const MessageResponse = memo(

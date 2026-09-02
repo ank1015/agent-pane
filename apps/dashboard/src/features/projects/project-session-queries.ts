@@ -48,6 +48,8 @@ export const projectSessionKeys = {
     [...projectSessionKeys.runsRoot(projectId, sessionId), status ?? 'all'] as const,
   run: (projectId: string, sessionId: string, runId: string) =>
     [...projectSessionKeys.detail(projectId, sessionId), 'run', runId] as const,
+  runMessages: (projectId: string, sessionId: string, runId: string) =>
+    [...projectSessionKeys.run(projectId, sessionId, runId), 'messages'] as const,
   events: (projectId: string, sessionId: string, runId: string) =>
     [...projectSessionKeys.run(projectId, sessionId, runId), 'events'] as const,
 }
@@ -169,6 +171,37 @@ export function useProjectSessionMessages(
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+  })
+}
+
+export function useProjectRunMessages(
+  projectId: string,
+  sessionId: string,
+  runId: string,
+  enabled = true,
+) {
+  return useInfiniteQuery({
+    queryKey: projectSessionKeys.runMessages(projectId, sessionId, runId),
+    queryFn: ({ pageParam, signal }) =>
+      getJson<SessionMessagePage>(
+        withSearchParams(
+          `${projectSessionEndpoint(projectId, sessionId)}/messages`,
+          {
+            after_revision: pageParam > 0 ? pageParam : undefined,
+            limit: MESSAGE_PAGE_SIZE,
+            run_id: runId,
+          },
+        ),
+        signal,
+      ),
+    initialPageParam: 0,
+    getNextPageParam: (page) => page.next_after_revision ?? undefined,
+    enabled:
+      enabled &&
+      projectId.length > 0 &&
+      sessionId.length > 0 &&
+      runId.length > 0,
+    refetchOnWindowFocus: false,
   })
 }
 

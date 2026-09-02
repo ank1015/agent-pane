@@ -29,11 +29,15 @@ export type ImageContent = {
   metadata?: JsonObject
 }
 
+export type MessageContentPart =
+  | TextContent
+  | ({ type: 'image' } & ImageContent)
+
 export type UserMessage = {
   role: 'user'
   id: string
   timestamp: number
-  content: Array<TextContent | ({ type: 'image' } & ImageContent)>
+  content: MessageContentPart[]
 }
 
 export type AssistantContent =
@@ -64,10 +68,43 @@ export type AssistantMessage = {
   timestamp: number
 }
 
+export type SystemMessage = {
+  role: 'system'
+  id: string
+  timestamp: number
+  content: TextContent[]
+}
+
+export type ToolResultMessage = {
+  role: 'tool_result'
+  id: string
+  tool_name: string
+  tool_call_id: string
+  content: MessageContentPart[]
+  details?: unknown
+  timestamp: number
+  outcome:
+    | { status: 'success' }
+    | {
+        status: 'error'
+        error: { message: string; name?: string }
+      }
+}
+
+export type CustomMessage = {
+  role: 'custom'
+  id: string
+  content: JsonObject
+  tag?: string
+  timestamp: number
+}
+
 export type SessionMessageBody =
   | UserMessage
   | AssistantMessage
-  | ({ role: 'system' | 'tool_result' | 'custom' } & JsonObject)
+  | SystemMessage
+  | ToolResultMessage
+  | CustomMessage
 
 export type SessionMessage = {
   session_message_id: string
