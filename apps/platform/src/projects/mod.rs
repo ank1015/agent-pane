@@ -42,6 +42,8 @@ const MAX_AVATAR_LENGTH: usize = 800_000;
 const MAX_SESSION_TITLE_LENGTH: usize = 255;
 const DEFAULT_SESSION_TITLE_WORDS: usize = 8;
 const DEFAULT_SESSION_TITLE_LENGTH: usize = 80;
+const ENVIRONMENT_HARNESS_ID: &str = "environment";
+const ENVIRONMENT_SESSION_TITLE_PREFIX: &str = "(Env) ";
 const ACTIVITY_RECONCILE_INTERVAL: Duration = Duration::from_secs(5);
 const ACTIVITY_RECONCILE_BATCH_SIZE: i64 = 100;
 
@@ -234,7 +236,7 @@ impl ProjectService {
         let title = request
             .title
             .clone()
-            .unwrap_or_else(|| default_session_title(&request.prompt));
+            .unwrap_or_else(|| default_session_title(&request.harness_id, &request.prompt));
         let reserved = self
             .reserve_initial_run(
                 project_id,
@@ -1317,18 +1319,26 @@ fn validate_session_title(title: &str) -> Result<(), ProjectError> {
     Ok(())
 }
 
-fn default_session_title(prompt: &str) -> String {
+fn default_session_title(harness_id: &str, prompt: &str) -> String {
+    let prefix = if harness_id == ENVIRONMENT_HARNESS_ID {
+        ENVIRONMENT_SESSION_TITLE_PREFIX
+    } else {
+        ""
+    };
     let line = prompt
         .lines()
         .find(|line| !line.trim().is_empty())
         .map(str::trim);
-    let Some(line) = line else {
-        return "New session".to_owned();
+    let base_title = if let Some(line) = line {
+        line.split_whitespace()
+            .take(DEFAULT_SESSION_TITLE_WORDS)
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        "New session".to_owned()
     };
-    line.split_whitespace()
-        .take(DEFAULT_SESSION_TITLE_WORDS)
-        .collect::<Vec<_>>()
-        .join(" ")
+
+    format!("{prefix}{base_title}")
         .chars()
         .take(DEFAULT_SESSION_TITLE_LENGTH)
         .collect()
@@ -1693,15 +1703,24 @@ mod tests {
     #[test]
     fn session_title_defaults_to_the_first_non_empty_prompt_line() {
         assert_eq!(
-            default_session_title("\n  Build a Rust service  \nwith tests"),
+            default_session_title("pi", "\n  Build a Rust service  \nwith tests"),
             "Build a Rust service"
         );
-        assert_eq!(default_session_title("  "), "New session");
+        assert_eq!(default_session_title("pi", "  "), "New session");
         assert_eq!(
             default_session_title(
+                "pi",
                 "Check sandbox internet disable flag and then update every related test"
             ),
             "Check sandbox internet disable flag and then update"
+        );
+        assert_eq!(
+            default_session_title("environment", "Create a TypeScript environment"),
+            "(Env) Create a TypeScript environment"
+        );
+        assert_eq!(
+            default_session_title("environment", "  "),
+            "(Env) New session"
         );
     }
 

@@ -114,7 +114,8 @@ Create a durable project session and its initial run with an
 IDs, creates the Agent session, and starts the run against the harness's active
 revision. `config_override` remains harness-specific and is forwarded only for
 this first run. When `title` is omitted, Platform uses the first eight words of
-the first non-empty prompt line. Optional `environment_ids` are validated against the project
+the first non-empty prompt line and prefixes environment-harness sessions with
+`(Env)`. Optional `environment_ids` are validated against the project
 and stored as ordered immutable environment snapshots:
 
 ```json
@@ -162,8 +163,11 @@ as active, and both run fields are nullable. Canonical transcript messages
 retain Agent's revision pagination:
 
 ```text
-GET .../messages?after_revision={revision}&limit={limit}
+GET .../messages?after_revision={revision}&limit={limit}&run_id={run_id}
 ```
+
+`run_id` is optional and limits the transcript to messages committed by that
+run, which lets clients load intermediate run details on demand.
 
 Run history retains Agent's status and cursor pagination:
 
