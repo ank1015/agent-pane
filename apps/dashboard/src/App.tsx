@@ -4,6 +4,7 @@ import {
   ComputerIcon,
   Folder01Icon,
   LayoutAlignLeftIcon,
+  MessageMultiple01Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import type { IconSvgElement } from '@hugeicons/react'
@@ -15,6 +16,7 @@ import {
   matchPath,
   useLocation,
 } from 'react-router-dom'
+import { lazy, Suspense } from 'react'
 import { HarnessesTable } from './features/harnesses/HarnessesTable'
 import { MachinePage } from './features/machines/MachinePage'
 import { MachinesSection } from './features/machines/MachinesSection'
@@ -26,7 +28,13 @@ import { ProjectsGrid } from './features/projects/ProjectsGrid'
 import { useDashboardStore } from './stores/dashboard-store'
 import './App.css'
 
-type SectionId = 'projects' | 'harnesses' | 'machines' | 'providers'
+const SessionsPage = lazy(() =>
+  import('./features/sessions/SessionsPage').then((module) => ({
+    default: module.SessionsPage,
+  })),
+)
+
+type SectionId = 'projects' | 'sessions' | 'harnesses' | 'machines' | 'providers'
 
 type NavigationItem = {
   id: SectionId
@@ -41,6 +49,12 @@ const NAVIGATION: NavigationItem[] = [
     path: '/projects',
     label: 'Projects',
     icon: Folder01Icon,
+  },
+  {
+    id: 'sessions',
+    path: '/sessions',
+    label: 'Sessions',
+    icon: MessageMultiple01Icon,
   },
   {
     id: 'harnesses',
@@ -69,6 +83,8 @@ function App() {
   const expandSidebar = useDashboardStore((state) => state.expandSidebar)
   const toggleSidebar = useDashboardStore((state) => state.toggleSidebar)
   const { pathname } = useLocation()
+  const sessionMatch = matchPath('/sessions/:sessionId', pathname)
+  const isSessionsRoute = pathname === '/sessions' || sessionMatch !== null
   const sandboxAccountMatch =
     matchPath('/machine/accounts/:accountId', pathname) ??
     matchPath('/machine/accounts/:accountId/*', pathname)
@@ -81,6 +97,14 @@ function App() {
     matchPath('/providers/:providerId/*', pathname)
   const activeItem =
     NAVIGATION.find((item) => item.path === pathname) ?? NAVIGATION[0]
+
+  if (isSessionsRoute) {
+    return (
+      <Suspense fallback={<div className="session-route-loading">Loading sessions…</div>}>
+        <SessionsPage sessionId={sessionMatch?.params.sessionId} />
+      </Suspense>
+    )
+  }
 
   if (machineMatch !== null) {
     return <MachinePage machineId={machineMatch.params.machineId ?? ''} />
@@ -190,6 +214,8 @@ function App() {
           <Route path="/" element={<Navigate to="/projects" replace />} />
           <Route path="/projects" element={null} />
           <Route path="/projects/:projectId" element={null} />
+          <Route path="/sessions" element={null} />
+          <Route path="/sessions/:sessionId" element={null} />
           <Route path="/projects/:projectId/environments" element={null} />
           <Route path="/projects/:projectId/*" element={null} />
           <Route path="/harnesses" element={null} />

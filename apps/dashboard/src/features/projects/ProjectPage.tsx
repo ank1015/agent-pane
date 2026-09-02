@@ -1148,6 +1148,12 @@ function ProjectSessionPage({
                   isFetchingNextMessagePage
                 }
               />
+              <Link
+                className="project-session-visualizer-link"
+                to={`/sessions/${encodeURIComponent(sessionId)}`}
+              >
+                Visualize
+              </Link>
             </>
           )}
         </header>
