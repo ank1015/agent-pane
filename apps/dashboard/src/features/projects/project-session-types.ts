@@ -50,11 +50,27 @@ export type AssistantContent =
       tool_call_id: string
     }
 
+export type AssistantUsageCost = {
+  input?: number
+  output?: number
+  cache_read?: number
+  cache_write?: number
+  total: number
+}
+
+export type AssistantUsage = {
+  input?: number
+  output?: number
+  cache_read?: number
+  cache_write?: number
+  cost?: AssistantUsageCost
+}
+
 export type AssistantMessage = {
   role: 'assistant'
   id: string
   model: { provider: string; id: string; name?: string }
-  usage?: JsonObject
+  usage?: AssistantUsage
   duration_ms: number
   native_message: unknown
   content: AssistantContent[]

@@ -456,5 +456,5 @@ function formatRequestUsageValue(
 }
 
 function formatCost(value: number) {
-  return `$${value}`
+  return `$${value.toFixed(5)}`
 }

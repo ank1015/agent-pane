@@ -38,6 +38,8 @@ import {
   type MachineEnvironment,
   useMaterializeSandboxEnvironmentTemplate,
 } from '../machines/machine-queries'
+import { ProviderIcon } from '../providers/provider-icons'
+import type { ProviderKind } from '../providers/provider-queries'
 import {
   DeleteProjectEnvironmentDialog,
   UpdateProjectEnvironmentNameDialog,
@@ -80,7 +82,6 @@ import type {
   SessionMessage,
 } from './project-session-types'
 import { isLiveRunStatus } from './project-session-types'
-import type { ProviderKind } from '../providers/provider-queries'
 
 const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   dateStyle: 'medium',
@@ -192,6 +193,87 @@ function ProjectSessionContext({
             </span>
           ))
         : null}
+    </div>
+  )
+}
+
+type ProjectSessionUsageSummary = {
+  totalCost: number
+  cacheHitRate: number
+}
+
+function summarizeSessionUsage(
+  messages: readonly SessionMessage[],
+): ProjectSessionUsageSummary {
+  let totalCost = 0
+  let inputTokens = 0
+  let cacheReadTokens = 0
+
+  for (const item of messages) {
+    if (item.message.role !== 'assistant') continue
+    const usage = item.message.usage
+    totalCost += finiteUsageValue(usage?.cost?.total)
+    inputTokens += finiteUsageValue(usage?.input)
+    cacheReadTokens += finiteUsageValue(usage?.cache_read)
+  }
+
+  const cacheEligibleTokens = inputTokens + cacheReadTokens
+  return {
+    totalCost,
+    cacheHitRate:
+      cacheEligibleTokens === 0
+        ? 0
+        : (cacheReadTokens / cacheEligibleTokens) * 100,
+  }
+}
+
+function finiteUsageValue(value: number | undefined) {
+  return value !== undefined && Number.isFinite(value) && value >= 0
+    ? value
+    : 0
+}
+
+function ProjectSessionHeaderSummary({
+  accountName,
+  provider,
+  usage,
+  isUsagePending,
+}: {
+  accountName: string
+  provider: ProviderKind | null
+  usage: ProjectSessionUsageSummary
+  isUsagePending: boolean
+}) {
+  const cost = isUsagePending ? '…' : `$${usage.totalCost.toFixed(5)}`
+  const cacheHitRate = isUsagePending
+    ? '…'
+    : `${usage.cacheHitRate.toLocaleString(undefined, {
+        maximumFractionDigits: 1,
+      })}%`
+
+  return (
+    <div className="project-session-header-summary" aria-label="Session usage">
+      <span
+        className="project-session-header-account"
+        title={`Provider account: ${accountName}`}
+      >
+        {provider === null ? null : (
+          <ProviderIcon
+            className="project-session-header-account-icon"
+            provider={provider}
+          />
+        )}
+        <span>{accountName}</span>
+      </span>
+      <span
+        className="project-session-header-metric"
+        aria-label={`Total cost: ${cost}. Cache hit rate: ${cacheHitRate}`}
+        title={`Total cost: ${cost} · Cache hit rate: ${cacheHitRate}`}
+      >
+        <span className="project-session-header-metric-value">{cost}</span>
+        <span className="project-session-header-metric-separator">/</span>
+        <span className="project-session-header-metric-value">{cacheHitRate}</span>
+      </span>
     </div>
   )
 }
@@ -944,6 +1026,22 @@ function ProjectSessionPage({
   const fetchNextRunPage = runs.fetchNextPage
   const hasNextRunPage = runs.hasNextPage
   const isFetchingNextRunPage = runs.isFetchingNextPage
+  const usageSummary = useMemo(
+    () => summarizeSessionUsage(messageItems),
+    [messageItems],
+  )
+  const sessionAccountId =
+    sessionRecord === undefined
+      ? null
+      : stringConfigValue(sessionRecord.harness_config, 'account_id')
+  const sessionAccount = modelOptions.data?.providers.find(
+    (account) => account.account_id === sessionAccountId,
+  )
+  const accountName =
+    sessionAccount?.name ??
+    (modelOptions.isPending ? 'Loading account…' : 'Account unavailable')
+  const accountProvider =
+    sessionAccount?.provider ?? lockedOptions?.provider ?? null
 
   useEffect(() => {
     if (hasNextMessagePage && !isFetchingNextMessagePage) {
@@ -1035,10 +1133,22 @@ function ProjectSessionPage({
       <div className="project-session-workspace">
         <header className="project-session-header">
           {sessionRecord === undefined ? null : (
-            <ProjectSessionContext
-              harnessId={sessionRecord.harness_id}
-              environments={sessionRecord.environments}
-            />
+            <>
+              <ProjectSessionContext
+                harnessId={sessionRecord.harness_id}
+                environments={sessionRecord.environments}
+              />
+              <ProjectSessionHeaderSummary
+                accountName={accountName}
+                provider={accountProvider}
+                usage={usageSummary}
+                isUsagePending={
+                  messages.isPending ||
+                  hasNextMessagePage ||
+                  isFetchingNextMessagePage
+                }
+              />
+            </>
           )}
         </header>
         <div className="project-session-body">
