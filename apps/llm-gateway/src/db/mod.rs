@@ -1,8 +1,12 @@
+mod accounting;
 mod accounts;
 mod models;
 
 use std::time::Duration;
 
+pub use accounting::{
+    CompletionAccountingQueryError, CompletionRequestPage, CompletionUsageSummary,
+};
 pub use accounts::{AccountPatch, AccountStoreError, NewProviderAccount};
 pub use models::{AdminAccount, ProviderAccount, ResolvedAccount};
 use sqlx::{PgPool, postgres::PgPoolOptions};
