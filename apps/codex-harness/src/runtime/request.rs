@@ -142,6 +142,13 @@ mod tests {
                     .len(),
                 2
             );
+            assert_eq!(body["input"][2]["role"], json!("user"));
+            assert!(
+                body["input"][2]["content"][0]["text"]
+                    .as_str()
+                    .expect("environment text")
+                    .contains("<environment_context>")
+            );
             assert!(body.get("max_output_tokens").is_none());
         }
     }

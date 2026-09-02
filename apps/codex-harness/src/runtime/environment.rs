@@ -1,7 +1,9 @@
 use agent_contracts::SessionMessage;
 use execution_contracts::PathConvention;
 use execution_runtime::ExecutionRuntime;
-use llm_contracts::{ContentPart, Message, MessageId, TextContent, Timestamp, UserMessage};
+use llm_contracts::{
+    ContentPart, CustomMessage, Message, MessageId, TextContent, Timestamp, UserMessage,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
@@ -13,6 +15,7 @@ use super::CodexExecutionTarget;
 const CODEX_ENVIRONMENT_METADATA_KEY: &str = "codex_environment";
 const CODEX_ENVIRONMENT_METADATA_VERSION: u32 = 1;
 const CODEX_ENVIRONMENT_MESSAGE_PREFIX: &str = "codex-environment-";
+pub const CODEX_ENVIRONMENT_MESSAGE_TAG: &str = "codex.environment_context";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CodexEnvironmentSnapshot {
@@ -43,6 +46,15 @@ pub(crate) enum CodexEnvironmentPlacement {
 #[serde(deny_unknown_fields)]
 struct CodexEnvironmentMessageMetadata {
     version: u32,
+    snapshot: CodexEnvironmentSnapshot,
+    placement: CodexEnvironmentPlacement,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CodexEnvironmentMessageContent {
+    version: u32,
+    text: String,
     snapshot: CodexEnvironmentSnapshot,
     placement: CodexEnvironmentPlacement,
 }
@@ -171,26 +183,22 @@ impl CodexEnvironmentSnapshot {
             Some(previous) if !force_full => render_environment_context_diff(previous, self),
             Some(_) | None => render_environment_context(self),
         };
-        let metadata = CodexEnvironmentMessageMetadata {
+        let persisted = CodexEnvironmentMessageContent {
             version: CODEX_ENVIRONMENT_METADATA_VERSION,
+            text: content,
             snapshot: self.clone(),
             placement,
         };
-        let Value::Object(metadata) = serde_json::to_value(metadata)
-            .expect("environment metadata contains only serializable values")
+        let Value::Object(content) = serde_json::to_value(persisted)
+            .expect("environment message contains only serializable values")
         else {
-            unreachable!("environment metadata serializes as an object")
+            unreachable!("environment message serializes as an object")
         };
-        Some(Message::User(UserMessage {
+        Some(Message::Custom(CustomMessage {
             id,
             timestamp: self.captured_at,
-            content: vec![ContentPart::Text(TextContent {
-                content,
-                metadata: Some(serde_json::Map::from_iter([(
-                    CODEX_ENVIRONMENT_METADATA_KEY.to_owned(),
-                    Value::Object(metadata),
-                )])),
-            })],
+            content,
+            tag: Some(CODEX_ENVIRONMENT_MESSAGE_TAG.to_owned()),
         }))
     }
 
@@ -257,7 +265,7 @@ pub(crate) fn latest_environment_snapshot(
     messages
         .iter()
         .filter_map(|message| {
-            environment_message_metadata(&message.message)
+            persisted_environment_metadata(&message.message)
                 .map(|metadata| (message.revision, metadata.snapshot))
         })
         .max_by_key(|(revision, _)| *revision)
@@ -266,7 +274,48 @@ pub(crate) fn latest_environment_snapshot(
 
 #[must_use]
 pub(crate) fn is_environment_message(message: &Message) -> bool {
-    environment_message_metadata(message).is_some()
+    matches!(
+        message,
+        Message::Custom(message)
+            if message.tag.as_deref() == Some(CODEX_ENVIRONMENT_MESSAGE_TAG)
+    ) || legacy_environment_metadata(message).is_some()
+}
+
+/// Projects a harness-owned environment record into the user-role message
+/// expected by Codex and the provider wire format. Legacy user-role records are
+/// accepted unchanged so sessions created before the custom representation
+/// remain replayable.
+pub(crate) fn materialize_environment_message(
+    message: &Message,
+) -> Result<Option<Message>, CodexEnvironmentMessageError> {
+    let Message::Custom(message) = message else {
+        return Ok(legacy_environment_metadata(message).map(|_| message.clone()));
+    };
+    if message.tag.as_deref() != Some(CODEX_ENVIRONMENT_MESSAGE_TAG) {
+        return Ok(None);
+    }
+    let persisted = decode_custom_environment(message)?;
+    let metadata = CodexEnvironmentMessageMetadata {
+        version: persisted.version,
+        snapshot: persisted.snapshot,
+        placement: persisted.placement,
+    };
+    let Value::Object(metadata) = serde_json::to_value(metadata)
+        .expect("environment metadata contains only serializable values")
+    else {
+        unreachable!("environment metadata serializes as an object")
+    };
+    Ok(Some(Message::User(UserMessage {
+        id: message.id.clone(),
+        timestamp: message.timestamp,
+        content: vec![ContentPart::Text(TextContent {
+            content: persisted.text,
+            metadata: Some(serde_json::Map::from_iter([(
+                CODEX_ENVIRONMENT_METADATA_KEY.to_owned(),
+                Value::Object(metadata),
+            )])),
+        })],
+    })))
 }
 
 /// Restores logical model order for environment items committed to an
@@ -275,7 +324,7 @@ pub(crate) fn reorder_environment_messages(messages: &mut Vec<Message>) {
     let mut environment_messages = Vec::new();
     let mut ordinary_messages = Vec::with_capacity(messages.len());
     for message in messages.drain(..) {
-        if let Some(metadata) = environment_message_metadata(&message) {
+        if let Some(metadata) = legacy_environment_metadata(&message) {
             environment_messages.push((message, metadata.placement));
         } else {
             ordinary_messages.push(message);
@@ -303,7 +352,7 @@ pub(crate) fn reorder_environment_messages(messages: &mut Vec<Message>) {
     *messages = ordinary_messages;
 }
 
-fn environment_message_metadata(message: &Message) -> Option<CodexEnvironmentMessageMetadata> {
+fn legacy_environment_metadata(message: &Message) -> Option<CodexEnvironmentMessageMetadata> {
     let Message::User(message) = message else {
         return None;
     };
@@ -324,6 +373,37 @@ fn environment_message_metadata(message: &Message) -> Option<CodexEnvironmentMes
     let metadata =
         serde_json::from_value::<CodexEnvironmentMessageMetadata>(metadata.clone()).ok()?;
     (metadata.version == CODEX_ENVIRONMENT_METADATA_VERSION).then_some(metadata)
+}
+
+fn persisted_environment_metadata(message: &Message) -> Option<CodexEnvironmentMessageMetadata> {
+    match message {
+        Message::Custom(message)
+            if message.tag.as_deref() == Some(CODEX_ENVIRONMENT_MESSAGE_TAG) =>
+        {
+            let persisted = decode_custom_environment(message).ok()?;
+            Some(CodexEnvironmentMessageMetadata {
+                version: persisted.version,
+                snapshot: persisted.snapshot,
+                placement: persisted.placement,
+            })
+        }
+        _ => legacy_environment_metadata(message),
+    }
+}
+
+fn decode_custom_environment(
+    message: &CustomMessage,
+) -> Result<CodexEnvironmentMessageContent, CodexEnvironmentMessageError> {
+    let persisted = serde_json::from_value::<CodexEnvironmentMessageContent>(Value::Object(
+        message.content.clone(),
+    ))
+    .map_err(CodexEnvironmentMessageError::Invalid)?;
+    if persisted.version != CODEX_ENVIRONMENT_METADATA_VERSION {
+        return Err(CodexEnvironmentMessageError::UnsupportedVersion(
+            persisted.version,
+        ));
+    }
+    Ok(persisted)
 }
 
 fn message_id_of(message: &Message) -> &MessageId {
@@ -439,12 +519,24 @@ pub enum CodexEnvironmentError {
     EmptyWorkspaceRoot,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CodexEnvironmentMessageError {
+    #[error("Codex environment message is invalid")]
+    Invalid(#[source] serde_json::Error),
+    #[error("unsupported Codex environment message version {0}")]
+    UnsupportedVersion(u32),
+}
+
 #[cfg(test)]
 mod tests {
     use llm_contracts::{ContentPart, Message, MessageId, TextContent, Timestamp, UserMessage};
+    use serde_json::Value;
 
     use super::{
+        CODEX_ENVIRONMENT_MESSAGE_TAG, CODEX_ENVIRONMENT_METADATA_KEY,
+        CODEX_ENVIRONMENT_METADATA_VERSION, CodexEnvironmentMessageMetadata,
         CodexEnvironmentPlacement, CodexEnvironmentSnapshot, is_environment_message,
+        materialize_environment_message, persisted_environment_metadata,
         render_environment_context, reorder_environment_messages,
     };
 
@@ -485,16 +577,30 @@ mod tests {
         );
 
         let next_day = snapshot("/work/repo", "2026-08-31", Timestamp(3));
-        let Message::User(update) = next_day
+        let persisted = next_day
             .as_persisted_message(
                 MessageId::new("codex-environment-next-day").expect("message ID"),
                 CodexEnvironmentPlacement::End,
                 Some(&initial),
                 false,
             )
-            .expect("changed environment should be persisted")
+            .expect("changed environment should be persisted");
+        assert!(matches!(
+            &persisted,
+            Message::Custom(message)
+                if message.tag.as_deref() == Some(CODEX_ENVIRONMENT_MESSAGE_TAG)
+        ));
+        assert_eq!(
+            persisted_environment_metadata(&persisted)
+                .expect("custom environment metadata")
+                .snapshot,
+            next_day
+        );
+        let Message::User(update) = materialize_environment_message(&persisted)
+            .expect("valid persisted environment")
+            .expect("environment should be model-visible")
         else {
-            panic!("environment context is a user message")
+            panic!("materialized environment context is a user message")
         };
         let ContentPart::Text(update) = &update.content[0] else {
             panic!("environment context is text")
@@ -533,6 +639,12 @@ mod tests {
                 false,
             )
             .expect("environment delta");
+        let first_environment = materialize_environment_message(&first_environment)
+            .expect("valid persisted environment")
+            .expect("model-visible environment");
+        let second_environment = materialize_environment_message(&second_environment)
+            .expect("valid persisted environment")
+            .expect("model-visible environment");
 
         // This is canonical commit order: each environment item had to be
         // appended after the already-committed external user message.
@@ -548,6 +660,38 @@ mod tests {
         assert_eq!(message_id(&messages[1]), "user-1");
         assert!(is_environment_message(&messages[2]));
         assert_eq!(message_id(&messages[3]), "user-2");
+    }
+
+    #[test]
+    fn materializes_legacy_user_environment_messages_unchanged() {
+        let snapshot = snapshot("/work/repo", "2026-08-30", Timestamp(1));
+        let metadata = CodexEnvironmentMessageMetadata {
+            version: CODEX_ENVIRONMENT_METADATA_VERSION,
+            snapshot,
+            placement: CodexEnvironmentPlacement::End,
+        };
+        let Value::Object(metadata) = serde_json::to_value(metadata).expect("metadata") else {
+            unreachable!("metadata is an object")
+        };
+        let legacy = Message::User(UserMessage {
+            id: MessageId::new("codex-environment-legacy").expect("message ID"),
+            timestamp: Timestamp(1),
+            content: vec![ContentPart::Text(TextContent {
+                content: "<environment_context>legacy</environment_context>".to_owned(),
+                metadata: Some(serde_json::Map::from_iter([(
+                    CODEX_ENVIRONMENT_METADATA_KEY.to_owned(),
+                    Value::Object(metadata),
+                )])),
+            })],
+        });
+
+        assert!(is_environment_message(&legacy));
+        assert_eq!(
+            materialize_environment_message(&legacy)
+                .expect("valid legacy environment")
+                .expect("legacy environment is visible"),
+            legacy
+        );
     }
 
     fn snapshot(cwd: &str, current_date: &str, captured_at: Timestamp) -> CodexEnvironmentSnapshot {

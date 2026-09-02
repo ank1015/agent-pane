@@ -25,7 +25,8 @@ pub use config::{
     ReasoningLevel, SUPPORTED_PROVIDER_IDS, SUPPORTED_REASONING_LEVELS,
 };
 pub use environment::{
-    CodexEnvironmentError, CodexEnvironmentSnapshot, render_environment_context,
+    CODEX_ENVIRONMENT_MESSAGE_TAG, CodexEnvironmentError, CodexEnvironmentMessageError,
+    CodexEnvironmentSnapshot, render_environment_context,
 };
 pub use instructions::{BASE_INSTRUCTIONS, generate_instructions};
 pub use model::{CodexModel, ModelProfile, SUPPORTED_MODEL_IDS};

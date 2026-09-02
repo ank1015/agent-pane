@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{CodexHarnessConfig, CodexProvider, form_main_request};
+use crate::runtime::environment::{CodexEnvironmentMessageError, materialize_environment_message};
 
 pub const CODEX_COMPACTION_MESSAGE_TAG: &str = "codex.compaction";
 pub const CODEX_COMPACTION_SCHEMA_VERSION: u32 = 1;
@@ -281,9 +282,9 @@ pub fn normalize_session_messages(
             checkpoint.items,
         ));
         normalized.extend(checkpoint.pending_messages);
-        extend_visible(&mut normalized, &messages[checkpoint_index + 1..], provider);
+        extend_visible(&mut normalized, &messages[checkpoint_index + 1..], provider)?;
     } else {
-        extend_visible(&mut normalized, &messages, provider);
+        extend_visible(&mut normalized, &messages, provider)?;
     }
     repair_interrupted_tool_calls(&mut normalized);
     Ok(normalized)
@@ -627,14 +628,27 @@ fn has_compacted_for_turn(messages: &[SessionMessage], run_id: Uuid, turn_number
     })
 }
 
-fn extend_visible(target: &mut Vec<Message>, messages: &[&Message], provider: CodexProvider) {
-    target.extend(messages.iter().filter_map(|message| match message {
-        Message::Custom(custom) if custom.tag.as_deref() == Some(native_input_tag(provider)) => {
-            Some((*message).clone())
+fn extend_visible(
+    target: &mut Vec<Message>,
+    messages: &[&Message],
+    provider: CodexProvider,
+) -> Result<(), ContextNormalizationError> {
+    for message in messages {
+        if let Some(environment) = materialize_environment_message(message)? {
+            target.push(environment);
+            continue;
         }
-        Message::Custom(_) => None,
-        _ => Some((*message).clone()),
-    }));
+        match message {
+            Message::Custom(custom)
+                if custom.tag.as_deref() == Some(native_input_tag(provider)) =>
+            {
+                target.push((*message).clone());
+            }
+            Message::Custom(_) => {}
+            _ => target.push((*message).clone()),
+        }
+    }
+    Ok(())
 }
 
 fn native_input_tag(provider: CodexProvider) -> &'static str {
@@ -1047,6 +1061,8 @@ pub enum ContextNormalizationError {
     SessionMismatch { expected: Uuid, actual: Uuid },
     #[error("session history contains duplicate revision {0}")]
     DuplicateRevision(u64),
+    #[error("session history contains an invalid Codex environment message")]
+    InvalidEnvironmentMessage(#[from] CodexEnvironmentMessageError),
     #[error("Codex compaction message is invalid")]
     InvalidCompactionMessage(#[source] serde_json::Error),
     #[error("unsupported Codex compaction schema version {0}")]

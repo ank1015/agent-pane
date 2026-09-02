@@ -35,6 +35,7 @@ export function buildProjectConversation(
   const items: ProjectConversationItem[] = []
 
   for (const message of orderedMessages) {
+    if (isLegacyCodexEnvironmentMessage(message)) continue
     if (
       message.message.role === 'user' ||
       (message.message.role === 'assistant' &&
@@ -64,6 +65,19 @@ export function buildProjectConversation(
   }
 
   return items
+}
+
+function isLegacyCodexEnvironmentMessage(message: SessionMessage) {
+  const body = message.message
+  return (
+    message.origin === 'harness' &&
+    body.role === 'user' &&
+    body.id.startsWith('codex-environment-') &&
+    body.content.some(
+      (part) =>
+        part.type === 'text' && part.metadata?.codex_environment !== undefined,
+    )
+  )
 }
 
 function deduplicateById<T>(values: readonly T[], id: (value: T) => string) {

@@ -24,8 +24,9 @@ use codex_harness::{
     clients::{ExecutionResolutionError, MachineRuntimeResolver},
     config::AgentServiceConfig,
     runtime::{
-        CODEX_PRIMARY_CALL_STARTED_TAG, CodexCompletionClient, CodexModelCallError, CodexRuntime,
-        CodexToolCallExecutor, CodexToolDispatchError, CodexToolExecutionContext,
+        CODEX_ENVIRONMENT_MESSAGE_TAG, CODEX_PRIMARY_CALL_STARTED_TAG, CodexCompletionClient,
+        CodexModelCallError, CodexRuntime, CodexToolCallExecutor, CodexToolDispatchError,
+        CodexToolExecutionContext,
     },
 };
 use execution_contracts::{MachineId, WorkspaceRootId};
@@ -67,7 +68,11 @@ async fn calls_one_primary_model_and_commits_a_terminal_assistant() {
     assert_eq!(messages.len(), 4);
     assert!(matches!(
         &messages[1].message,
-        Message::User(user) if user.id.as_str().starts_with("codex-environment-")
+        Message::Custom(custom)
+            if custom.tag.as_deref() == Some(CODEX_ENVIRONMENT_MESSAGE_TAG)
+                && custom.content["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("<environment_context>"))
     ));
     assert!(matches!(
         &messages[2].message,
