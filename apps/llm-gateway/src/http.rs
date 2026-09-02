@@ -65,6 +65,14 @@ pub fn router(
             "/v1/admin/accounts/{account_id}/credentials",
             put(admin::rotate_credentials),
         )
+        .route(
+            "/v1/admin/accounts/{account_id}/usage",
+            get(admin::get_account_usage),
+        )
+        .route(
+            "/v1/admin/accounts/{account_id}/requests",
+            get(admin::list_account_requests),
+        )
         .route_layer(middleware::from_fn_with_state(
             admin_token,
             auth::require_admin,

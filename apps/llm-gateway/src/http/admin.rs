@@ -15,7 +15,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{
     account::{AccountServiceError, ProviderCredentials, ProviderKind},
-    db::{AccountPatch, AccountStoreError, AdminAccount},
+    db::{AccountPatch, AccountStoreError, AdminAccount, CompletionAccountingQueryError},
     gateway::{GatewayError, validate_provider_config},
 };
 
@@ -133,6 +133,58 @@ pub(super) async fn get_account(
             },
         ),
         Err(error) => error_response(request_id, error),
+    }
+}
+
+pub(super) async fn get_account_usage(
+    State(state): State<AppState>,
+    path: Result<Path<Uuid>, PathRejection>,
+) -> Response {
+    let request_id = Uuid::now_v7();
+    let account_id = match account_id(path) {
+        Ok(account_id) => account_id,
+        Err(error) => return error_response(request_id, error),
+    };
+    if let Err(error) = find_view(&state, account_id).await {
+        return error_response(request_id, error);
+    }
+
+    match state.database.completion_usage_summary(account_id).await {
+        Ok(summary) => json_response(StatusCode::OK, request_id, Some(account_id), summary),
+        Err(error) => error_response(request_id, map_database_error(error)),
+    }
+}
+
+pub(super) async fn list_account_requests(
+    State(state): State<AppState>,
+    path: Result<Path<Uuid>, PathRejection>,
+    query: Result<Query<CompletionRequestQuery>, QueryRejection>,
+) -> Response {
+    let request_id = Uuid::now_v7();
+    let account_id = match account_id(path) {
+        Ok(account_id) => account_id,
+        Err(error) => return error_response(request_id, error),
+    };
+    let Query(query) = match query {
+        Ok(query) => query,
+        Err(rejection) => {
+            return error_response(
+                request_id,
+                GatewayError::invalid_query(rejection.body_text()),
+            );
+        }
+    };
+    if let Err(error) = find_view(&state, account_id).await {
+        return error_response(request_id, error);
+    }
+
+    match state
+        .database
+        .recent_completion_requests(account_id, query.cursor.as_deref(), query.limit)
+        .await
+    {
+        Ok(page) => json_response(StatusCode::OK, request_id, Some(account_id), page),
+        Err(error) => error_response(request_id, map_accounting_query_error(error)),
     }
 }
 
@@ -378,6 +430,23 @@ fn map_database_error(error: sqlx::Error) -> GatewayError {
     }
     tracing::error!(%error, "admin account database operation failed");
     GatewayError::internal_error()
+}
+
+fn map_accounting_query_error(error: CompletionAccountingQueryError) -> GatewayError {
+    match error {
+        CompletionAccountingQueryError::InvalidCursor
+        | CompletionAccountingQueryError::InvalidLimit => {
+            GatewayError::invalid_query(error.to_string())
+        }
+        CompletionAccountingQueryError::Database(error) => map_database_error(error),
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct CompletionRequestQuery {
+    cursor: Option<String>,
+    limit: Option<u32>,
 }
 
 #[derive(Deserialize)]

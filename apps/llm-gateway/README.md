@@ -1,11 +1,13 @@
 # llm-gateway
 
-A stateless, non-streaming HTTP gateway over the workspace's OpenAI, ChatGPT,
+A non-streaming HTTP gateway over the workspace's OpenAI, ChatGPT,
 Fireworks, Anthropic, OpenRouter, and DeepSeek providers. One gateway request
 performs exactly one provider attempt using either the explicitly selected
 account or that provider's default account.
 
-The gateway never stores LLM requests, responses, attempts, or retry state.
+The gateway stores accounting metadata for every successful completion. It does
+not store prompts, assistant content, native provider responses, failed
+attempts, or retry state.
 
 ## Local setup
 
@@ -134,6 +136,8 @@ GET    /v1/admin/accounts/{account_id}
 PATCH  /v1/admin/accounts/{account_id}
 PUT    /v1/admin/accounts/{account_id}/default
 PUT    /v1/admin/accounts/{account_id}/credentials
+GET    /v1/admin/accounts/{account_id}/usage
+GET    /v1/admin/accounts/{account_id}/requests?cursor=...&limit=25
 DELETE /v1/admin/accounts/{account_id}
 ```
 
@@ -143,6 +147,18 @@ responses include account configuration, timestamps, credential version,
 encryption-key version, and credential update time. There is deliberately no
 credential reveal endpoint: plaintext credentials, ciphertext, nonces, and
 internal secret IDs are never returned.
+
+The account usage endpoint returns the successful completion count and lifetime
+USD cost and token totals, split into input, output, cache-read, and cache-write
+components. Missing provider usage components contribute zero to their
+aggregate; component costs may therefore not add up to the authoritative total
+when a provider supplies only a total cost.
+
+The account requests endpoint returns successful completions newest first. Its
+`items` include request, model, and assistant-message IDs, the exact normalized
+`usage` object, provider duration, and completion timestamp. `limit` defaults to
+25 and accepts 1 through 100. Pass `next_cursor` back as `cursor` to retrieve
+the next page. Both accounting endpoints require the admin bearer token.
 
 ### Complete a request
 
@@ -239,6 +255,11 @@ credentials, encrypted payloads, secret IDs, or provider configuration.
   monotonically increasing credential version.
 - `provider_accounts` stores provider, name, enabled/default state, and
   non-secret configuration.
+- `llm_completion_accounting` stores the request ID, resolved account, requested
+  and response model identities, assistant message ID, provider duration, and
+  the exact normalized `usage` object returned in the assistant message. Token
+  and USD cost fields are exposed as generated numeric columns for reporting.
+  A row is still stored when a successful provider response omits usage.
 - Provider transports and their HTTP pools are cached by
   `(account_id, credential_version)`.
 - Credential rotation or provider configuration changes increment that version
