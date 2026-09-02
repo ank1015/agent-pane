@@ -152,6 +152,20 @@ pub struct ProjectSession {
     pub archived_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SessionListItem {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub project_name: String,
+    pub title: String,
+    pub harness_id: String,
+    pub is_active: bool,
+    pub current_revision: u64,
+    pub creation_state: String,
+    pub created_at: DateTime<Utc>,
+    pub last_activity_at: DateTime<Utc>,
+}
+
 fn deserialize_present_nullable<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
 where
     D: Deserializer<'de>,

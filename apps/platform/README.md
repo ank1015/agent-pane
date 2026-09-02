@@ -100,6 +100,10 @@ GET    /api/projects/{project_id}/sessions/{session_id}/runs/{run_id}
 GET    /api/projects/{project_id}/sessions/{session_id}/runs/{run_id}/events
 GET    /api/projects/{project_id}/sessions/{session_id}/runs/{run_id}/events/stream
 POST   /api/projects/{project_id}/sessions/{session_id}/runs/{run_id}/abort
+GET    /api/sessions
+GET    /api/sessions/{session_id}
+GET    /api/sessions/{session_id}/messages
+GET    /api/sessions/{session_id}/runs
 ```
 
 Create a project with `{"name":"Agent Pane","avatar":null}`. `avatar` may be
@@ -162,6 +166,13 @@ project/session ownership mapping before Agent is called. The session detail
 response contains `session`, `latest_run`, and `active_run`; waiting runs count
 as active, and both run fields are nullable. Canonical transcript messages
 retain Agent's revision pagination:
+
+`GET /api/sessions` lists non-archived sessions across every project in
+most-recently-active order and includes each owning project's name. The
+project-independent `/api/sessions/{session_id}` read endpoints resolve the
+owning project from the durable session mapping. They return the same detail,
+message, and run-history contracts as their project-scoped counterparts and are
+intended for direct session URLs such as dashboard visualizers.
 
 ```text
 GET .../messages?after_revision={revision}&limit={limit}&run_id={run_id}

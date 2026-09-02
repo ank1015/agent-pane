@@ -83,12 +83,25 @@ pub(super) fn router(service: ProjectService) -> Router<AppState> {
             "/api/projects/{project_id}/sessions/{session_id}/runs/{run_id}/abort",
             post(abort_project_run),
         )
+        .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions/{session_id}", get(get_session))
+        .route(
+            "/api/sessions/{session_id}/messages",
+            get(list_session_messages),
+        )
+        .route("/api/sessions/{session_id}/runs", get(list_session_runs))
         .layer(middleware::map_response(add_no_store))
         .with_state(ProjectState { service })
 }
 
 async fn list_projects(State(state): State<ProjectState>) -> Result<Json<Vec<Project>>, ApiError> {
     Ok(Json(state.service.list().await?))
+}
+
+async fn list_sessions(
+    State(state): State<ProjectState>,
+) -> Result<Json<Vec<super::model::SessionListItem>>, ApiError> {
+    Ok(Json(state.service.list_all_sessions().await?))
 }
 
 async fn get_project(
@@ -158,6 +171,13 @@ async fn get_project_session(
     ))
 }
 
+async fn get_session(
+    State(state): State<ProjectState>,
+    Path(session_id): Path<Uuid>,
+) -> Result<Json<super::model::ProjectSessionResponse>, ApiError> {
+    Ok(Json(state.service.get_session_by_id(session_id).await?))
+}
+
 async fn update_project_session(
     State(state): State<ProjectState>,
     Path((project_id, session_id)): Path<(Uuid, Uuid)>,
@@ -186,6 +206,20 @@ async fn list_project_session_messages(
     ))
 }
 
+async fn list_session_messages(
+    State(state): State<ProjectState>,
+    Path(session_id): Path<Uuid>,
+    query: Result<Query<AgentSessionMessageListQuery>, QueryRejection>,
+) -> Result<Json<agent_contracts::SessionMessagePage>, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid_request(error.body_text()))?;
+    Ok(Json(
+        state
+            .service
+            .list_session_messages_by_id(session_id, &query)
+            .await?,
+    ))
+}
+
 async fn list_project_session_runs(
     State(state): State<ProjectState>,
     Path((project_id, session_id)): Path<(Uuid, Uuid)>,
@@ -196,6 +230,20 @@ async fn list_project_session_runs(
         state
             .service
             .list_session_runs(project_id, session_id, &query)
+            .await?,
+    ))
+}
+
+async fn list_session_runs(
+    State(state): State<ProjectState>,
+    Path(session_id): Path<Uuid>,
+    query: Result<Query<AgentSessionRunListQuery>, QueryRejection>,
+) -> Result<Json<crate::upstream::agent::AgentSessionRunPage>, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid_request(error.body_text()))?;
+    Ok(Json(
+        state
+            .service
+            .list_session_runs_by_id(session_id, &query)
             .await?,
     ))
 }

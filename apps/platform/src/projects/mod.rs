@@ -32,7 +32,7 @@ use crate::upstream::{
 use model::{
     CreateProjectRequest, CreateProjectSessionRequest, CreateProjectSessionResponse, Project,
     ProjectBootstrap, ProjectBootstrapHarness, ProjectBootstrapHarnessProvider,
-    ProjectBootstrapProviderAccount, ProjectSession, ProjectSessionResponse,
+    ProjectBootstrapProviderAccount, ProjectSession, ProjectSessionResponse, SessionListItem,
     StartProjectSessionRunRequest, StartProjectSessionRunResponse, UpdateProjectRequest,
     UpdateProjectSessionRequest,
 };
@@ -222,6 +222,25 @@ impl ProjectService {
         self.sessions_from_rows(rows).await
     }
 
+    async fn list_all_sessions(&self) -> Result<Vec<SessionListItem>, ProjectError> {
+        let rows = sqlx::query_as::<_, SessionListItemRow>(
+            "select session.id, session.project_id, project.name as project_name, \
+                    session.title, session.harness_id, \
+                    session.active_run_id is not null as is_active, \
+                    session.current_revision, session.creation_state, \
+                    session.created_at, session.last_activity_at \
+             from project_sessions session \
+             join projects project on project.project_id = session.project_id \
+             where session.archived_at is null \
+             order by session.last_activity_at desc, session.id desc",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(SessionListItemRow::into_list_item)
+            .collect()
+    }
+
     async fn create_session(
         &self,
         project_id: Uuid,
@@ -392,6 +411,14 @@ impl ProjectService {
         })
     }
 
+    async fn get_session_by_id(
+        &self,
+        session_id: Uuid,
+    ) -> Result<ProjectSessionResponse, ProjectError> {
+        let project_id = self.session_project_id(session_id).await?;
+        self.get_session(project_id, session_id).await
+    }
+
     async fn update_session(
         &self,
         project_id: Uuid,
@@ -439,6 +466,16 @@ impl ProjectService {
         Ok(self.agent.list_session_messages(session_id, query).await?)
     }
 
+    async fn list_session_messages_by_id(
+        &self,
+        session_id: Uuid,
+        query: &AgentSessionMessageListQuery,
+    ) -> Result<SessionMessagePage, ProjectError> {
+        let project_id = self.session_project_id(session_id).await?;
+        self.list_session_messages(project_id, session_id, query)
+            .await
+    }
+
     async fn list_session_runs(
         &self,
         project_id: Uuid,
@@ -451,6 +488,15 @@ impl ProjectService {
             self.persist_run_summary(run).await?;
         }
         Ok(page)
+    }
+
+    async fn list_session_runs_by_id(
+        &self,
+        session_id: Uuid,
+        query: &AgentSessionRunListQuery,
+    ) -> Result<AgentSessionRunPage, ProjectError> {
+        let project_id = self.session_project_id(session_id).await?;
+        self.list_session_runs(project_id, session_id, query).await
     }
 
     async fn get_run(
@@ -549,6 +595,17 @@ impl ProjectService {
                and session.creation_state = 'accepted'",
         )
         .bind(project_id)
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or(ProjectError::SessionNotFound)
+    }
+
+    async fn session_project_id(&self, session_id: Uuid) -> Result<Uuid, ProjectError> {
+        sqlx::query_scalar::<_, Uuid>(
+            "select project_id from project_sessions \
+             where id = $1 and creation_state = 'accepted'",
+        )
         .bind(session_id)
         .fetch_optional(&self.pool)
         .await?
@@ -1186,6 +1243,38 @@ struct ProjectSessionRow {
     accepted_at: Option<DateTime<Utc>>,
     last_activity_at: DateTime<Utc>,
     archived_at: Option<DateTime<Utc>>,
+}
+
+#[derive(sqlx::FromRow)]
+struct SessionListItemRow {
+    id: Uuid,
+    project_id: Uuid,
+    project_name: String,
+    title: String,
+    harness_id: String,
+    is_active: bool,
+    current_revision: i64,
+    creation_state: String,
+    created_at: DateTime<Utc>,
+    last_activity_at: DateTime<Utc>,
+}
+
+impl SessionListItemRow {
+    fn into_list_item(self) -> Result<SessionListItem, ProjectError> {
+        Ok(SessionListItem {
+            id: self.id,
+            project_id: self.project_id,
+            project_name: self.project_name,
+            title: self.title,
+            harness_id: self.harness_id,
+            is_active: self.is_active,
+            current_revision: u64::try_from(self.current_revision)
+                .map_err(|_| ProjectError::InvalidStoredSessionRevision)?,
+            creation_state: self.creation_state,
+            created_at: self.created_at,
+            last_activity_at: self.last_activity_at,
+        })
+    }
 }
 
 impl ProjectSessionRow {
