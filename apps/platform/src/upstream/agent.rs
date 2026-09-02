@@ -93,6 +93,7 @@ pub struct AgentRunEventListQuery {
 pub struct AgentSessionMessageListQuery {
     pub after_revision: Option<u64>,
     pub limit: Option<u32>,
+    pub run_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -241,6 +241,7 @@ async fn session_reads_authenticate_and_forward_pagination() {
             &AgentSessionMessageListQuery {
                 after_revision: Some(3),
                 limit: Some(20),
+                run_id: Some(run_id),
             },
         )
         .await
@@ -277,6 +278,7 @@ async fn session_reads_authenticate_and_forward_pagination() {
     assert_eq!(get_request.1, format!("/v1/sessions/{session_id}"));
     assert_eq!(message_request.2["after_revision"], "3");
     assert_eq!(message_request.2["limit"], "20");
+    assert_eq!(message_request.2["run_id"], run_id.to_string());
     assert_eq!(run_list_request.2["status"], "waiting");
     assert_eq!(run_list_request.2["limit"], "2");
     assert_eq!(run_list_request.2["cursor"], "next-run");
