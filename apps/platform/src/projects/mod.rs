@@ -43,7 +43,7 @@ const MAX_SESSION_TITLE_LENGTH: usize = 255;
 const DEFAULT_SESSION_TITLE_WORDS: usize = 8;
 const DEFAULT_SESSION_TITLE_LENGTH: usize = 80;
 const ENVIRONMENT_HARNESS_ID: &str = "environment";
-const ENVIRONMENT_SESSION_TITLE_PREFIX: &str = "(Env) ";
+const ENVIRONMENT_SESSION_TITLE_LABEL: &str = "Env";
 const ACTIVITY_RECONCILE_INTERVAL: Duration = Duration::from_secs(5);
 const ACTIVITY_RECONCILE_BATCH_SIZE: i64 = 100;
 
@@ -1320,11 +1320,16 @@ fn validate_session_title(title: &str) -> Result<(), ProjectError> {
 }
 
 fn default_session_title(harness_id: &str, prompt: &str) -> String {
-    let prefix = if harness_id == ENVIRONMENT_HARNESS_ID {
-        ENVIRONMENT_SESSION_TITLE_PREFIX
+    let harness_label = if harness_id == ENVIRONMENT_HARNESS_ID {
+        ENVIRONMENT_SESSION_TITLE_LABEL.to_owned()
     } else {
-        ""
+        let mut characters = harness_id.chars();
+        characters
+            .next()
+            .map(|first| first.to_uppercase().chain(characters).collect())
+            .unwrap_or_default()
     };
+    let prefix = format!("({harness_label}) ");
     let line = prompt
         .lines()
         .find(|line| !line.trim().is_empty())
@@ -1704,15 +1709,19 @@ mod tests {
     fn session_title_defaults_to_the_first_non_empty_prompt_line() {
         assert_eq!(
             default_session_title("pi", "\n  Build a Rust service  \nwith tests"),
-            "Build a Rust service"
+            "(Pi) Build a Rust service"
         );
-        assert_eq!(default_session_title("pi", "  "), "New session");
+        assert_eq!(default_session_title("pi", "  "), "(Pi) New session");
         assert_eq!(
             default_session_title(
                 "pi",
                 "Check sandbox internet disable flag and then update every related test"
             ),
-            "Check sandbox internet disable flag and then update"
+            "(Pi) Check sandbox internet disable flag and then update"
+        );
+        assert_eq!(
+            default_session_title("codex", "Review the session naming logic"),
+            "(Codex) Review the session naming logic"
         );
         assert_eq!(
             default_session_title("environment", "Create a TypeScript environment"),

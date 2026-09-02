@@ -113,10 +113,11 @@ Create a durable project session and its initial run with an
 `Idempotency-Key` header. Platform reserves stable session, run, and message
 IDs, creates the Agent session, and starts the run against the harness's active
 revision. `config_override` remains harness-specific and is forwarded only for
-this first run. When `title` is omitted, Platform uses the first eight words of
-the first non-empty prompt line and prefixes environment-harness sessions with
-`(Env)`. Optional `environment_ids` are validated against the project
-and stored as ordered immutable environment snapshots:
+this first run. When `title` is omitted, Platform prefixes the title with the
+harness name and uses the first eight words of the first non-empty prompt line,
+for example `(Codex)`, `(Pi)`, or `(Env)`. Optional `environment_ids` are
+validated against the project and stored as ordered immutable environment
+snapshots:
 
 ```json
 {
