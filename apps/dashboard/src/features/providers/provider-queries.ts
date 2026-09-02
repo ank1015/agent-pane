@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import {
   deleteRequest,
   getJson,
@@ -22,6 +27,57 @@ export type ProviderAccount = {
   status: 'enabled' | 'disabled'
   created_at: string
   is_default: boolean
+}
+
+export type ProviderUsageCost = {
+  input?: number
+  output?: number
+  cache_read?: number
+  cache_write?: number
+  total: number
+}
+
+export type ProviderRequestUsage = {
+  input?: number
+  output?: number
+  cache_read?: number
+  cache_write?: number
+  cost?: ProviderUsageCost
+}
+
+export type ProviderUsageSummary = {
+  account_id: string
+  request_count: number
+  costs: {
+    total: number
+    input: number
+    output: number
+    cache_read: number
+    cache_write: number
+  }
+  tokens: {
+    input: number
+    output: number
+    cache_read: number
+    cache_write: number
+  }
+}
+
+export type ProviderRequest = {
+  request_id: string
+  requested_provider: string
+  requested_model: string
+  response_provider: string
+  response_model: string
+  assistant_message_id: string
+  usage: ProviderRequestUsage | null
+  duration_ms: number
+  completed_at: string
+}
+
+export type ProviderRequestPage = {
+  items: ProviderRequest[]
+  next_cursor: string | null
 }
 
 export type ApiKeyProviderKind = Exclude<ProviderKind, 'chatgpt'>
@@ -82,12 +138,49 @@ type SetDefaultProviderAccountResponse = {
 export const providerKeys = {
   all: ['providers'] as const,
   accounts: () => [...providerKeys.all, 'accounts'] as const,
+  usage: (providerId: string) =>
+    [...providerKeys.all, providerId, 'usage'] as const,
+  requests: (providerId: string) =>
+    [...providerKeys.all, providerId, 'requests'] as const,
 }
 
 export function useProviderAccounts() {
   return useQuery({
     queryKey: providerKeys.accounts(),
     queryFn: ({ signal }) => getJson<ProviderAccount[]>('/api/providers', signal),
+  })
+}
+
+export function useProviderUsage(providerId: string) {
+  return useQuery({
+    queryKey: providerKeys.usage(providerId),
+    queryFn: ({ signal }) =>
+      getJson<ProviderUsageSummary>(
+        `/api/providers/${encodeURIComponent(providerId)}/usage`,
+        signal,
+      ),
+    enabled: providerId.length > 0,
+    refetchInterval: 5_000,
+  })
+}
+
+export function useProviderRequests(providerId: string) {
+  return useInfiniteQuery({
+    queryKey: providerKeys.requests(providerId),
+    queryFn: ({ pageParam, signal }) => {
+      const search = new URLSearchParams({ limit: '25' })
+      if (pageParam !== null) {
+        search.set('cursor', pageParam)
+      }
+      return getJson<ProviderRequestPage>(
+        `/api/providers/${encodeURIComponent(providerId)}/requests?${search}`,
+        signal,
+      )
+    },
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: providerId.length > 0,
+    refetchInterval: 5_000,
   })
 }
 

@@ -17,6 +17,7 @@ import {
   useState,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { Link } from 'react-router-dom'
 import { AddProviderDialog } from './AddProviderDialog'
 import { DeleteProviderDialog } from './DeleteProviderDialog'
 import { ProviderIcon } from './provider-icons'
@@ -152,7 +153,12 @@ function ProviderRow({
       </td>
       <td>
         <span className="provider-name-line">
-          <span className="provider-name">{account.name}</span>
+          <Link
+            className="provider-name provider-name-link"
+            to={`/providers/${encodeURIComponent(account.id)}`}
+          >
+            {account.name}
+          </Link>
           {account.is_default ? (
             <span className="provider-default-badge">Default</span>
           ) : null}

@@ -20,6 +20,7 @@ import { MachinePage } from './features/machines/MachinePage'
 import { MachinesSection } from './features/machines/MachinesSection'
 import { SandboxAccountPage } from './features/machines/SandboxAccountPage'
 import { ProvidersTable } from './features/providers/ProvidersTable'
+import { ProviderPage } from './features/providers/ProviderPage'
 import { ProjectPage } from './features/projects/ProjectPage'
 import { ProjectsGrid } from './features/projects/ProjectsGrid'
 import { useDashboardStore } from './stores/dashboard-store'
@@ -75,6 +76,9 @@ function App() {
   const projectMatch =
     matchPath('/projects/:projectId', pathname) ??
     matchPath('/projects/:projectId/*', pathname)
+  const providerMatch =
+    matchPath('/providers/:providerId', pathname) ??
+    matchPath('/providers/:providerId/*', pathname)
   const activeItem =
     NAVIGATION.find((item) => item.path === pathname) ?? NAVIGATION[0]
 
@@ -92,6 +96,10 @@ function App() {
 
   if (projectMatch !== null) {
     return <ProjectPage projectId={projectMatch.params.projectId ?? ''} />
+  }
+
+  if (providerMatch !== null) {
+    return <ProviderPage providerId={providerMatch.params.providerId ?? ''} />
   }
 
   return (
@@ -187,6 +195,7 @@ function App() {
           <Route path="/harnesses" element={null} />
           <Route path="/machines" element={null} />
           <Route path="/providers" element={null} />
+          <Route path="/providers/:providerId" element={null} />
           <Route path="*" element={<Navigate to="/projects" replace />} />
         </Routes>
 
