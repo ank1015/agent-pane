@@ -57,16 +57,21 @@ pub(super) async fn list_messages(
     let limit = message_page_limit(query.limit)?;
     let after_revision = i64::try_from(query.after_revision.unwrap_or(0))
         .map_err(|_| SessionError::InvalidAfterRevision)?;
-    let fetch_limit = i64::from(limit) + 1;
-    let statement = format!(
-        "SELECT {MESSAGE_COLUMNS} FROM session_messages \
-         WHERE session_id = $1 AND state = 'committed' AND revision > $2 \
-         ORDER BY revision ASC LIMIT $3"
-    );
-    let rows = sqlx::query_as::<_, SessionMessageRow>(&statement)
-        .bind(session_id)
-        .bind(after_revision)
-        .bind(fetch_limit)
+    let mut statement = QueryBuilder::new(format!(
+        "SELECT {MESSAGE_COLUMNS} FROM session_messages WHERE session_id = "
+    ));
+    statement
+        .push_bind(session_id)
+        .push(" AND state = 'committed' AND revision > ")
+        .push_bind(after_revision);
+    if let Some(run_id) = query.run_id {
+        statement.push(" AND run_id = ").push_bind(run_id);
+    }
+    statement
+        .push(" ORDER BY revision ASC LIMIT ")
+        .push_bind(i64::from(limit) + 1);
+    let rows = statement
+        .build_query_as::<SessionMessageRow>()
         .fetch_all(database.pool())
         .await?;
 

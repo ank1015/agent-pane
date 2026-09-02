@@ -151,6 +151,19 @@ async fn session_transcript_and_run_history_are_paginated() {
     .await
     .expect("queued run fixture");
 
+    sqlx::query("UPDATE session_messages SET run_id = $1 WHERE session_message_id = $2")
+        .bind(completed_run)
+        .bind(message_ids[0])
+        .execute(&app.pool)
+        .await
+        .expect("completed run message fixture");
+    sqlx::query("UPDATE session_messages SET run_id = $1 WHERE session_message_id = $2")
+        .bind(active_run)
+        .bind(message_ids[1])
+        .execute(&app.pool)
+        .await
+        .expect("active run message fixture");
+
     let pending_id = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO session_messages \
@@ -184,6 +197,22 @@ async fn session_transcript_and_run_history_are_paginated() {
             .iter()
             .chain(second_messages["items"].as_array().expect("items"))
             .all(|item| item["session_message_id"] != pending_id.to_string())
+    );
+    let completed_run_messages = get_json(
+        &app,
+        &format!("/v1/sessions/{session_id}/messages?run_id={completed_run}"),
+    )
+    .await;
+    assert_eq!(
+        completed_run_messages["items"]
+            .as_array()
+            .expect("completed run messages")
+            .len(),
+        1
+    );
+    assert_eq!(
+        completed_run_messages["items"][0]["session_message_id"],
+        message_ids[0].to_string()
     );
 
     let first_runs = get_json(&app, &format!("/v1/sessions/{session_id}/runs?limit=1")).await;
