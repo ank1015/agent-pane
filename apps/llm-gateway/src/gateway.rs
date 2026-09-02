@@ -55,6 +55,7 @@ impl Gateway {
 
     pub async fn complete(
         &self,
+        request_id: Uuid,
         request: LlmRequest,
         requested_account_id: Option<Uuid>,
     ) -> Result<GatewayCompletion, GatewayError> {
@@ -73,6 +74,7 @@ impl Gateway {
                 request.model.id, provider
             )));
         }
+        let requested_model = request.model.clone();
 
         let _permit = self
             .concurrency
@@ -120,6 +122,11 @@ impl Gateway {
         } else {
             result.map_err(|error| GatewayError::provider(error).with_account_id(account.id))?
         };
+
+        self.database
+            .record_completion_accounting(request_id, account_id, &requested_model, &result)
+            .await
+            .map_err(|error| GatewayError::database(error).with_account_id(account_id))?;
 
         Ok(GatewayCompletion {
             account_id,

@@ -185,7 +185,7 @@ async fn complete(
 
     match state
         .gateway
-        .complete(payload.request, payload.account_id)
+        .complete(request_id, payload.request, payload.account_id)
         .await
     {
         Ok(completion) => {
