@@ -1,6 +1,9 @@
 use axum::{
     Json, Router,
-    extract::{Path, State, rejection::JsonRejection},
+    extract::{
+        Path, Query, State,
+        rejection::{JsonRejection, QueryRejection},
+    },
     http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
     middleware,
     response::{IntoResponse, Response},
@@ -12,8 +15,8 @@ use super::{
     ProviderService,
     chatgpt_oauth::{ChatGptLoginService, StartLoginRequest},
     model::{
-        CreateProviderRequest, ProviderAccountSummary, ProviderResponse, RotateCredentialsRequest,
-        UpdateProviderRequest,
+        CreateProviderRequest, ProviderAccountSummary, ProviderRequestPage, ProviderRequestsQuery,
+        ProviderResponse, ProviderUsageSummary, RotateCredentialsRequest, UpdateProviderRequest,
     },
 };
 use crate::{AppState, error::ApiError};
@@ -51,6 +54,14 @@ pub(super) fn router(
         .route(
             "/api/providers/{provider_id}/credentials",
             put(rotate_credentials),
+        )
+        .route(
+            "/api/providers/{provider_id}/usage",
+            get(get_provider_usage),
+        )
+        .route(
+            "/api/providers/{provider_id}/requests",
+            get(list_provider_requests),
         )
         .layer(middleware::map_response(add_no_store))
         .with_state(ProviderState {
@@ -108,6 +119,22 @@ async fn get_provider(
 ) -> Result<Json<ProviderResponse>, ApiError> {
     let provider = state.service.get(provider_id).await?;
     Ok(Json(ProviderResponse { provider }))
+}
+
+async fn get_provider_usage(
+    State(state): State<ProviderState>,
+    Path(provider_id): Path<Uuid>,
+) -> Result<Json<ProviderUsageSummary>, ApiError> {
+    Ok(Json(state.service.usage(provider_id).await?))
+}
+
+async fn list_provider_requests(
+    State(state): State<ProviderState>,
+    Path(provider_id): Path<Uuid>,
+    query: Result<Query<ProviderRequestsQuery>, QueryRejection>,
+) -> Result<Json<ProviderRequestPage>, ApiError> {
+    let Query(query) = query.map_err(|error| ApiError::invalid_request(error.body_text()))?;
+    Ok(Json(state.service.requests(provider_id, &query).await?))
 }
 
 async fn create_provider(

@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use crate::upstream::llm_gateway::{LlmGatewayClient, LlmGatewayError};
 use model::{
-    CreateProviderRequest, Provider, ProviderAccountSummary, RotateCredentialsRequest,
-    UpdateProviderRequest,
+    CreateProviderRequest, Provider, ProviderAccountSummary, ProviderRequestPage,
+    ProviderRequestsQuery, ProviderUsageSummary, RotateCredentialsRequest, UpdateProviderRequest,
 };
 
 #[derive(Clone)]
@@ -36,6 +36,18 @@ impl ProviderService {
 
     async fn get(&self, provider_id: Uuid) -> Result<Provider, LlmGatewayError> {
         Ok(self.gateway.get_provider(provider_id).await?.account)
+    }
+
+    async fn usage(&self, provider_id: Uuid) -> Result<ProviderUsageSummary, LlmGatewayError> {
+        self.gateway.provider_usage(provider_id).await
+    }
+
+    async fn requests(
+        &self,
+        provider_id: Uuid,
+        query: &ProviderRequestsQuery,
+    ) -> Result<ProviderRequestPage, LlmGatewayError> {
+        self.gateway.provider_requests(provider_id, query).await
     }
 
     async fn create(&self, request: &CreateProviderRequest) -> Result<Provider, LlmGatewayError> {

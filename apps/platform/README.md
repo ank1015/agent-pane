@@ -341,6 +341,8 @@ PATCH  /api/providers/{provider_id}
 DELETE /api/providers/{provider_id}
 PUT    /api/providers/{provider_id}/default
 PUT    /api/providers/{provider_id}/credentials
+GET    /api/providers/{provider_id}/usage
+GET    /api/providers/{provider_id}/requests?cursor=...&limit=25
 POST   /api/providers/chatgpt/login
 GET    /api/providers/chatgpt/login/{login_id}
 DELETE /api/providers/chatgpt/login/{login_id}
@@ -349,6 +351,14 @@ DELETE /api/providers/chatgpt/login/{login_id}
 `GET /api/providers` returns a JSON array containing `id`, `name`, `provider`,
 `status`, `created_at`, and `is_default`. Accounts are sorted alphabetically by
 provider and newest-first by creation date within the same provider.
+
+The usage endpoint returns the provider account's successful request count plus
+lifetime cost and token totals. Costs are in USD, and costs and tokens are split
+into input, output, cache-read, and cache-write components. The requests
+endpoint returns accounting records newest first; `limit` defaults to 25 and
+accepts 1 through 100, and `next_cursor` retrieves the following page. Platform
+forwards both reads to `llm-gateway` using its admin credential without exposing
+that credential to the dashboard.
 
 Create a provider:
 
