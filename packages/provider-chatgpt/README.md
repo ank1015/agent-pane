@@ -39,9 +39,16 @@ The ChatGPT backend rejects the public Responses API's `max_output_tokens`
 parameter. This provider rejects that option locally with `invalid_request`
 instead of sending it or silently ignoring it.
 
-`AssistantMessage::native_message` retains every raw SSE JSON event, the raw
-terminal response, and the completed native output items used for exact
-follow-up replay.
+When `provider_options.prompt_cache_key` is present, it must be a string. The
+provider sends the same value as `prompt_cache_key` in the request body and as
+the `session-id` and `x-client-request-id` headers. These stable affinity
+signals match the Codex backend clients and keep append-only turns on a reusable
+prompt-cache route.
+
+`AssistantMessage::native_message` retains the raw terminal response and the
+completed native output items used for exact follow-up replay. Transient SSE
+events are consumed internally but omitted from the returned message so they do
+not inflate gateway responses and persisted transcripts.
 
 `CHATGPT_MODELS` directly shares the three generated entries and pricing from
 `provider-openai`, making the catalog a strict allowlist that cannot drift from

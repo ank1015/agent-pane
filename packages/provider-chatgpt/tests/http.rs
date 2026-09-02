@@ -83,9 +83,10 @@ async fn complete_buffers_sse_and_sends_chatgpt_credentials() {
     assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
     assert_eq!(body["prompt_cache_key"], "session-123");
     assert_eq!(message.id.as_str(), "response-http");
+    assert!(message.native_message.get("events").is_none());
     assert_eq!(
-        message.native_message["events"].as_array().map(Vec::len),
-        Some(2)
+        message.native_message["output"].as_array().map(Vec::len),
+        Some(1)
     );
 }
 

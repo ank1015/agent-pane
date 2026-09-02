@@ -89,7 +89,7 @@ async fn request_rejects_a_non_string_prompt_cache_key_before_transport() {
 }
 
 #[test]
-fn response_aggregates_native_items_and_preserves_every_event() {
+fn response_aggregates_native_items_without_retaining_events() {
     let model = find_model("gpt-5.6-luna").expect("catalog model");
     let events = vec![
         json!({
@@ -130,13 +130,13 @@ fn response_aggregates_native_items_and_preserves_every_event() {
         }),
     ];
 
-    let message = convert_response_events(events.clone(), model, 12, 34).expect("valid response");
+    let message = convert_response_events(events, model, 12, 34).expect("valid response");
 
     assert_eq!(message.id.as_str(), "response-1");
     assert_eq!(message.model.provider.as_str(), "chatgpt");
     assert_eq!(message.model.id.as_str(), "gpt-5.6-luna");
     assert_eq!(message.stop_reason, StopReason::Stop);
-    assert_eq!(message.native_message["events"], json!(events));
+    assert!(message.native_message.get("events").is_none());
     assert_eq!(
         message.native_message["output"].as_array().map(Vec::len),
         Some(2)

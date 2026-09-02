@@ -22,7 +22,7 @@ pub fn convert_response_events(
         .ok_or_else(|| {
             invalid_response(
                 "ChatGPT stream ended before a terminal response event.",
-                native_envelope(events.clone(), None, Vec::new()),
+                native_envelope(None, Vec::new()),
             )
         })?;
     let kind = event_kind(&terminal).unwrap_or_default();
@@ -33,7 +33,7 @@ pub fn convert_response_events(
     let terminal_response = terminal.get("response").cloned().ok_or_else(|| {
         invalid_response(
             "ChatGPT terminal event must contain a response object.",
-            native_envelope(events.clone(), None, Vec::new()),
+            native_envelope(None, Vec::new()),
         )
     })?;
     let mut output = terminal_response
@@ -44,11 +44,7 @@ pub fn convert_response_events(
     if output.is_empty() {
         output = completed_output_items(&events);
     }
-    let native = native_envelope(
-        events.clone(),
-        Some(terminal_response.clone()),
-        output.clone(),
-    );
+    let native = native_envelope(Some(terminal_response.clone()), output.clone());
     let mut aggregate = terminal_response.clone();
     let response = aggregate.as_object_mut().ok_or_else(|| {
         invalid_response(
@@ -160,13 +156,12 @@ fn response_id_from_events(events: &[Value]) -> Option<&str> {
     })
 }
 
-fn native_envelope(events: Vec<Value>, response: Option<Value>, output: Vec<Value>) -> Value {
+fn native_envelope(response: Option<Value>, output: Vec<Value>) -> Value {
     let mut native = Map::from_iter([
         (
             "type".to_owned(),
             Value::String("chatgpt_response_stream".to_owned()),
         ),
-        ("events".to_owned(), Value::Array(events)),
         ("output".to_owned(), Value::Array(output)),
     ]);
     if let Some(response) = response {

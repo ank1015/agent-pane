@@ -34,19 +34,13 @@ async fn completes_a_real_request_for_every_catalog_model() {
         assert_eq!(message.model.provider.as_str(), "chatgpt");
         assert_eq!(message.model.id.as_str(), model.id);
         assert_eq!(message.native_message["type"], "chatgpt_response_stream");
-        assert!(message.native_message["events"].as_array().is_some());
+        assert!(message.native_message.get("events").is_none());
         assert!(message.native_message["output"].as_array().is_some());
         assert!(usage.cost.is_some());
 
         println!(
-            "{}: response={}, input={:?}, output={:?}, native_events={}",
-            model.id,
-            message.id,
-            usage.input,
-            usage.output,
-            message.native_message["events"]
-                .as_array()
-                .map_or(0, Vec::len)
+            "{}: response={}, input={:?}, output={:?}",
+            model.id, message.id, usage.input, usage.output
         );
     }
 }
