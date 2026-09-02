@@ -2,6 +2,7 @@ import {
   ArrowDown01Icon,
   ArrowUp02Icon,
   FilterHorizontalIcon,
+  Loading03Icon,
   PlusSignIcon,
   Tick02Icon,
 } from '@hugeicons/core-free-icons'
@@ -15,13 +16,26 @@ import { ProviderIcon } from '../providers/provider-icons'
 type ProjectEnvironmentPromptComposerProps = {
   providerAccounts: readonly HarnessProviderModelOptions[]
   reasoningLevels: readonly string[]
+  lockedOptions?: ProjectEnvironmentPromptLockedOptions
+  optionsReadOnly?: boolean
   isModelOptionsPending: boolean
   isModelOptionsError: boolean
   onRetryModelOptions: () => void
   isSubmissionReady?: boolean
   isSubmitting?: boolean
+  isRunActive?: boolean
+  isStopping?: boolean
   submitError?: string | null
   onSubmit?: (submission: ProjectEnvironmentPromptSubmission) => void
+  onStop?: () => void
+}
+
+export type ProjectEnvironmentPromptLockedOptions = {
+  accountId: string
+  provider: HarnessProviderModelOptions['provider']
+  modelId: string
+  reasoningLevel: string
+  webSearchEnabled: boolean
 }
 
 export type ProjectEnvironmentPromptSubmission = {
@@ -43,13 +57,18 @@ type AccountTooltip = {
 export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironmentPromptComposer({
   providerAccounts,
   reasoningLevels,
+  lockedOptions,
+  optionsReadOnly = false,
   isModelOptionsPending,
   isModelOptionsError,
   onRetryModelOptions,
   isSubmissionReady = true,
   isSubmitting = false,
+  isRunActive = false,
+  isStopping = false,
   submitError = null,
   onSubmit,
+  onStop,
 }: ProjectEnvironmentPromptComposerProps) {
   const [prompt, setPrompt] = useState('')
   const [model, setModel] = useState<string | null>(null)
@@ -64,41 +83,65 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
   const modelListId = useId()
   const modelTriggerRef = useRef<HTMLButtonElement>(null)
   const settingsTriggerRef = useRef<HTMLButtonElement>(null)
-  const selectedAccount =
-    providerAccounts.find((account) => account.account_id === accountId) ??
-    providerAccounts[0] ??
-    null
+  const optionsLocked = optionsReadOnly
+  const selectedAccount = optionsLocked
+    ? (providerAccounts.find(
+        (account) => account.account_id === lockedOptions?.accountId,
+      ) ??
+      providerAccounts[0] ??
+      null)
+    : (providerAccounts.find((account) => account.account_id === accountId) ??
+      providerAccounts[0] ??
+      null)
   const selectedModel =
-    selectedAccount !== null &&
+    lockedOptions?.modelId ??
+    (selectedAccount !== null &&
     model !== null &&
     selectedAccount.model_ids.includes(model)
       ? model
-      : (selectedAccount?.model_ids[0] ?? null)
+      : (selectedAccount?.model_ids[0] ?? null))
   const filteredModels = selectedAccount?.model_ids ?? []
   const selectedReasoningLevel =
-    reasoningLevel !== null && reasoningLevels.includes(reasoningLevel)
+    lockedOptions?.reasoningLevel ??
+    (reasoningLevel !== null && reasoningLevels.includes(reasoningLevel)
       ? reasoningLevel
-      : (reasoningLevels[0] ?? null)
+      : (reasoningLevels[0] ?? null))
+  const displayReasoningLevels =
+    selectedReasoningLevel !== null &&
+    !reasoningLevels.includes(selectedReasoningLevel)
+      ? [...reasoningLevels, selectedReasoningLevel]
+      : reasoningLevels
   const reasoningLevelIndex =
     selectedReasoningLevel === null
       ? -1
-      : reasoningLevels.indexOf(selectedReasoningLevel)
+      : displayReasoningLevels.indexOf(selectedReasoningLevel)
   const nextReasoningLevel =
-    reasoningLevelIndex === -1
+    optionsLocked || reasoningLevelIndex === -1
       ? null
-      : reasoningLevels[(reasoningLevelIndex + 1) % reasoningLevels.length]
+      : displayReasoningLevels[
+          (reasoningLevelIndex + 1) % displayReasoningLevels.length
+        ]
+  const submissionAccountId =
+    lockedOptions?.accountId ?? selectedAccount?.account_id
+  const submissionProvider =
+    lockedOptions?.provider ?? selectedAccount?.provider
+  const effectiveWebSearchEnabled =
+    lockedOptions?.webSearchEnabled ?? webSearchEnabled
   const canSubmit =
     prompt.trim().length > 0 &&
-    selectedAccount !== null &&
+    submissionAccountId !== undefined &&
+    submissionProvider !== undefined &&
     selectedModel !== null &&
     selectedReasoningLevel !== null &&
     isSubmissionReady &&
-    !isSubmitting
+    !isSubmitting &&
+    !isRunActive
 
   const submit = () => {
     if (
       !canSubmit ||
-      selectedAccount === null ||
+      submissionAccountId === undefined ||
+      submissionProvider === undefined ||
       selectedModel === null ||
       selectedReasoningLevel === null
     ) {
@@ -106,11 +149,11 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
     }
     onSubmit?.({
       prompt,
-      accountId: selectedAccount.account_id,
-      provider: selectedAccount.provider,
+      accountId: submissionAccountId,
+      provider: submissionProvider,
       modelId: selectedModel,
       reasoningLevel: selectedReasoningLevel,
-      webSearchEnabled,
+      webSearchEnabled: effectiveWebSearchEnabled,
     })
   }
 
@@ -244,50 +287,67 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
             }
           }}
         >
-          <button
-            ref={modelTriggerRef}
-            type="button"
-            className="project-environment-model-trigger"
-            aria-label={
-              selectedModel === null
-                ? 'No models available'
-                : `Model: ${modelLabel(selectedModel)}`
-            }
-            aria-haspopup="listbox"
-            aria-controls={modelPickerOpen ? modelListId : undefined}
-            aria-expanded={modelPickerOpen}
-            disabled={selectedModel === null}
-            onClick={() =>
-              modelPickerOpen ? closeModelPicker() : openModelPicker()
-            }
-            onKeyDown={(event) => {
-              if (
-                !modelPickerOpen &&
-                (event.key === 'ArrowDown' || event.key === 'ArrowUp')
-              ) {
-                event.preventDefault()
-                openModelPicker()
-              } else if (modelPickerOpen) {
-                handlePickerKeyDown(event)
+          {optionsLocked ? (
+            <span
+              className="project-environment-model-trigger project-environment-model-trigger--static"
+              aria-label={
+                selectedModel === null
+                  ? 'No model configured'
+                  : `Model: ${modelLabel(selectedModel)}`
               }
-            }}
-          >
-            <span>
-              {selectedModel === null
-                ? isModelOptionsPending
-                  ? 'Loading models…'
-                  : 'No models available'
-                : modelLabel(selectedModel)}
+            >
+              <span>
+                {selectedModel === null
+                  ? 'No model configured'
+                  : modelLabel(selectedModel)}
+              </span>
             </span>
-            <HugeiconsIcon
-              icon={ArrowDown01Icon}
-              size={13}
-              strokeWidth={1.6}
-              aria-hidden="true"
-            />
-          </button>
+          ) : (
+            <button
+              ref={modelTriggerRef}
+              type="button"
+              className="project-environment-model-trigger"
+              aria-label={
+                selectedModel === null
+                  ? 'No models available'
+                  : `Model: ${modelLabel(selectedModel)}`
+              }
+              aria-haspopup="listbox"
+              aria-controls={modelPickerOpen ? modelListId : undefined}
+              aria-expanded={modelPickerOpen}
+              disabled={selectedModel === null}
+              onClick={() =>
+                modelPickerOpen ? closeModelPicker() : openModelPicker()
+              }
+              onKeyDown={(event) => {
+                if (
+                  !modelPickerOpen &&
+                  (event.key === 'ArrowDown' || event.key === 'ArrowUp')
+                ) {
+                  event.preventDefault()
+                  openModelPicker()
+                } else if (modelPickerOpen) {
+                  handlePickerKeyDown(event)
+                }
+              }}
+            >
+              <span>
+                {selectedModel === null
+                  ? isModelOptionsPending
+                    ? 'Loading models…'
+                    : 'No models available'
+                  : modelLabel(selectedModel)}
+              </span>
+              <HugeiconsIcon
+                icon={ArrowDown01Icon}
+                size={13}
+                strokeWidth={1.6}
+                aria-hidden="true"
+              />
+            </button>
+          )}
 
-          {modelPickerOpen ? (
+          {!optionsLocked && modelPickerOpen ? (
             <div className="project-environment-model-popover">
               <div className="project-environment-model-picker-body">
                 <div
@@ -378,11 +438,11 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
             </div>
           ) : null}
         </div>
-        {isModelOptionsPending ? (
+        {!optionsLocked && isModelOptionsPending ? (
           <span className="visually-hidden" role="status">
             Loading environment options
           </span>
-        ) : isModelOptionsError ? (
+        ) : !optionsLocked && isModelOptionsError ? (
           <button
             type="button"
             className="project-environment-options-retry"
@@ -390,6 +450,36 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
           >
             Retry options
           </button>
+        ) : selectedReasoningLevel !== null && optionsLocked ? (
+          <span
+            className="project-environment-reasoning-toggle project-environment-reasoning-toggle--static"
+            aria-label={`Reasoning: ${reasoningLabel(selectedReasoningLevel)}`}
+          >
+            <span
+              className="project-environment-reasoning-bars"
+              aria-hidden="true"
+            >
+              {displayReasoningLevels.map((level, index) => (
+                <span
+                  key={level}
+                  className={
+                    index <= reasoningLevelIndex
+                      ? 'project-environment-reasoning-bar--active'
+                      : undefined
+                  }
+                  style={{
+                    height: reasoningBarHeight(
+                      index,
+                      displayReasoningLevels.length,
+                    ),
+                  }}
+                />
+              ))}
+            </span>
+            <span className="project-environment-reasoning-label">
+              <span>{reasoningLabel(selectedReasoningLevel)}</span>
+            </span>
+          </span>
         ) : selectedReasoningLevel !== null &&
           nextReasoningLevel !== null ? (
           <button
@@ -403,7 +493,7 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
               className="project-environment-reasoning-bars"
               aria-hidden="true"
             >
-              {reasoningLevels.map((level, index) => (
+              {displayReasoningLevels.map((level, index) => (
                 <span
                   key={level}
                   className={
@@ -412,7 +502,10 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
                       : undefined
                   }
                   style={{
-                    height: reasoningBarHeight(index, reasoningLevels.length),
+                    height: reasoningBarHeight(
+                      index,
+                      displayReasoningLevels.length,
+                    ),
                   }}
                 />
               ))}
@@ -445,7 +538,9 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
             ref={settingsTriggerRef}
             type="button"
             className="project-environment-settings-trigger"
-            aria-label="Prompt settings"
+            aria-label={
+              optionsLocked ? 'Prompt settings, read only' : 'Prompt settings'
+            }
             aria-haspopup="dialog"
             aria-expanded={settingsOpen}
             title="Prompt settings"
@@ -464,38 +559,79 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
               role="dialog"
               aria-label="Prompt settings"
             >
-              <button
-                type="button"
-                className="project-environment-settings-option"
-                role="switch"
-                aria-checked={webSearchEnabled}
-                onClick={() =>
-                  setWebSearchEnabled((enabled) => !enabled)
-                }
-              >
-                <span>Web search</span>
-                <span
-                  className="project-environment-settings-switch"
-                  aria-hidden="true"
-                />
-              </button>
+              {optionsLocked ? (
+                <div
+                  className="project-environment-settings-option project-environment-settings-option--static"
+                  role="switch"
+                  aria-checked={effectiveWebSearchEnabled}
+                  aria-disabled="true"
+                >
+                  <span>Web search</span>
+                  <span
+                    className="project-environment-settings-switch"
+                    aria-hidden="true"
+                  />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="project-environment-settings-option"
+                  role="switch"
+                  aria-checked={webSearchEnabled}
+                  onClick={() =>
+                    setWebSearchEnabled((enabled) => !enabled)
+                  }
+                >
+                  <span>Web search</span>
+                  <span
+                    className="project-environment-settings-switch"
+                    aria-hidden="true"
+                  />
+                </button>
+              )}
             </div>
           ) : null}
         </div>
-        <button
-          type="button"
-          className="project-environment-send-button"
-          aria-label={isSubmitting ? 'Starting environment run' : 'Send prompt'}
-          disabled={!canSubmit}
-          onClick={submit}
-        >
-          <HugeiconsIcon
-            icon={ArrowUp02Icon}
-            size={17}
-            strokeWidth={2}
-            aria-hidden="true"
-          />
-        </button>
+        {isRunActive ? (
+          <button
+            type="button"
+            className="project-environment-send-button project-environment-send-button--stop"
+            aria-label={isStopping ? 'Stopping run' : 'Stop run'}
+            aria-busy={isStopping}
+            disabled={isStopping || onStop === undefined}
+            onClick={onStop}
+          >
+            <span className="project-environment-stop-glyph" aria-hidden="true" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={`project-environment-send-button${
+              isSubmitting ? ' project-environment-send-button--loading' : ''
+            }`}
+            aria-label={isSubmitting ? 'Starting run' : 'Send prompt'}
+            aria-busy={isSubmitting}
+            disabled={!canSubmit}
+            onClick={submit}
+          >
+            {isSubmitting ? (
+              <HugeiconsIcon
+                className="project-environment-send-spinner"
+                icon={Loading03Icon}
+                size={14}
+                strokeWidth={2}
+                aria-hidden="true"
+              />
+            ) : (
+              <HugeiconsIcon
+                icon={ArrowUp02Icon}
+                size={17}
+                strokeWidth={2}
+                aria-hidden="true"
+              />
+            )}
+          </button>
+        )}
       </div>
       {submitError === null ? null : (
         <p className="project-environment-submit-error" role="alert">

@@ -1,8 +1,9 @@
 import {
   Archive03Icon,
   ArrowLeft01Icon,
-  ArrowRight01Icon,
   AtIcon,
+  CloudIcon,
+  ComputerIcon,
   Delete03Icon,
   Folder03Icon,
   Globe02Icon,
@@ -51,6 +52,7 @@ import {
 } from './project-queries'
 import {
   ProjectEnvironmentPromptComposer,
+  type ProjectEnvironmentPromptLockedOptions,
   type ProjectEnvironmentPromptSubmission,
 } from './ProjectEnvironmentPromptComposer'
 import { ProjectEnvironmentSelector } from './ProjectEnvironmentSelector'
@@ -60,6 +62,7 @@ import { buildProjectConversation } from './project-conversation'
 import { useProjectRunEventStream } from './project-run-event-stream'
 import {
   createIdempotencyKey,
+  useAbortProjectHarnessRun,
   useArchiveProjectSession,
   useCreateProjectHarnessSession,
   useProjectHarnessRun,
@@ -71,10 +74,13 @@ import {
   useStartProjectHarnessRun,
 } from './project-session-queries'
 import type {
+  ProjectSession,
   ProjectRunSummary,
+  RunEventType,
   SessionMessage,
 } from './project-session-types'
 import { isLiveRunStatus } from './project-session-types'
+import type { ProviderKind } from '../providers/provider-queries'
 
 const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   dateStyle: 'medium',
@@ -86,6 +92,14 @@ const EMPTY_PROJECT_BOOTSTRAP_HARNESSES: readonly ProjectBootstrapHarness[] = []
 const EMPTY_PROJECT_ENVIRONMENTS: readonly ProjectEnvironment[] = []
 const EMPTY_SESSION_MESSAGES: readonly SessionMessage[] = []
 const EMPTY_SESSION_RUNS: readonly ProjectRunSummary[] = []
+const PROVIDER_KINDS = new Set<ProviderKind>([
+  'anthropic',
+  'chatgpt',
+  'deepseek',
+  'fireworks',
+  'openai',
+  'openrouter',
+])
 
 type HarnessExecutionTarget = {
   machine_id: string
@@ -97,6 +111,89 @@ type LandingSessionRetry = {
   fingerprint: string
   idempotencyKey: string
   execution: HarnessExecutionTarget | null
+}
+
+function sessionPromptLockedOptions(
+  session: ProjectSession | undefined,
+): ProjectEnvironmentPromptLockedOptions | undefined {
+  if (session === undefined) return undefined
+
+  const accountId = stringConfigValue(session.harness_config, 'account_id')
+  const provider = stringConfigValue(session.harness_config, 'provider')
+  const modelId = stringConfigValue(session.harness_config, 'model_id')
+  const reasoningLevel = stringConfigValue(
+    session.harness_config,
+    'reasoning_level',
+  )
+  if (
+    accountId === null ||
+    !isProviderKind(provider) ||
+    modelId === null ||
+    reasoningLevel === null
+  ) {
+    return undefined
+  }
+
+  return {
+    accountId,
+    provider,
+    modelId,
+    reasoningLevel,
+    webSearchEnabled: session.web_search_enabled,
+  }
+}
+
+function stringConfigValue(
+  config: Readonly<Record<string, unknown>>,
+  key: string,
+) {
+  const value = config[key]
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function isProviderKind(value: string | null): value is ProviderKind {
+  return value !== null && PROVIDER_KINDS.has(value as ProviderKind)
+}
+
+function ProjectSessionContext({
+  harnessId,
+  environments,
+}: {
+  harnessId: string
+  environments: readonly ProjectEnvironment[]
+}) {
+  const showsEnvironments =
+    harnessUiDefinition(harnessId).environmentSelection !== 'none'
+
+  return (
+    <div className="project-session-context">
+      <span
+        className="project-context-picker-trigger project-context-picker-trigger--static"
+        aria-label={`Harness: ${harnessId}`}
+      >
+        <span>{harnessId}</span>
+      </span>
+      {showsEnvironments
+        ? environments.map((environment) => (
+            <span
+              key={environment.id}
+              className="project-context-picker-trigger project-context-picker-trigger--static"
+              aria-label={`Environment: ${environment.name}`}
+              title={environment.name}
+            >
+              <HugeiconsIcon
+                className="project-context-picker-trigger-icon"
+                icon={environment.type === 'env' ? ComputerIcon : CloudIcon}
+                size={13}
+                strokeWidth={1.5}
+                aria-hidden="true"
+              />
+              <span>{environment.name}</span>
+            </span>
+          ))
+        : null}
+    </div>
+  )
 }
 
 function executionTargetFromProjectEnvironment(
@@ -172,6 +269,12 @@ const ProjectEnvironmentConversation = lazy(() =>
   })),
 )
 
+const ProjectRunDetailsDrawer = lazy(() =>
+  import('./ProjectRunDetailsDrawer').then((module) => ({
+    default: module.ProjectRunDetailsDrawer,
+  })),
+)
+
 const PROJECT_NAVIGATION = [
   { suffix: '/environments', label: 'Environments', icon: Folder03Icon },
   { suffix: '/triggers', label: 'Triggers', icon: ZapIcon },
@@ -181,7 +284,6 @@ const PROJECT_NAVIGATION = [
 export function ProjectPage({ projectId }: { projectId: string }) {
   const projectPath = `/projects/${encodeURIComponent(projectId)}`
   const environmentsPath = `${projectPath}/environments`
-  const createEnvironmentPath = `${environmentsPath}/create`
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const sessions = useProjectSessions(projectId)
@@ -189,13 +291,6 @@ export function ProjectPage({ projectId }: { projectId: string }) {
   const isProjectRoot = pathname === projectPath || pathname === `${projectPath}/`
   const isEnvironmentsPage =
     pathname === environmentsPath || pathname === `${environmentsPath}/`
-  const isCreateEnvironmentPage =
-    pathname === createEnvironmentPath ||
-    pathname === `${createEnvironmentPath}/`
-  const environmentSessionMatch = matchPath(
-    '/projects/:projectId/environments/sessions/:sessionId',
-    pathname,
-  )
   const possibleProjectSessionMatch = matchPath(
     '/projects/:projectId/:sessionId',
     pathname,
@@ -308,6 +403,10 @@ export function ProjectPage({ projectId }: { projectId: string }) {
                     <div
                       className={`project-session-item${
                         isSelected ? ' project-session-item--active' : ''
+                      }${
+                        session.is_active
+                          ? ' project-session-item--running'
+                          : ''
                       }`}
                       key={session.id}
                     >
@@ -374,8 +473,6 @@ export function ProjectPage({ projectId }: { projectId: string }) {
 
       <main
         className={`cursor-main machine-detail-main${
-          isCreateEnvironmentPage ||
-          environmentSessionMatch !== null ||
           projectSessionMatch !== null
             ? ' project-create-main'
             : ''
@@ -383,21 +480,10 @@ export function ProjectPage({ projectId }: { projectId: string }) {
       >
         {isProjectRoot ? (
           <ProjectLandingPage projectId={projectId} />
-        ) : isCreateEnvironmentPage ? (
-          <CreateProjectEnvironmentPage
-            projectId={projectId}
-            environmentsPath={environmentsPath}
-          />
-        ) : environmentSessionMatch !== null ? (
-          <ProjectEnvironmentSessionPage
-            projectId={projectId}
-            sessionId={environmentSessionMatch.params.sessionId ?? ''}
-            environmentsPath={environmentsPath}
-          />
         ) : isEnvironmentsPage ? (
           <ProjectEnvironments projectId={projectId} />
         ) : projectSessionMatch !== null ? (
-          <ProjectEnvironmentSessionPage
+          <ProjectSessionPage
             projectId={projectId}
             sessionId={projectSessionMatch.params.sessionId ?? ''}
           />
@@ -572,7 +658,6 @@ function ProjectEnvironments({ projectId }: { projectId: string }) {
     useState<ProjectEnvironment | null>(null)
   const projectName =
     project?.name ?? (isProjectPending ? 'Loading…' : projectId)
-  const createEnvironmentPath = `/projects/${encodeURIComponent(projectId)}/environments/create`
 
   return (
     <div className="cursor-container">
@@ -588,12 +673,6 @@ function ProjectEnvironments({ projectId }: { projectId: string }) {
           <h2 id="configured-environments-title">
             {projectName} Configured Environments
           </h2>
-          <Link
-            className="cursor-button provider-add-button"
-            to={createEnvironmentPath}
-          >
-            Create
-          </Link>
         </div>
 
         <div className="providers-table-wrap">
@@ -783,114 +862,23 @@ function formatDateTime(value: number) {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
 }
 
-function CreateProjectEnvironmentPage({
-  projectId,
-  environmentsPath,
-}: {
-  projectId: string
-  environmentsPath: string
-}) {
-  const modelOptions = useHarnessModelOptions(ENVIRONMENT_HARNESS_ID)
-  const createSession = useCreateProjectHarnessSession(projectId)
-  const navigate = useNavigate()
-  const retryRef = useRef<{ fingerprint: string; key: string } | null>(null)
-
-  const submit = (submission: ProjectEnvironmentPromptSubmission) => {
-    const request = {
-      harness_id: ENVIRONMENT_HARNESS_ID,
-      prompt: submission.prompt,
-      attachments: [],
-      config_override: {
-        provider: submission.provider,
-        model_id: submission.modelId,
-        reasoning_level: submission.reasoningLevel,
-        account_id: submission.accountId,
-        project_id: projectId,
-        web_search_enabled: submission.webSearchEnabled,
-      },
-    }
-    const fingerprint = JSON.stringify(request)
-    if (retryRef.current?.fingerprint !== fingerprint) {
-      retryRef.current = { fingerprint, key: createIdempotencyKey() }
-    }
-    createSession.mutate(
-      {
-        idempotencyKey: retryRef.current.key,
-        request,
-      },
-      {
-        onSuccess: ({ session }) => {
-          retryRef.current = null
-          navigate(
-            `/projects/${encodeURIComponent(projectId)}/environments/sessions/${encodeURIComponent(session.id)}`,
-            { replace: true },
-          )
-        },
-      },
-    )
-  }
-
-  return (
-    <div className="project-environment-create-page">
-      <nav className="project-breadcrumbs" aria-label="Breadcrumb">
-        <ol>
-          <li>
-            <Link to={environmentsPath}>Environments</Link>
-          </li>
-          <li
-            className="project-breadcrumb-separator"
-            role="presentation"
-            aria-hidden="true"
-          >
-            <HugeiconsIcon
-              icon={ArrowRight01Icon}
-              size={16}
-              color="currentColor"
-              strokeWidth={1.5}
-            />
-          </li>
-          <li>
-            <span aria-current="page">Create</span>
-          </li>
-        </ol>
-      </nav>
-      <div className="project-environment-composer-stage">
-        <h1 className="cursor-page-title project-environment-create-title">
-          Create or Update Environments
-        </h1>
-        <ProjectEnvironmentPromptComposer
-          providerAccounts={
-            modelOptions.data?.providers ?? EMPTY_PROVIDER_MODEL_OPTIONS
-          }
-          reasoningLevels={
-            modelOptions.data?.reasoning_levels ?? EMPTY_REASONING_LEVELS
-          }
-          isModelOptionsPending={modelOptions.isPending}
-          isModelOptionsError={modelOptions.isError}
-          onRetryModelOptions={() => void modelOptions.refetch()}
-          isSubmitting={createSession.isPending}
-          submitError={createSession.isError ? createSession.error.message : null}
-          onSubmit={submit}
-        />
-      </div>
-    </div>
-  )
-}
-
-function ProjectEnvironmentSessionPage({
+function ProjectSessionPage({
   projectId,
   sessionId,
-  environmentsPath,
 }: {
   projectId: string
   sessionId: string
-  environmentsPath?: string
 }) {
   const session = useProjectHarnessSession(projectId, sessionId)
   const messages = useProjectSessionMessages(projectId, sessionId)
   const runs = useProjectSessionRuns(projectId, sessionId)
   const modelOptions = useHarnessModelOptions(
     session.data?.session.harness_id ?? ENVIRONMENT_HARNESS_ID,
+  )
+  const sessionRecord = session.data?.session
+  const lockedOptions = useMemo(
+    () => sessionPromptLockedOptions(sessionRecord),
+    [sessionRecord],
   )
   const sessionRun = session.data?.active_run ?? session.data?.latest_run ?? null
   const runId = sessionRun?.run_id ?? ''
@@ -911,13 +899,17 @@ function ProjectEnvironmentSessionPage({
       isLiveRunStatus(currentRunStatus),
   })
   const startRun = useStartProjectHarnessRun(projectId, sessionId)
+  const abortRun = useAbortProjectHarnessRun(projectId, sessionId, runId)
   const startRunMutate = startRun.mutate
+  const abortRunMutate = abortRun.mutate
   const refetchSession = session.refetch
   const refetchMessages = messages.refetch
   const refetchRuns = runs.refetch
   const refetchModelOptions = modelOptions.refetch
   const submitRetryRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const [composerVersion, setComposerVersion] = useState(0)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [isRunDrawerClosing, setIsRunDrawerClosing] = useState(false)
   const messageItems = useMemo(
     () =>
       messages.data?.pages.flatMap((page) => page.items) ??
@@ -934,6 +926,18 @@ function ProjectEnvironmentSessionPage({
   )
   const isRunLive =
     currentRunStatus !== undefined && isLiveRunStatus(currentRunStatus)
+  const selectedRun =
+    selectedRunId === currentRun?.run_id
+      ? currentRun
+      : (runItems.find((candidate) => candidate.run_id === selectedRunId) ?? null)
+  const transcriptRefreshSequence = useMemo(() => {
+    if (!isRunLive || selectedRunId !== runId) return null
+    const transcriptEvents =
+      events.data?.pages
+        .flatMap((page) => page.items)
+        .filter((event) => shouldRefreshRunTranscript(event.type)) ?? []
+    return transcriptEvents.at(-1)?.sequence ?? null
+  }, [events.data, isRunLive, runId, selectedRunId])
   const fetchNextMessagePage = messages.fetchNextPage
   const hasNextMessagePage = messages.hasNextPage
   const isFetchingNextMessagePage = messages.isFetchingNextPage
@@ -984,72 +988,137 @@ function ProjectEnvironmentSessionPage({
     startRunMutate,
   ])
 
+  const stopRun = useCallback(() => {
+    const stateVersion = latestEvent?.state_version ?? currentRun?.state_version
+    if (
+      !isRunLive ||
+      runId.length === 0 ||
+      stateVersion === undefined ||
+      abortRun.isPending
+    ) {
+      return
+    }
+    abortRunMutate({
+      abort_id: createIdempotencyKey(),
+      expected_state_version: stateVersion,
+      reason: 'user_requested',
+    })
+  }, [
+    abortRun.isPending,
+    abortRunMutate,
+    currentRun?.state_version,
+    isRunLive,
+    latestEvent?.state_version,
+    runId,
+  ])
+
   const retryConversation = useCallback(() => {
     void Promise.all([refetchSession(), refetchMessages(), refetchRuns()])
   }, [refetchMessages, refetchRuns, refetchSession])
   const retryModelOptions = useCallback(() => {
     void refetchModelOptions()
   }, [refetchModelOptions])
+  const openRunDetails = useCallback((selectedId: string) => {
+    setIsRunDrawerClosing(false)
+    setSelectedRunId(selectedId)
+  }, [])
+  const closeRunDetails = useCallback(() => {
+    setIsRunDrawerClosing(true)
+  }, [])
+  const finishClosingRunDetails = useCallback(() => {
+    setSelectedRunId(null)
+    setIsRunDrawerClosing(false)
+  }, [])
 
   return (
-    <div className="project-environment-create-page project-session-page">
-      {environmentsPath === undefined ? null : (
-      <nav className="project-breadcrumbs" aria-label="Breadcrumb">
-        <ol>
-          <li>
-            <Link to={environmentsPath}>Environments</Link>
-          </li>
-          <li
-            className="project-breadcrumb-separator"
-            role="presentation"
-            aria-hidden="true"
-          >
-            <HugeiconsIcon
-              icon={ArrowRight01Icon}
-              size={16}
-              color="currentColor"
-              strokeWidth={1.5}
-            />
-          </li>
-          <li>
-            <span aria-current="page">Session</span>
-          </li>
-        </ol>
-      </nav>
-      )}
+    <div className="project-session-page">
       <div className="project-session-workspace">
-        <Suspense
-          fallback={
-            <div className="project-session-conversation-state" role="status">
-              Loading conversation…
+        <header className="project-session-header">
+          {sessionRecord === undefined ? null : (
+            <ProjectSessionContext
+              harnessId={sessionRecord.harness_id}
+              environments={sessionRecord.environments}
+            />
+          )}
+        </header>
+        <div className="project-session-body">
+          <div className="project-session-main-pane">
+            <Suspense
+              fallback={
+                <div className="project-session-conversation-state" role="status">
+                  Loading conversation…
+                </div>
+              }
+            >
+              <ProjectEnvironmentConversation
+                key={`${projectId}:${sessionId}`}
+                sessionKey={`${projectId}:${sessionId}`}
+                items={conversation}
+                isPending={session.isPending || messages.isPending || runs.isPending}
+                isError={session.isError || messages.isError || runs.isError}
+                onRetry={retryConversation}
+                onOpenRunDetails={openRunDetails}
+              />
+            </Suspense>
+            <div className="project-session-composer-wrap">
+              <ProjectEnvironmentPromptComposer
+                key={composerVersion}
+                providerAccounts={
+                  modelOptions.data?.providers ?? EMPTY_PROVIDER_MODEL_OPTIONS
+                }
+                reasoningLevels={
+                  modelOptions.data?.reasoning_levels ?? EMPTY_REASONING_LEVELS
+                }
+                lockedOptions={lockedOptions}
+                optionsReadOnly
+                isModelOptionsPending={modelOptions.isPending}
+                isModelOptionsError={modelOptions.isError}
+                onRetryModelOptions={retryModelOptions}
+                isSubmissionReady={lockedOptions !== undefined}
+                isSubmitting={startRun.isPending}
+                isRunActive={isRunLive}
+                isStopping={abortRun.isPending}
+                submitError={
+                  startRun.isError
+                    ? startRun.error.message
+                    : abortRun.isError
+                      ? abortRun.error.message
+                      : null
+                }
+                onSubmit={submit}
+                onStop={stopRun}
+              />
             </div>
-          }
-        >
-          <ProjectEnvironmentConversation
-            items={conversation}
-            isPending={session.isPending || messages.isPending || runs.isPending}
-            isError={session.isError || messages.isError || runs.isError}
-            onRetry={retryConversation}
-          />
-        </Suspense>
-        <div className="project-session-composer-wrap">
-          <ProjectEnvironmentPromptComposer
-            key={composerVersion}
-            providerAccounts={
-              modelOptions.data?.providers ?? EMPTY_PROVIDER_MODEL_OPTIONS
-            }
-            reasoningLevels={
-              modelOptions.data?.reasoning_levels ?? EMPTY_REASONING_LEVELS
-            }
-            isModelOptionsPending={modelOptions.isPending}
-            isModelOptionsError={modelOptions.isError}
-            onRetryModelOptions={retryModelOptions}
-            isSubmitting={startRun.isPending || isRunLive}
-            submitError={startRun.isError ? startRun.error.message : null}
-            onSubmit={submit}
-          />
+          </div>
         </div>
+        {selectedRun === null ? null : (
+          <div
+            className={`project-run-drawer-slot${isRunDrawerClosing ? ' project-run-drawer-slot--closing' : ''}`}
+          >
+            <Suspense fallback={null}>
+              <ProjectRunDetailsDrawer
+                projectId={projectId}
+                sessionId={sessionId}
+                run={selectedRun}
+                refreshSequence={transcriptRefreshSequence}
+                isClosing={isRunDrawerClosing}
+                onClose={closeRunDetails}
+                onClosed={finishClosingRunDetails}
+              />
+            </Suspense>
+          </div>
+        )}
       </div>
     </div>
+  )
+}
+
+function shouldRefreshRunTranscript(type: RunEventType) {
+  return (
+    type === 'turn_ended' ||
+    type === 'run_waiting' ||
+    type === 'run_completed' ||
+    type === 'run_failed' ||
+    type === 'run_aborted'
   )
 }
