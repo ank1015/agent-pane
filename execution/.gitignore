@@ -1,0 +1,5 @@
+/target/
+/.wrangler/
+.env
+.env.*
+!.env.example
