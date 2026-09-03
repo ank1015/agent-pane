@@ -1,0 +1,12 @@
+{
+  "gateway": "https://execution.example.com",
+  "state_directory": ".execution-host",
+  "roots": [
+    {
+      "id": "workspace",
+      "name": "Workspace",
+      "path": ".",
+      "read_only": false
+    }
+  ]
+}
