@@ -1,0 +1,30 @@
+/execution-host/0.1.0-dev-161346f8/*
+  Cache-Control: public, max-age=31536000, immutable
+  X-Content-Type-Options: nosniff
+
+/execution-host/0.1.0-dev-9a8ded2f/*
+  Cache-Control: public, max-age=31536000, immutable
+  X-Content-Type-Options: nosniff
+
+/execution-host/0.1.0-dev-0cd41c1e/*
+  Cache-Control: public, max-age=31536000, immutable
+  X-Content-Type-Options: nosniff
+
+/execution-host/0.1.0-dev-96a40a15/*
+  Cache-Control: public, max-age=31536000, immutable
+  X-Content-Type-Options: nosniff
+
+/execution-supervisor/0.1.0-dev-c3f64930/*
+  Cache-Control: public, max-age=31536000, immutable
+  X-Content-Type-Options: nosniff
+
+/execution-host/latest.json
+  Cache-Control: no-cache
+
+/execution-host/install.sh
+  Cache-Control: no-cache
+  X-Content-Type-Options: nosniff
+
+/execution-host/install.ps1
+  Cache-Control: no-cache
+  X-Content-Type-Options: nosniff
