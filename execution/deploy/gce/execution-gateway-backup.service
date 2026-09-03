@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up the Execution Gateway PostgreSQL database
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/execution-gateway/backup.env
+ExecStart=/opt/execution-gateway/backup.sh
+User=root
