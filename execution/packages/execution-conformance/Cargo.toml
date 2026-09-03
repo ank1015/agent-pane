@@ -1,0 +1,16 @@
+[package]
+name = "execution-conformance"
+description = "Reusable behavioral conformance suite for execution runtimes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+execution-core = { path = "../execution-core" }
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
+
