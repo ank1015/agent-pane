@@ -206,13 +206,92 @@ must have `CREATEDB`), not the application's database:
 DATABASE_URL=postgresql://localhost/postgres cargo test -p platform-server --test environments -- --include-ignored
 ```
 
+## Agent runtime storage
+
+The agent runtime tables live in the same dedicated platform database as projects
+and environments. Application routes, worker lifecycle/coordination routes, and
+the durable-wait/lease reconciler are implemented in `src/runtime/`. See
+[Runtime application API](docs/runtime-api.md) and
+[Worker runtime API](docs/worker-runtime-api.md), and
+[Administration and background work](docs/runtime-admin-api.md) for request contracts and recovery
+semantics. The shared worker executable, Rust SDK, harness execution, and fleet
+deployment/autoscaling remain separate work.
+
+| Table | Purpose |
+| --- | --- |
+| `harnesses` | Registered implementation IDs, configuration defaults, and availability |
+| `workers` | Build, supported harnesses, capacity, and heartbeat metadata |
+| `sessions` | Project-owned history, a fixed harness, and optional fork provenance |
+| `runs` | Parent/child relationships, configuration, scheduling, leases, and lifecycle |
+| `messages` | Immutable common-envelope message content, including custom messages |
+| `session_messages` | Ordered history membership; forks share message records |
+| `run_checkpoints` | Latest versioned harness-owned recovery state |
+| `run_inputs` | Ordered, deduplicated inputs and their handling outcomes |
+| `run_waits` | Durable any/all waits, deadlines, and resolution |
+| `run_wait_dependencies` | Run completion, input, timer, or external-operation conditions |
+| `run_events` | Append-only, ordered runtime and harness events |
+| `runtime_requests` | Scoped idempotency receipts committed with their effects |
+| `worker_credentials` | Hashed per-process credentials, separate from metadata |
+| `worker_claim_requests` | Idempotent assignment-allocation receipts |
+
+The migration enforces project-scoped relationships, one live run per session,
+immutable history and identity, exact fork prefixes, monotonic versions and lease
+epochs, checkpoint ownership, valid lifecycle field combinations, and typed wait
+dependencies. Queue, lease-expiry, pending-input, timer, and history indexes cover
+the expected access paths. Repeated `project_id` fields support composite foreign
+keys; they are not independently editable ownership fields. Projects with runtime
+history cannot be deleted through a cascading delete.
+
+Append message memberships, inputs, and events without supplying their sequence
+or revision; triggers allocate the next value while locking the owning row.
+Fork creation must copy the source memberships through the requested revision in
+the same transaction, with no child-run attribution on inherited memberships.
+This copies history references, not checkpoints, machine files, or runtime state.
+
+Deferred constraints check the final transaction state. Completing a run requires
+its own final assistant message without tool calls, a matching runtime event, and
+no pending waits. Waiting requires a persisted dependency; resolving its final
+wait must also wake the suspended run in the same transaction. Abort acknowledgement
+requires an abort request, terminal event, and resolution/cancellation of local
+waits; it does not automatically stop children.
+
+The worker interface authenticates process credentials and unexpired lease epochs,
+validates message contracts/configuration, enforces worker capacity, and commits
+checkpoints, input acknowledgements, history, receipts, and lifecycle events
+transactionally. Each Platform process runs a bounded, replica-safe reconciliation
+loop for expired leases, wait conditions, and worker liveness. Claims use database
+locks and `SKIP LOCKED`; notifications are hints, never the durable work queue.
+Persist external operation handles in checkpoint state for harness-specific
+recovery. These tables do not make gateway operations exactly-once.
+
+Resolve idempotent replays before appending, under the same transaction locks;
+do not use `ON CONFLICT DO NOTHING` as a substitute for replay handling after an
+append trigger advances a counter. Compare a receipt's request hash and return
+its saved result. Run-scoped receipts are retained for recovery; only explicitly
+expired non-run receipts can be deleted.
+
+Run the schema and concurrency tests against isolated databases using a local
+PostgreSQL role with `CREATEDB`:
+
+```sh
+DATABASE_URL=postgresql://localhost/postgres cargo test -p platform-server --test runtime_schema -- --include-ignored
+```
+
+Apply pending migrations without starting HTTP listeners or gateway clients
+(run from `platform/apps/server` so its `.env` is loaded):
+
+```sh
+cargo run -p platform-server --example migrate
+```
+
 ## Run locally
 
 Projects use a dedicated PostgreSQL database configured with
 `PLATFORM_SERVER_DATABASE_URL`. Create an empty `platform_server` database and
 set the connection URL for your local role before starting the server. Do not
 point this setting at the LLM or execution gateway databases. Embedded migrations
-run at startup with checksum validation and migration locking enabled.
+run at startup with checksum validation and migration locking enabled. The build
+script tracks the migrations directory so new SQL files are embedded on rebuild.
 
 `GET /api/projects` returns projects ordered by name, then ID.
 `POST /api/projects` accepts `{ "name": "My project", "avatar": null }` and
