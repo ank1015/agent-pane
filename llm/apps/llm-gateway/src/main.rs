@@ -22,6 +22,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn serve(config: AppConfig) -> Result<(), Box<dyn Error>> {
     let database = Database::connect(&config.database).await?;
     database.migrate().await?;
+    let cleanup_database = database.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            if let Err(error) = cleanup_database.cleanup_runs().await {
+                tracing::error!(%error, "run retention cleanup failed");
+            }
+        }
+    });
     let accounts = AccountService::new(database.clone(), config.vault.clone());
     let gateway = Gateway::new(
         database.clone(),

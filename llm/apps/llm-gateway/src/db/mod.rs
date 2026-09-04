@@ -56,6 +56,16 @@ impl Database {
         sqlx::migrate!("./migrations").run(&self.pool).await
     }
 
+    /// Remove expired payloads, retaining deduplication tombstones for seven days.
+    pub async fn cleanup_runs(&self) -> Result<(), sqlx::Error> {
+        sqlx::query("update llm_runs set result = null, status = 'expired' where expires_at <= now() and status <> 'expired'")
+            .execute(&self.pool).await?;
+        sqlx::query("delete from llm_runs where expires_at <= now() - interval '5 days'")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn health_check(&self) -> Result<(), sqlx::Error> {
         sqlx::query("select 1").execute(&self.pool).await?;
         Ok(())
