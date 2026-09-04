@@ -30,6 +30,7 @@ use crate::{
 
 mod admin;
 mod auth;
+mod runs;
 
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const ACCOUNT_ID_HEADER: &str = "x-account-id";
@@ -55,6 +56,8 @@ pub fn router(
         .route("/v1/providers", get(providers))
         .route("/v1/models", get(models))
         .route("/v1/llm", post(complete))
+        .route("/v1/llm/runs", post(runs::submit))
+        .route("/v1/llm/runs/{run_id}", get(runs::retrieve))
         .route("/v1/search", post(search))
         .layer(DefaultBodyLimit::max(max_request_bytes));
     let admin_routes = Router::new()
@@ -408,7 +411,7 @@ fn response_headers(request_id: Uuid, account_id: Option<Uuid>) -> HeaderMap {
     headers
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CompleteRequest {
     #[serde(default)]
