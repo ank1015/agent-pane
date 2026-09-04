@@ -7,6 +7,7 @@ This directory contains the clean-slate execution architecture while the legacy 
 - `packages/execution-wire` contains versioned request/response framing and shared runtime dispatch.
 - `packages/execution-conformance` contains reusable black-box behavioral checks for every runtime implementation.
 - `packages/execution-api` contains stable hosted-gateway HTTP resource contracts.
+- `packages/execution-client` provides an authenticated gateway-backed execution runtime for tools and applications.
 - `apps/execution-supervisor` exposes the supervisor core through private local IPC.
 - `packages/execution-e2b` controls E2B lifecycle and forwards the wire protocol through envd to the supervisor.
 - `apps/execution-gateway` stores E2B accounts and Registered Host credentials, manages host lifecycle, and routes execution operations.
