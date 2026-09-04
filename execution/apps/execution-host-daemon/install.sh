@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version="${EXECUTION_HOST_VERSION:-0.1.0-dev-96a40a15}"
+version="${EXECUTION_HOST_VERSION:-0.1.0-dev-27ca5507}"
 base_url="${EXECUTION_HOST_ARTIFACT_BASE_URL:-https://downloads.acentric.dev}"
 install_directory="${EXECUTION_HOST_INSTALL_DIRECTORY:-/usr/local/bin}"
 

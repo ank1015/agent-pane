@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.0-dev-96a40a15",
+    [string]$Version = "0.1.0-dev-27ca5507",
     [string]$ArtifactBaseUrl = "https://downloads.acentric.dev",
     [string]$InstallDirectory = "$env:LOCALAPPDATA\Programs\execution-host"
 )

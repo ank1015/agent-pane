@@ -23,7 +23,7 @@ explicit executable.
 
 ## Install a published binary
 
-Versioned release `0.1.0-dev-96a40a15` is published for Linux and macOS on
+Versioned release `0.1.0-dev-27ca5507` is published for Linux and macOS on
 x86_64 and arm64, and Windows on x86_64. The installers download the matching
 raw binary and verify its SHA-256 digest before replacing the destination.
 
@@ -68,10 +68,12 @@ daemon account.
 execution-host --config execution-host.json connect
 ```
 
-The daemon reconnects with bounded exponential backoff. A network or gateway
-disconnect does not restart the embedded supervisor, so owned processes and
-their output journals remain available after reconnection. Restarting the
-daemon creates a new supervisor generation.
+The daemon reconnects with bounded exponential backoff. It also enforces the
+gateway's negotiated heartbeat deadline, so a half-open connection left behind
+by sleep, wake, or a network change is discarded and reconnected automatically.
+A network or gateway disconnect does not restart the embedded supervisor, so
+owned processes and their output journals remain available after reconnection.
+Restarting the daemon creates a new supervisor generation.
 
 Use `doctor` to inspect registration state without printing the credential, and
 `describe` to inspect the descriptor generated from the configured roots.
