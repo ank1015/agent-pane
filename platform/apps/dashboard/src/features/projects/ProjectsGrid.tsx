@@ -1,6 +1,7 @@
 import { Folder01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useRef, useState, type ReactNode } from 'react'
+import { Link } from 'react-router-dom'
 import { AddProjectDialog } from './AddProjectDialog'
 import { useProjects } from './project-queries'
 import type { Project } from './project-types'
@@ -32,12 +33,12 @@ export function ProjectsGrid() {
 
 function ProjectCard({ project }: { project: Project }) {
   return (
-    <article className="project-card" aria-label={project.name}>
+    <Link to={`/projects/${encodeURIComponent(project.id)}`} className="project-card" aria-label={project.name}>
       <div className="project-card-visual">
         {project.avatar ? <img src={project.avatar} alt="" width="800" height="600" loading="lazy" decoding="async" /> : <span className="project-card-fallback" aria-hidden="true"><HugeiconsIcon icon={Folder01Icon} size={28} color="currentColor" strokeWidth={1.25} /></span>}
       </div>
       <div className="project-card-footer"><h2 title={project.name}>{project.name}</h2></div>
-    </article>
+    </Link>
   )
 }
 

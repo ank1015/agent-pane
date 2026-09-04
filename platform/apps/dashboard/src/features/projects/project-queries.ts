@@ -1,11 +1,27 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getJson, postJson } from '../../lib/api-client'
-import type { CreateProjectInput, Project } from './project-types'
+import type { CreateProjectInput, Project, ProjectEnvironment } from './project-types'
 
 export const projectKeys = {
   all: ['projects'] as const,
   list: () => [...projectKeys.all, 'list'] as const,
   detail: (projectId: string) => [...projectKeys.all, 'detail', projectId] as const,
+  environments: (projectId: string) => [...projectKeys.detail(projectId), 'environments'] as const,
+}
+
+export function useProjectEnvironments(projectId: string) {
+  return useQuery({
+    queryKey: projectKeys.environments(projectId),
+    queryFn: ({ signal }) => getJson<ProjectEnvironment[]>(
+      `/api/projects/${encodeURIComponent(projectId)}/environments`, signal,
+    ),
+    staleTime: 30_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+  })
 }
 
 export const projectsOptions = queryOptions({
