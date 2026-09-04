@@ -33,6 +33,7 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+execution-client = { path = "../../packages/execution-client" }
 execution-conformance = { path = "../../packages/execution-conformance" }
 execution-supervisor-core = { path = "../../packages/execution-supervisor-core" }
 futures-util.workspace = true

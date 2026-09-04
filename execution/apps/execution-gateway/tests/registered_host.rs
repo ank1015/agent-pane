@@ -1,5 +1,3 @@
-mod support;
-
 use std::{sync::Arc, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -34,7 +32,7 @@ use tokio_tungstenite::{
 use url::Url;
 use uuid::Uuid;
 
-use support::HostedGatewayRuntime;
+use execution_client::{ExecutionClient, ExecutionClientConfig};
 
 const API_TOKEN: &str = "registered-host-test-token";
 
@@ -180,7 +178,11 @@ async fn registered_host_enrollment_routing_conformance_and_reconnect() -> anyho
         Arc::clone(&runtime),
     ));
     let ready = wait_for_host(&client, &base_url, claim.host_id, ExecutionHostState::Ready).await?;
-    let hosted = HostedGatewayRuntime::new(base_url.clone(), API_TOKEN, &ready)?;
+    let mut config = ExecutionClientConfig::new(format!("http://{address}/").parse()?, API_TOKEN);
+    config.allow_insecure_http = true;
+    let hosted = ExecutionClient::new(config)?
+        .connect_host(&OperationContext::new(), ready.id.to_string().parse()?)
+        .await?;
     let conformance = ConformanceConfig::for_runtime(&hosted)?;
     let report = run_all(&hosted, &conformance).await?;
     assert!(report.skipped_checks().is_empty());
