@@ -31,6 +31,15 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
   return parseResponse<T>(response)
 }
 
+export async function patchJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: 'PATCH',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return parseResponse<T>(response)
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const body = await readJson(response)

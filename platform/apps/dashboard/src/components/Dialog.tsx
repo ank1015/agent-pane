@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react'
 
 type DialogProps = {
+  className?: string
   children: ReactNode
   dismissible?: boolean
   footer: ReactNode
@@ -9,7 +10,7 @@ type DialogProps = {
   onClose: () => void
 }
 
-export function Dialog({ children, dismissible = true, footer, initialFocusRef, title, onClose }: DialogProps) {
+export function Dialog({ children, className = '', dismissible = true, footer, initialFocusRef, title, onClose }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const titleId = useId()
 
@@ -23,7 +24,7 @@ export function Dialog({ children, dismissible = true, footer, initialFocusRef, 
   return (
     <dialog
       ref={dialogRef}
-      className="app-dialog"
+      className={`app-dialog ${className}`}
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault()

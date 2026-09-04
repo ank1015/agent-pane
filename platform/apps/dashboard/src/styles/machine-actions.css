@@ -1,0 +1,17 @@
+/* Menu and name/delete dialog styling from the previous dashboard. */
+.machine-card-actions { flex: 0 0 28px; margin-left: 8px; color: var(--cursor-text-tertiary); }
+.provider-actions-menu { position: fixed; z-index: 1000; width: 208px; max-width: calc(100vw - 16px); padding: 4px; border: 1px solid var(--dashboard-border); border-radius: 8px; background: #181818; box-shadow: 0 0 0 1px #ffffff04, 0 12px 32px #0006; }
+.provider-actions-item { width: 100%; min-height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 8px; border: 0; border-radius: 6px; color: var(--cursor-text-secondary); background: transparent; font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.provider-actions-item:hover, .provider-actions-item:focus-visible { color: var(--cursor-text-primary); background: var(--cursor-overlay-06); outline: 0; }
+.provider-actions-item--danger { color: #fc6b83; }
+.provider-actions-item--danger:hover, .provider-actions-item--danger:focus-visible { color: #fc6b83; background: #fc6b831a; }
+.provider-actions-item svg { flex: 0 0 16px; }
+.provider-actions-separator { height: 1px; margin: 4px 6px; background: var(--cursor-border-faint); }
+.machine-action-dialog { width: min(440px, calc(100vw - 32px)); }
+.machine-action-dialog .app-dialog-footer { justify-content: space-between; }
+.machine-action-dialog .app-dialog-title { overflow-wrap: anywhere; }
+.update-provider-name-field { display: grid; gap: 8px; color: var(--cursor-text-secondary); font-size: 12px; line-height: 16px; }
+.update-provider-name-error { margin: 10px 0 0; color: #fc6b83; font-size: 12px; line-height: 16px; }
+.delete-provider-description { margin: 0; color: var(--cursor-text-tertiary); font-size: 13px; line-height: 20px; }
+.delete-provider-confirm-button { margin-left: 4px; color: #181818; background: #fc6b83; }
+.delete-provider-confirm-button:hover:not(:disabled) { background: color-mix(in oklab, #fc6b83 88%, white); }

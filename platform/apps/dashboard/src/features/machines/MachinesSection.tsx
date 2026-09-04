@@ -1,14 +1,30 @@
-import type { ReactNode } from 'react'
+import { useCallback, useRef, useState, type ReactNode } from 'react'
 import type { ExecutionHost } from './machine-types'
 import { useMachineInventory } from './machine-queries'
 import { SandboxAccountsSection } from './SandboxAccountsSection'
+import { MachineActionsMenu } from './MachineActionsMenu'
+import { MachineActionDialog } from './MachineActionDialog'
+
+type MachineActionTarget = { host: ExecutionHost; action: 'rename' | 'delete'; trigger: HTMLButtonElement }
+type OnMachineAction = (host: ExecutionHost, action: 'rename' | 'delete', trigger: HTMLButtonElement) => void
 
 export function MachinesSection() {
   const { data, error, isError, isPending, refetch } = useMachineInventory()
+  const [target, setTarget] = useState<MachineActionTarget | null>(null)
+  const headingRef = useRef<HTMLDivElement>(null)
+  const openAction: OnMachineAction = (host, action, trigger) => setTarget({ host, action, trigger })
+  const closeAction = useCallback(() => {
+    setTarget(null)
+    requestAnimationFrame(() => {
+      if (target?.trigger.isConnected) target.trigger.focus()
+      else headingRef.current?.querySelector<HTMLElement>('h1')?.focus()
+    })
+  }, [target])
 
   return (
     <section className="machines-section" aria-label="Machines">
       <div
+        ref={headingRef}
         className="machine-inventory-groups"
       >
         <MachineGroup
@@ -22,10 +38,12 @@ export function MachinesSection() {
           emptyMessage="No Machine Tunnels"
           loadingMessage="Loading machine tunnels..."
           onRetry={() => void refetch()}
+          onAction={openAction}
         />
 
         <SandboxAccountsSection />
       </div>
+      {target ? <MachineActionDialog key={`${target.host.id}:${target.action}`} host={target.host} action={target.action} onClose={closeAction} /> : null}
     </section>
   )
 }
@@ -41,6 +59,7 @@ function MachineGroup({
   emptyMessage,
   loadingMessage,
   onRetry,
+  onAction,
 }: {
   heading: string
   headingId: string
@@ -52,18 +71,20 @@ function MachineGroup({
   emptyMessage: string
   loadingMessage: string
   onRetry: () => void
+  onAction: OnMachineAction
 }) {
   return (
     <section className="machine-page-section" aria-labelledby={headingId}>
       <header className="machine-page-section-header">
-        <Heading id={headingId} className="cursor-page-title">
+        <Heading id={headingId} className="cursor-page-title" tabIndex={-1}>
           {heading}
         </Heading>
       </header>
 
+      {isError && hosts.length > 0 ? <div className="projects-refresh-warning" role="status">Couldn’t refresh machines. Showing the last saved list. <button type="button" className="providers-retry-button" onClick={onRetry}>Retry</button></div> : null}
       {isPending ? (
         <MachineGroupEmpty>{loadingMessage}</MachineGroupEmpty>
-      ) : isError ? (
+      ) : isError && hosts.length === 0 ? (
         <MachineGroupEmpty>
           {error?.message ?? 'The machines could not be loaded.'}
           <button
@@ -77,7 +98,7 @@ function MachineGroup({
       ) : hosts.length > 0 ? (
         <div className="machine-card-grid">
           {hosts.map((host) => (
-            <MachineCard key={host.id} host={host} />
+            <MachineCard key={host.id} host={host} onAction={onAction} />
           ))}
         </div>
       ) : (
@@ -87,7 +108,7 @@ function MachineGroup({
   )
 }
 
-function MachineCard({ host }: { host: ExecutionHost }) {
+function MachineCard({ host, onAction }: { host: ExecutionHost; onAction: OnMachineAction }) {
   const isActive = host.state === 'ready'
   const statusLabel = isActive ? 'Online' : hostStateLabel(host.state)
   const isSandbox = host.kind === 'e2b'
@@ -127,6 +148,7 @@ function MachineCard({ host }: { host: ExecutionHost }) {
             <h3 title={name}>{name}</h3>
           </div>
         </div>
+        {!isSandbox ? <MachineActionsMenu name={name} onAction={(action, trigger) => onAction(host, action, trigger)} /> : null}
       </div>
     </article>
   )
