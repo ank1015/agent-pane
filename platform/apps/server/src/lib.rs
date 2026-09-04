@@ -3,6 +3,7 @@ mod error;
 pub mod machines;
 pub mod projects;
 pub mod providers;
+pub mod runtime;
 
 use axum::Router;
 use machines::{ExecutionGatewayClient, MachineService};
