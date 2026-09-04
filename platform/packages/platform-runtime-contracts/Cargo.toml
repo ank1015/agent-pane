@@ -1,0 +1,19 @@
+[package]
+name = "platform-runtime-contracts"
+description = "Shared Platform worker runtime wire contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+llm-contracts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+uuid.workspace = true
+
+[lints]
+workspace = true
+
