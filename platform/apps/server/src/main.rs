@@ -29,6 +29,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     database.migrate().await?;
     let project_service = ProjectService::new(database.pool().clone());
+    let environment_service = projects::environments::EnvironmentService::new(
+        database.pool().clone(),
+        projects::environments::EnvironmentGateway::new(
+            config.execution_gateway_url.clone(),
+            &config.execution_gateway_token,
+            config.execution_gateway_timeout,
+        )?,
+    );
     let execution_gateway = ExecutionGatewayClient::new(
         config.execution_gateway_url,
         &config.execution_gateway_token,
@@ -63,7 +71,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         router(execution_gateway, llm_gateway)
             .merge(providers::login_router(login_service))
-            .merge(projects::router(project_service)),
+            .merge(projects::router(project_service))
+            .merge(projects::environments::router(environment_service)),
     )
     .await?;
     Ok(())

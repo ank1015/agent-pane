@@ -1,4 +1,5 @@
 mod database;
+pub mod environments;
 mod error;
 mod http;
 mod model;

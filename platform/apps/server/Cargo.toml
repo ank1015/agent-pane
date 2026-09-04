@@ -15,6 +15,7 @@ sqlx.workspace = true
 chrono.workspace = true
 dotenvy.workspace = true
 execution-api.workspace = true
+execution-core.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
