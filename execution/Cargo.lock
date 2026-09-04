@@ -549,6 +549,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "execution-client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "execution-api",
+ "execution-conformance",
+ "execution-core",
+ "execution-supervisor-core",
+ "execution-wire",
+ "futures-util",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "execution-conformance"
 version = "0.1.0"
 dependencies = [
@@ -601,6 +623,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "execution-api",
+ "execution-client",
  "execution-conformance",
  "execution-core",
  "execution-e2b",
@@ -636,6 +659,7 @@ dependencies = [
  "base64",
  "clap",
  "execution-api",
+ "execution-client",
  "execution-conformance",
  "execution-core",
  "execution-gateway",

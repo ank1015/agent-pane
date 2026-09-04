@@ -1,0 +1,30 @@
+[package]
+name = "execution-client"
+description = "Authenticated gateway client for provider-neutral host execution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+execution-api = { path = "../execution-api" }
+execution-core = { path = "../execution-core" }
+execution-wire = { path = "../execution-wire" }
+reqwest.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+execution-conformance = { path = "../execution-conformance" }
+execution-supervisor-core = { path = "../execution-supervisor-core" }
+futures-util.workspace = true
+tempfile = "3.0"
+
+[lints]
+workspace = true
