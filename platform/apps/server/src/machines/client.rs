@@ -102,6 +102,97 @@ impl ExecutionGatewayClient {
             .await
             .map_err(ApiError::InvalidGatewayResponse)
     }
+
+    pub async fn update_host(
+        &self,
+        host_id: uuid::Uuid,
+        request: &super::UpdateMachineInput,
+    ) -> Result<ExecutionHost, ApiError> {
+        let url = self.host_url(host_id)?;
+        self.require_registered_host(host_id, url.clone()).await?;
+        let host = self
+            .host_response(self.http.patch(url).json(request), host_id, "update")
+            .await?;
+        if host.name.as_deref() != Some(request.name.as_str()) {
+            return Err(ApiError::HostRejected(
+                "update",
+                reqwest::StatusCode::BAD_GATEWAY,
+            ));
+        }
+        Ok(host)
+    }
+
+    pub async fn delete_host(&self, host_id: uuid::Uuid) -> Result<ExecutionHost, ApiError> {
+        let url = self.host_url(host_id)?;
+        let existing = self.require_registered_host(host_id, url.clone()).await?;
+        if existing.state == execution_api::ExecutionHostState::Deleted {
+            return Ok(existing);
+        }
+        let deleted = self
+            .host_response(self.http.delete(url), host_id, "delete")
+            .await?;
+        if deleted.state != execution_api::ExecutionHostState::Deleted {
+            return Err(ApiError::HostRejected(
+                "delete",
+                reqwest::StatusCode::BAD_GATEWAY,
+            ));
+        }
+        Ok(deleted)
+    }
+
+    fn host_url(&self, id: uuid::Uuid) -> Result<Url, ApiError> {
+        self.hosts_url
+            .join(&format!("hosts/{id}"))
+            .map_err(|_| ApiError::HostRejected("request", reqwest::StatusCode::BAD_GATEWAY))
+    }
+
+    async fn require_registered_host(
+        &self,
+        id: uuid::Uuid,
+        url: Url,
+    ) -> Result<ExecutionHost, ApiError> {
+        self.host_response(self.http.get(url), id, "read").await
+    }
+
+    async fn host_response(
+        &self,
+        request: reqwest::RequestBuilder,
+        id: uuid::Uuid,
+        operation: &'static str,
+    ) -> Result<ExecutionHost, ApiError> {
+        let request_error = |error: reqwest::Error| {
+            ApiError::HostRejected(
+                operation,
+                if error.is_timeout() {
+                    reqwest::StatusCode::GATEWAY_TIMEOUT
+                } else {
+                    reqwest::StatusCode::BAD_GATEWAY
+                },
+            )
+        };
+        let mut response = request.send().await.map_err(request_error)?;
+        if !response.status().is_success() {
+            return Err(ApiError::HostRejected(operation, response.status()));
+        }
+        let invalid = || ApiError::HostRejected(operation, reqwest::StatusCode::BAD_GATEWAY);
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(request_error)? {
+            if body.len() + chunk.len() > 1024 * 1024 {
+                return Err(invalid());
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let host: ExecutionHost = serde_json::from_slice(&body).map_err(|_| invalid())?;
+        if host.id != id {
+            return Err(invalid());
+        }
+        if host.kind != execution_api::ExecutionHostKind::Registered {
+            return Err(ApiError::InvalidRequest(
+                "Only registered machine tunnels can be changed here.",
+            ));
+        }
+        Ok(host)
+    }
 }
 
 fn normalized_base_url(mut base_url: Url) -> Url {

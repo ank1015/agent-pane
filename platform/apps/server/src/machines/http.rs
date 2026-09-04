@@ -1,18 +1,25 @@
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, State, rejection::JsonRejection},
+    extract::{
+        DefaultBodyLimit, Path, State,
+        rejection::{JsonRejection, PathRejection},
+    },
     http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
     middleware,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, patch},
 };
 
-use super::{CreateE2bAccountInput, MachineService};
+use super::{CreateE2bAccountInput, MachineService, UpdateMachineInput};
 use crate::error::ApiError;
 
 pub fn router(service: MachineService) -> Router {
     Router::new()
         .route("/api/machines", get(list_machines))
+        .route(
+            "/api/machines/{machine_id}",
+            patch(update_machine).delete(delete_machine),
+        )
         .route(
             "/api/machines/e2b-accounts",
             get(list_accounts).post(create_account),
@@ -20,6 +27,25 @@ pub fn router(service: MachineService) -> Router {
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::map_response(no_store))
         .with_state(service)
+}
+
+async fn update_machine(
+    State(service): State<MachineService>,
+    path: Result<Path<uuid::Uuid>, PathRejection>,
+    payload: Result<Json<UpdateMachineInput>, JsonRejection>,
+) -> Result<Response, ApiError> {
+    let Path(id) = path.map_err(|_| ApiError::InvalidRequest("Machine ID must be a UUID."))?;
+    let Json(request) = payload.map_err(|error| ApiError::InvalidJson(error.status()))?;
+    Ok(Json(service.update_machine(id, request).await?).into_response())
+}
+
+async fn delete_machine(
+    State(service): State<MachineService>,
+    path: Result<Path<uuid::Uuid>, PathRejection>,
+) -> Result<Response, ApiError> {
+    let Path(id) = path.map_err(|_| ApiError::InvalidRequest("Machine ID must be a UUID."))?;
+    service.delete_machine(id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 async fn list_accounts(State(service): State<MachineService>) -> Result<Response, ApiError> {

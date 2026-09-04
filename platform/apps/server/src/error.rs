@@ -14,6 +14,8 @@ pub enum ApiError {
     InvalidJson(StatusCode),
     #[error("E2B account creation was rejected")]
     AccountRejected(StatusCode),
+    #[error("the execution gateway rejected the host {0}")]
+    HostRejected(&'static str, StatusCode),
     #[error("the execution gateway could not be reached")]
     GatewayUnavailable(#[source] reqwest::Error),
     #[error("the execution gateway returned HTTP {0}")]
@@ -29,7 +31,37 @@ impl IntoResponse for ApiError {
             Self::InvalidJson(status) => (
                 *status,
                 "INVALID_REQUEST",
-                "Send a JSON object containing only name and api_key within the 16 KiB request limit.",
+                "Send a valid JSON request within the 16 KiB request limit.",
+            ),
+            Self::HostRejected(_, StatusCode::NOT_FOUND) => (
+                StatusCode::NOT_FOUND,
+                "MACHINE_NOT_FOUND",
+                "The machine was not found or was already deleted.",
+            ),
+            Self::HostRejected("update", StatusCode::BAD_REQUEST) => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_MACHINE",
+                "The gateway rejected the machine name.",
+            ),
+            Self::HostRejected(_, StatusCode::CONFLICT) => (
+                StatusCode::CONFLICT,
+                "MACHINE_CONFLICT",
+                "The machine cannot be changed in its current state.",
+            ),
+            Self::HostRejected(_, StatusCode::TOO_MANY_REQUESTS) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "GATEWAY_RATE_LIMITED",
+                "The execution gateway is rate limiting requests. Wait before trying again.",
+            ),
+            Self::HostRejected(_, StatusCode::GATEWAY_TIMEOUT) => (
+                StatusCode::GATEWAY_TIMEOUT,
+                "GATEWAY_TIMEOUT",
+                "The gateway timed out. Refresh the machine list before retrying; the change may already have completed.",
+            ),
+            Self::HostRejected(_, _) => (
+                StatusCode::BAD_GATEWAY,
+                "EXECUTION_GATEWAY_ERROR",
+                "The machine request failed. Refresh the machine list before retrying; the change may already have completed.",
             ),
             Self::AccountRejected(StatusCode::UNPROCESSABLE_ENTITY) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
