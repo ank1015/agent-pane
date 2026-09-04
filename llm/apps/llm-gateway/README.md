@@ -2,12 +2,12 @@
 
 Authenticated HTTP gateway for the standalone LLM system. It executes requests
 through the OpenAI, ChatGPT, and Fireworks packages, stores encrypted provider
-credentials, and records request outcomes and normalized usage without storing
-prompts or responses.
+credentials, and records request outcomes and normalized usage. Optional asynchronous runs
+retain results for 48 hours so callers can recover after disconnecting.
 
 ## Storage
 
-The gateway owns exactly four application tables:
+The gateway owns five application tables:
 
 - `provider_accounts`: non-secret configuration, status, default selection, and
   the runtime revision used to invalidate cached transports.
@@ -15,14 +15,18 @@ The gateway owns exactly four application tables:
   payload and credential/key versions.
 - `llm_requests`: completion and search outcomes, safe error metadata, timing,
   provider/model identity, and non-secret accounting labels.
+- `llm_runs`: idempotency fingerprints, execution status, and temporary results.
 - `llm_usage`: the exact normalized `Usage` object plus generated token and USD
   cost columns for reporting.
 
 Account deletion is a soft deletion of account identity and a hard deletion of
 its ciphertext. Historical request attribution therefore remains intact while
-the credential becomes unrecoverable. The gateway never stores prompts,
-assistant content, tool arguments, native responses, or raw provider error
-bodies.
+the credential becomes unrecoverable. Synchronous requests store no prompts or responses. Asynchronous runs store the
+normalized completion (including any content, tool arguments, and native data
+present in that completion), or a normalized failure. Submitted prompts are not
+stored; only a SHA-256 fingerprint of the typed submission is retained. Raw
+provider error bodies are excluded. Run retrieval uses the shared runtime token,
+so every holder of that token has access to runs.
 
 ## Local setup
 
@@ -93,6 +97,66 @@ Content-Type: application/json
 default account is used. The response contains `request_id`, the resolved
 `account_id`, and the unchanged normalized `AssistantMessage` as `message`.
 The IDs are also returned as `x-request-id` and `x-account-id` headers.
+
+### Submit and retrieve an asynchronous run
+
+```http
+POST /v1/llm/runs
+Authorization: Bearer LLM_GATEWAY_API_TOKEN
+Idempotency-Key: my-job-123-generation-1
+Content-Type: application/json
+```
+
+The body is identical to `POST /v1/llm`. This endpoint acknowledges acceptance
+without waiting for the provider. It returns `202 Accepted` while running,
+with `Location: /v1/llm/runs/{run_id}` and `Retry-After: 1`.
+
+```json
+{
+  "run_id": "019...",
+  "status": "running",
+  "result": null,
+  "created_at": "2026-09-04T10:00:00Z",
+  "completed_at": null,
+  "expires_at": null
+}
+```
+
+```text
+GET /v1/llm/runs/{run_id}
+GET /v1/llm/runs/{run_id}?wait_seconds=25
+```
+
+Both require the runtime bearer token. `wait_seconds` defaults to 0 and accepts
+0–25. A wait returns when execution finishes or the wait period ends. Repeat it
+while `status` is `running`; disconnecting from either submission or retrieval
+does not cancel accepted work. `running` includes waiting in the gateway's
+bounded concurrency queue.
+
+Completed runs return `200` with `status: succeeded` and `result` containing the
+usual `{request_id, account_id, message}` completion, or `status: failed` and
+`result` containing `{request_id, account_id?, error}`. Semantic validation,
+account selection, queue rejection, and provider failures are recorded as failed
+runs. Malformed JSON and missing/invalid keys are rejected before acceptance.
+
+The required idempotency key contains 1–256 visible ASCII characters and is
+scoped to this gateway database, shared by all runtime callers. Persist the key
+before submission, or derive it from a stable logical operation identifier.
+Retrying with the same key and typed payload returns the existing run (including
+its result when complete), even if the initial response was lost. Object key
+order and omitted defaults do not change the fingerprint. A changed payload
+returns `409 Conflict`. Failed runs are also deduplicated: an intentional new
+execution requires a new key. Keys are independent of `request.metadata.run_id`.
+
+Results expire 48 hours after completion. Retrieval and resubmission return
+`410 Gone` with `status: expired` and no result after expiry. The server clears
+expired payloads every five minutes and retains the fingerprint/key until seven
+days after completion. After that cleanup, retrieval returns `404` and the key
+can create a new run. Usage/accounting history is unaffected by run cleanup.
+
+Execution remains process-local: gateway restart/crash recovery is not provided.
+Saving a completed result is retried independently without repeating the provider
+call. The synchronous `/v1/llm` endpoint retains its existing behavior.
 
 ### Execute provider-backed search
 

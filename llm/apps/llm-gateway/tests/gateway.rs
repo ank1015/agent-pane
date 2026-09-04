@@ -1,4 +1,11 @@
-use std::{env, time::Duration};
+use std::{
+    env,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use axum::{Json, Router, routing::post};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -13,7 +20,12 @@ use llm_gateway::{
 };
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
-use tokio::{net::TcpListener, task::JoinHandle};
+use tokio::{
+    io::AsyncWriteExt,
+    net::{TcpListener, TcpStream},
+    sync::Semaphore,
+    task::JoinHandle,
+};
 
 const API_TOKEN: &str = "runtime-test-token-with-at-least-32-bytes";
 const ADMIN_TOKEN: &str = "admin-test-token-with-at-least-32-bytes!!";
@@ -29,7 +41,7 @@ async fn llm_call_is_authenticated_executed_and_accounted() {
     database.migrate().await.expect("apply gateway migrations");
     reset_database(&database).await;
 
-    let (provider_url, provider_task) = spawn_provider().await;
+    let (provider_url, provider_task, provider_calls, provider_release) = spawn_provider().await;
     let vault_key = STANDARD.encode([7_u8; 32]);
     let vault = Vault::from_base64(&vault_key).expect("valid test vault key");
     let accounts = AccountService::new(database.clone(), vault);
@@ -190,6 +202,15 @@ async fn llm_call_is_authenticated_executed_and_accounted() {
     assert_eq!(usage["totals"]["tokens"]["input"], 7);
     assert_eq!(usage["groups"][0]["key"], "gpt-5.6-luna");
 
+    verify_runs(
+        &client,
+        &gateway_url,
+        &database,
+        &provider_calls,
+        &provider_release,
+    )
+    .await;
+
     provider_task.abort();
     gateway_task.abort();
     reset_database(&database).await;
@@ -210,31 +231,42 @@ fn llm_request() -> Value {
     })
 }
 
-async fn spawn_provider() -> (String, JoinHandle<()>) {
+async fn spawn_provider() -> (String, JoinHandle<()>, Arc<AtomicUsize>, Arc<Semaphore>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(Semaphore::new(1));
+    let handler_calls = calls.clone();
+    let handler_release = release.clone();
     let app = Router::new().route(
         "/v1/responses",
-        post(|| async {
-            Json(json!({
-                "id": "response-integration",
-                "object": "response",
-                "model": "gpt-5.6-luna",
-                "status": "completed",
-                "output": [{
-                    "type": "message",
-                    "content": [{
-                        "type": "output_text",
-                        "text": "Hello from the provider"
-                    }]
-                }],
-                "usage": {
-                    "input_tokens": 10,
-                    "output_tokens": 2,
-                    "input_tokens_details": { "cached_tokens": 3 }
-                }
-            }))
+        post(move || {
+            let calls = handler_calls.clone();
+            let release = handler_release.clone();
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                release.acquire().await.expect("release provider").forget();
+                Json(json!({
+                    "id": "response-integration",
+                    "object": "response",
+                    "model": "gpt-5.6-luna",
+                    "status": "completed",
+                    "output": [{
+                        "type": "message",
+                        "content": [{
+                            "type": "output_text",
+                            "text": "Hello from the provider"
+                        }]
+                    }],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 2,
+                        "input_tokens_details": { "cached_tokens": 3 }
+                    }
+                }))
+            }
         }),
     );
-    spawn_app(app).await
+    let (url, task) = spawn_app(app).await;
+    (url, task, calls, release)
 }
 
 async fn spawn_app(app: Router) -> (String, JoinHandle<()>) {
@@ -250,9 +282,209 @@ async fn spawn_app(app: Router) -> (String, JoinHandle<()>) {
 
 async fn reset_database(database: &Database) {
     sqlx::query(
-        "truncate table llm_usage, llm_requests, provider_credentials, provider_accounts cascade",
+        "truncate table llm_runs, llm_usage, llm_requests, provider_credentials, provider_accounts cascade",
     )
     .execute(database.pool())
     .await
     .expect("reset disposable test database");
+}
+
+async fn verify_runs(
+    client: &Client,
+    url: &str,
+    database: &Database,
+    calls: &AtomicUsize,
+    release: &Semaphore,
+) {
+    let endpoint = format!("{url}/v1/llm/runs");
+    let unauthorized = client
+        .post(&endpoint)
+        .json(&llm_request())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    let missing_key = client
+        .post(&endpoint)
+        .bearer_auth(API_TOKEN)
+        .json(&llm_request())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_key.status(), StatusCode::BAD_REQUEST);
+
+    // Send a complete submission but discard the connection without reading its
+    // response. The caller has no run ID to save.
+    let body = llm_request().to_string();
+    let mut socket = TcpStream::connect(url.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    socket.write_all(format!("POST /v1/llm/runs HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {API_TOKEN}\r\nIdempotency-Key: lost-submission\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while calls.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("detached provider started");
+    drop(socket);
+
+    let submit = || {
+        client
+            .post(&endpoint)
+            .bearer_auth(API_TOKEN)
+            .header("Idempotency-Key", "lost-submission")
+            .json(&llm_request())
+            .send()
+    };
+    let (first, second) = tokio::join!(submit(), submit());
+    let first = first.unwrap();
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+    assert!(first.headers().contains_key("location"));
+    let first: Value = first.json().await.unwrap();
+    let second: Value = second.unwrap().json().await.unwrap();
+    assert_eq!(first["run_id"], second["run_id"]);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let run_url = format!("{endpoint}/{}", first["run_id"].as_str().unwrap());
+
+    let mut changed = llm_request();
+    changed["request"]["instructions"] = json!("Different request");
+    let conflict = client
+        .post(&endpoint)
+        .bearer_auth(API_TOKEN)
+        .header("Idempotency-Key", "lost-submission")
+        .json(&changed)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        client.get(&run_url).send().await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .get(format!("{run_url}?wait_seconds=26"))
+            .bearer_auth(API_TOKEN)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    // An abandoned await must not cancel the provider operation.
+    assert!(
+        client
+            .get(format!("{run_url}?wait_seconds=25"))
+            .bearer_auth(API_TOKEN)
+            .timeout(Duration::from_millis(50))
+            .send()
+            .await
+            .is_err()
+    );
+    release.add_permits(1);
+    let result: Value = client
+        .get(format!("{run_url}?wait_seconds=5"))
+        .bearer_auth(API_TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["status"], "succeeded");
+    assert_eq!(result["result"]["message"]["id"], "response-integration");
+    let replay = submit().await.unwrap();
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(replay.json::<Value>().await.unwrap(), result);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    let id = first["run_id"]
+        .as_str()
+        .unwrap()
+        .parse::<uuid::Uuid>()
+        .unwrap();
+    sqlx::query("update llm_runs set expires_at = now() - interval '1 second' where id = $1")
+        .bind(id)
+        .execute(database.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .get(&run_url)
+            .bearer_auth(API_TOKEN)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::GONE
+    );
+    assert_eq!(submit().await.unwrap().status(), StatusCode::GONE);
+    database.cleanup_runs().await.unwrap();
+    let stored: (String, Option<Value>) =
+        sqlx::query_as("select status, result from llm_runs where id = $1")
+            .bind(id)
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+    assert_eq!(stored, ("expired".to_owned(), None));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    let mut invalid = llm_request();
+    invalid["request"]["model"]["id"] = json!("unknown-model");
+    let failed: Value = client
+        .post(&endpoint)
+        .bearer_auth(API_TOKEN)
+        .header("Idempotency-Key", "failed-run")
+        .json(&invalid)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let failed_url = format!(
+        "{endpoint}/{}?wait_seconds=5",
+        failed["run_id"].as_str().unwrap()
+    );
+    let failed: Value = client
+        .get(failed_url)
+        .bearer_auth(API_TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["result"]["error"]["kind"], "unknown_model");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    let new_submission = || {
+        client
+            .post(&endpoint)
+            .bearer_auth(API_TOKEN)
+            .header("Idempotency-Key", "concurrent-first-submission")
+            .json(&llm_request())
+            .send()
+    };
+    let (one, two) = tokio::join!(new_submission(), new_submission());
+    let one: Value = one.unwrap().json().await.unwrap();
+    let two: Value = two.unwrap().json().await.unwrap();
+    assert_eq!(one["run_id"], two["run_id"]);
+    release.add_permits(1);
+    let completed: Value = client
+        .get(format!(
+            "{endpoint}/{}?wait_seconds=5",
+            one["run_id"].as_str().unwrap()
+        ))
+        .bearer_auth(API_TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(completed["status"], "succeeded");
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
 }
