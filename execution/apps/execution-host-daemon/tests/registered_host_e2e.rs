@@ -1,6 +1,3 @@
-#[path = "../../execution-gateway/tests/support/mod.rs"]
-mod support;
-
 use std::{fs::File, process::Stdio, sync::Arc, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -11,7 +8,6 @@ use execution_gateway::{
     AppState, CredentialVault, Database, DynE2bProvider, E2bProviderSettings, HostConnections,
     LifecycleReconciler, RealE2bProvider, SecurityControls, router,
 };
-use execution_wire::{Operation, OperationResult};
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -20,7 +16,7 @@ use tokio::{net::TcpListener, process::Command, task::JoinHandle};
 use url::Url;
 use uuid::Uuid;
 
-use support::HostedGatewayRuntime;
+use execution_client::{ExecutionClient, ExecutionClientConfig};
 
 const API_TOKEN: &str = "production-daemon-e2e-token";
 
@@ -142,20 +138,17 @@ async fn production_daemon_routes_every_gateway_operation() -> anyhow::Result<()
         &daemon_log,
     )
     .await?;
-    let hosted = HostedGatewayRuntime::new(api_url.clone(), API_TOKEN, &ready)?;
-
-    let described = hosted
-        .call(
+    let mut config = ExecutionClientConfig::new(gateway_url.parse()?, API_TOKEN);
+    config.allow_insecure_http = true;
+    let hosted = ExecutionClient::new(config)?
+        .connect_host(
             &OperationContext::with_timeout(Duration::from_secs(20)),
-            Operation::Describe,
+            ready.id.to_string().parse()?,
         )
         .await?;
-    let OperationResult::HostDescriptor(descriptor) = described else {
-        anyhow::bail!("describe returned the wrong operation result");
-    };
     anyhow::ensure!(
-        descriptor == *hosted.descriptor(),
-        "describe result differs from the descriptor registered by the production daemon"
+        Some(hosted.descriptor()) == ready.descriptor.as_ref(),
+        "live describe differs from the descriptor registered by the production daemon"
     );
 
     let conformance =
