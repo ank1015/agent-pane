@@ -12,6 +12,27 @@ Hosts (`registered`) from sandbox hosts (`e2b`).
 The dashboard displays registered hosts only, plus sandbox **accounts** from
 `GET /api/machines/e2b-accounts`. Sandbox hosts are not displayed.
 
+Registered machine cards have a three-dot menu with Update Name and Delete:
+
+- `PATCH /api/machines/{id}` accepts only `{ "name": "New name" }` and returns
+  the updated gateway host with HTTP 200. This changes the gateway display name,
+  not the computer's OS hostname. Names contain 1–200 characters without
+  surrounding whitespace or control characters.
+- `DELETE /api/machines/{id}` returns HTTP 204 after the gateway reports the
+  registration deleted. Deleting an already-deleted registered host also returns
+  204. This disconnects its tunnel and revokes its credentials; reconnecting
+  requires registering the machine again. It does not delete files, uninstall
+  the daemon, or delete project environment records referencing the machine.
+
+Both routes first check the gateway host is a registered machine, rejecting E2B
+sandbox hosts. They use the configured bearer credential, bounded 1 MiB host
+responses, timeouts, no redirects/retries, sanitized errors, UUID validation,
+16 KiB request limits, and no-store responses. A missing host returns 404.
+After a timeout or an uncertain failure, refresh the list before retrying.
+The UI asks for delete confirmation, prevents duplicate submissions, pauses
+inventory refreshes during mutations, updates the cache optimistically, restores
+failed changes, and revalidates the list afterward.
+
 `POST /api/machines/e2b-accounts` accepts `{ "name": "My account", "api_key": "..." }`
 and returns `201` with the gateway's `E2bAccount` record (never the API key).
 The gateway verifies the key with E2B and encrypts it for storage. This does not
@@ -115,6 +136,76 @@ requests table, with a shared Cost/Tokens switch. Queries refresh every five
 seconds in the foreground and on focus/reconnect, retain cached data after
 refresh errors, and abort requests when no longer observed.
 
+## Project environments API
+
+Environments are saved project-owned records, not running machines or sandboxes.
+The `project_environments` table lives in the platform database. Gateway IDs are
+external references, not cross-database foreign keys.
+
+All routes are under `/api/projects/{project_id}/environments`:
+
+- `GET /` lists records alphabetically by name, then ID (an empty project returns `[]`).
+- `POST /` creates a record and returns it with HTTP 201.
+- `GET /{id}` returns one record.
+- `PATCH /{id}` updates supplied fields and returns the record.
+- `DELETE /{id}` removes only the record and returns HTTP 204.
+
+Example create body:
+
+```json
+{
+  "name": "Development",
+  "type": "machine",
+  "machine_id": "018f47a8-80cc-7b2f-9d44-6657f5f82ad0",
+  "snapshot_id": null,
+  "workspace_root": "workspace",
+  "path": "."
+}
+```
+
+Responses add `id`, `project_id`, `created_at`, and `updated_at`. A `machine`
+requires only `machine_id`; a `sandbox` requires only `snapshot_id` (the gateway
+snapshot record UUID, not an external E2B identifier). The unused reference is
+null. Identity, project ownership, and type cannot be changed. Names need not be
+unique and are limited to 128 characters. Root IDs are limited to 128 bytes;
+relative paths to 4096 bytes. `workspace_root` is a gateway root ID, not an
+absolute filesystem path. Responses also include `workspace_root_path`, a separate
+nullable field containing the last validated absolute native path from the
+machine's gateway descriptor. Clients cannot supply this field. Creation and
+target/root/path changes resolve it server-side; explicitly patching the same
+`workspace_root` ID refreshes it (also useful for backfilling older records).
+Renames preserve it without contacting the gateway. It is saved metadata, not a
+live guarantee: a machine can change its registered root later. Sandbox snapshots
+do not expose root paths, so their value remains null rather than being guessed.
+The dashboard shows this native path in Workspace root; root and environment IDs
+remain in the API but are not displayed beneath the root path or environment name.
+Paths use execution-core validation: `.` means the
+root itself; absolute paths, traversal, backslashes, and empty segments are rejected.
+
+Creation and target/root/path updates validate references with read-only gateway
+requests. Machines must be registered, non-deleted, and advertise the root in
+their last descriptor; being offline is fine. Snapshots must be ready and
+non-deleted. Snapshot records do not advertise roots, so sandbox root/path
+existence must be checked when execution is implemented. No endpoint provisions
+a sandbox, checks directory existence, or changes files. Listing, reading,
+renaming, and deleting do not require the gateway to be available.
+
+Database constraints enforce the type/reference pairing and immutable identity;
+project deletion cascades to its environment records. An indexed project foreign
+key supports scoped listing. Concurrent conflicting updates return HTTP 409;
+refetch before retrying. Missing project/environment records return 404, invalid
+references return 422, and gateway failures return sanitized 502/504 errors.
+Unknown fields and empty patches are rejected; explicit null is only accepted
+for the nullable reference fields, subject to the type constraint. Requests are
+limited to 16 KiB and responses use `Cache-Control: no-store`.
+
+Database-backed environment tests use isolated SQLx test databases (the role
+must have `CREATEDB`), not the application's database:
+
+```sh
+DATABASE_URL=postgresql://localhost/postgres cargo test -p platform-server --test environments -- --include-ignored
+```
+
 ## Run locally
 
 Projects use a dedicated PostgreSQL database configured with
@@ -128,8 +219,11 @@ run at startup with checksum validation and migration locking enabled.
 returns the persisted `{ "id", "name", "avatar" }` record with HTTP 201.
 Names are limited to 128 characters. Optional avatars use PNG/JPEG/WebP/GIF
 base64 data URLs, limited to 512 KiB decoded; requests are limited to 800 KiB.
-The dashboard lists projects and provides the Add Project dialog; project detail
-navigation is not implemented yet. Existing projects are not imported automatically.
+The dashboard lists projects and provides the Add Project dialog. Clicking a
+project opens `/projects/{id}` with an Environments tab and a read-only table of
+saved environment records. Lists are cached per project, refresh every 15 seconds
+in the foreground and on focus/reconnect, and retain saved data after refresh
+failures. Existing projects are not imported automatically.
 
 Copy `.env.example` to `.env`, provide the execution gateway bearer token and
 LLM gateway admin token, and
@@ -145,5 +239,5 @@ cargo test -p platform-server
 cargo clippy -p platform-server --all-targets -- -D warnings
 ```
 
-Both sets of routes are intended for local development. Add application
+All routes are intended for local development. Add application
 authentication and authorization before exposing this server publicly.
