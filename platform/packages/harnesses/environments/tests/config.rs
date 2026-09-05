@@ -2,6 +2,34 @@ use environments_harness::{Config, config_schema};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+#[test]
+fn registered_capabilities_match_harness_catalogs() {
+    let models = environments_harness::supported_models();
+    let migration = include_str!(
+        "../../../../apps/server/migrations/20260905030000_harness_supported_models.sql"
+    );
+    let stored = migration
+        .split("supported_models = '")
+        .nth(1)
+        .unwrap()
+        .split("'::jsonb")
+        .next()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(stored).unwrap(),
+        serde_json::to_value(&models).unwrap()
+    );
+    assert_eq!(models.len(), 3);
+    for (provider, ids) in models {
+        assert!(!ids.is_empty());
+        for id in ids {
+            for effort in ["low", "medium", "high", "xhigh", "max"] {
+                Config::parse(value(&provider, &id, effort).as_object().unwrap()).unwrap();
+            }
+        }
+    }
+}
+
 fn value(provider: &str, model: &str, effort: &str) -> Value {
     json!({"model":{"provider":provider,"id":model},"reasoning_level":effort})
 }
@@ -103,6 +131,23 @@ fn schemas_have_only_host_targeting_and_valid_environment_variants() {
             assert!(validator.is_valid(&args));
         }
         if tool.name == "create_sandbox" {
+            for ram in [1024, 2048, 4096, 8192] {
+                assert!(
+                    validator.is_valid(
+                        &json!({"source":{"type":"base","ram":ram},"network_access":false})
+                    )
+                );
+            }
+            for ram in [json!(512), json!(16384), json!("2048"), json!(2048.5)] {
+                assert!(!validator.is_valid(&json!({"source":{"type":"base","ram":ram}})));
+            }
+            assert!(validator.is_valid(&json!({"source":{"type":"snapshot","snapshot_id":Uuid::new_v4()},"network_access":false})));
+            assert!(!validator.is_valid(
+                &json!({"source":{"type":"snapshot","snapshot_id":Uuid::new_v4(),"ram":2048}})
+            ));
+            assert!(
+                !validator.is_valid(&json!({"source":{"type":"base"},"network_access":"false"}))
+            );
             assert!(validator.is_valid(&json!({"source":{"type":"base"}})));
             assert!(
                 validator
@@ -117,5 +162,8 @@ fn schemas_have_only_host_targeting_and_valid_environment_variants() {
             .unwrap(),
     )
     .unwrap();
-    assert!(config.web_search_enabled);
+    assert!(config.provider_options(Uuid::new_v4()).is_ok());
+    let mut config = value("openai", "gpt-5.6-terra", "high");
+    config["web_search_enabled"] = json!(false);
+    assert!(Config::parse(config.as_object().unwrap()).is_err());
 }

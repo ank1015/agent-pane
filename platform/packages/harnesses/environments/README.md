@@ -5,14 +5,15 @@ environment builder for the shared worker: session history → LLM → tools →
 until a final response. No compaction, permissions flow, or dedicated database.
 
 Config: `model: {provider, id, name?}`, `reasoning_level` (low/medium/high/xhigh/max),
-optional LLM `account_id`, `web_search_enabled` (default true), and optional
+optional LLM `account_id` and optional
 `system_prompt_append`. Provider/cache policy is shared with the basic harness.
 The run owns project scope; no project or fixed execution target is configured.
 
 Tools: `read`, `write`, `edit`, `bash`, `search`, `scrape`, `list_environments`,
 `list_execution_resources`, `list_snapshots`, `create_sandbox`, `snapshot_sandbox`,
-and `create_environment`. Web tools are omitted when disabled. Inject `WebTools`
-with Firecrawl contexts when enabled. Gateway and Platform credentials never
+and `create_environment`. Web tools are always enabled and cannot be disabled
+through configuration. Inject `WebTools` with Firecrawl contexts; runs without
+credentials fail before model dispatch. Gateway and Platform credentials never
 appear in model config or tool arguments. `tool_definitions(web)` exposes the
 model-facing schemas without opening a host connection.
 
@@ -23,8 +24,12 @@ is stateless, defaults to two minutes, and supports up to 30 minutes. Fresh read
 are required before every edit/overwrite, including after a successful mutation.
 Observations are run-scoped and bounded; writes/edits retain the 64 KiB limit.
 
-Create sandbox from `source: {type: "base", e2b_account_id?}` or
-`{type: "snapshot", snapshot_id}`. Optional name and `timeout_seconds` map to the
+Create sandbox from `source: {type: "base", e2b_account_id?, ram?}` or
+`{type: "snapshot", snapshot_id}`. Optional top-level `network_access` defaults
+to true for both sources. Base-only `source.ram` accepts 1024, 2048, 4096 or 8192
+MiB (default 2048); vCPU is automatic. Snapshots retain their source hardware.
+These options are persisted with the creation request for retry-safe replay.
+Optional name and `timeout_seconds` map to the
 gateway. Returned lifecycle resources are polled to readiness, with a ten-minute
 per-operation readiness window; timeout results include the known resource ID
 and do not delete it. Gateway filesystem requests resume paused builders on use.
@@ -55,3 +60,10 @@ and `FIRECRAWL_API_KEY` for web-enabled runs. Platform migration registers the
 catalog row; a worker still must advertise the implementation. Nothing in package
 construction provisions compute. Run tests from the Platform workspace; ignored
 integration tests use isolated SQLx databases and local simulated gateways.
+# Registered model capabilities
+
+`environments_harness::supported_models()` returns provider IDs mapped to model-ID
+arrays from the same compiled catalogs used by the harness. Platform exposes this
+as `supported_models` in its harness catalog. The registration migration is checked
+against this function in tests; catalog changes require refreshing registration
+metadata. This does not list configured accounts or guarantee upstream availability.

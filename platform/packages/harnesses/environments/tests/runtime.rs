@@ -280,7 +280,12 @@ impl App {
         EnvironmentsHarness::new(
             LlmClient::new(llm).unwrap(),
             ExecutionClient::new(execution).unwrap(),
-            None,
+            Some(environments_harness::WebTools {
+                search: tool_firecrawl_search::FirecrawlSearchToolContext::new("unused-test-key")
+                    .unwrap(),
+                scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext::new("unused-test-key")
+                    .unwrap(),
+            }),
         )
     }
     async fn post(&self, path: &str, body: Value) -> Value {
@@ -297,16 +302,12 @@ impl App {
         value
     }
     async fn create(&self) -> Uuid {
-        self.create_with_web(false).await
-    }
-    async fn create_with_web(&self, web: bool) -> Uuid {
         let response = self
             .post(
                 &format!("/api/projects/{}/sessions", self.project),
                 json!({"harness_id":ID,"initial_run":{
                     "expected_session_revision":0,"input":user("Do the work"),"config_override":{
-                        "model":{"provider":"openai","id":"gpt-5.6-terra"},"reasoning_level":"high",
-                        "web_search_enabled":web
+                        "model":{"provider":"openai","id":"gpt-5.6-terra"},"reasoning_level":"high"
                     }
                 }}),
             )
@@ -546,7 +547,9 @@ async fn all_four_tools_and_fresh_read_per_edit(pool: PgPool) {
             "list_snapshots",
             "create_sandbox",
             "snapshot_sandbox",
-            "create_environment"
+            "create_environment",
+            "search",
+            "scrape"
         ]
     );
     assert_eq!(script.requests[1].request.messages.len(), 11);
@@ -974,9 +977,13 @@ async fn sandbox_snapshot_and_environment_survive_lost_lifecycle_replies(pool: P
                 return (status, [("content-type","application/json")], body).into_response();
             }
             let now = chrono::Utc::now();
-            let host_record = json!({"id":host,"kind":"e2b","name":"Builder","state":"ready","desired_state":"ready","status_retryable":false,"roots":[{"id":"work","name":"Work","native_path":root_path,"read_only":false}],"metadata":{},"e2b":{"e2b_account_id":account,"e2b_sandbox_id":"provider-host","source":{"type":"base","e2b_account_id":account},"timeout_seconds":3600},"revision":1,"created_at":now,"updated_at":now});
+            let host_record = json!({"id":host,"kind":"e2b","name":"Builder","state":"ready","desired_state":"ready","status_retryable":false,"roots":[{"id":"work","name":"Work","native_path":root_path,"read_only":false}],"metadata":{},"e2b":{"e2b_account_id":account,"e2b_sandbox_id":"provider-host","source":{"type":"base","e2b_account_id":account,"ram":4096},"timeout_seconds":3600,"network_access":false},"revision":1,"created_at":now,"updated_at":now});
             let snapshot_record = json!({"id":snapshot,"e2b_account_id":account,"source_host_id":host,"name":"Prepared","state":"ready","desired_state":"ready","metadata":{},"created_at":now,"updated_at":now});
             if method == axum::http::Method::POST {
+                if path == "/v1/hosts" {
+                    assert_eq!(payload["source"]["ram"], 4096);
+                    assert_eq!(payload["network_access"], false);
+                }
                 let key = key.unwrap();
                 let mut receipts = captured.lock().await;
                 if let Some(old) = receipts.get(&key) { assert_eq!(old, &payload, "replay must retain the exact creation body"); }
@@ -1004,7 +1011,7 @@ async fn sandbox_snapshot_and_environment_survive_lost_lifecycle_replies(pool: P
         axum::serve(listener, gateway).await.unwrap();
     });
     app.script.lock().await.responses.extend([
-        tools(vec![call("list_execution_resources", json!({})), call("list_snapshots", json!({})), call("create_sandbox", json!({"source":{"type":"base","e2b_account_id":account}}))]),
+        tools(vec![call("list_execution_resources", json!({})), call("list_snapshots", json!({})), call("create_sandbox", json!({"source":{"type":"base","e2b_account_id":account,"ram":4096},"network_access":false}))]),
         tools(vec![call("write", json!({"file_path":"prepared.txt","content":"ready"})), call("read", json!({"file_path":"prepared.txt"}))]),
         tools(vec![call("snapshot_sandbox", json!({"host_id":host,"name":"Prepared"}))]),
         tools(vec![call("create_environment", json!({"name":"Sandbox benchmark","type":"sandbox","snapshot_id":snapshot,"workspace_root":"work","path":"."}))]), final_answer(),
@@ -1111,7 +1118,7 @@ async fn both_web_tools_are_wired_with_schemas_and_usage_details(pool: PgPool) {
             .unwrap(),
         }),
     );
-    let id = app.create_with_web(true).await;
+    let id = app.create().await;
     let (_send, signals) = watch::channel(Signals::default());
     tokio::time::timeout(
         Duration::from_secs(20),
@@ -1149,8 +1156,24 @@ async fn both_web_tools_are_wired_with_schemas_and_usage_details(pool: PgPool) {
 #[ignore = "requires PostgreSQL with CREATEDB"]
 async fn enabled_web_without_credentials_fails_before_model_dispatch(pool: PgPool) {
     let app = App::new(pool, vec![]).await;
-    let id = app.create_with_web(true).await;
-    app.activate(app.claim().await).await.unwrap();
+    let id = app.create().await;
+    let mut llm = LlmClientConfig::new(app.url.parse().unwrap(), "test-token");
+    llm.allow_insecure_http = true;
+    let mut gateway = ExecutionClientConfig::new(app.url.parse().unwrap(), "test-token");
+    gateway.allow_insecure_http = true;
+    let harness = EnvironmentsHarness::new(
+        LlmClient::new(llm).unwrap(),
+        ExecutionClient::new(gateway).unwrap(),
+        None,
+    );
+    let (_send, signals) = watch::channel(Signals::default());
+    harness
+        .run(Execution {
+            client: app.claim().await,
+            signals,
+        })
+        .await
+        .unwrap();
     assert_eq!(app.status(id).await, "failed");
     assert!(app.script.lock().await.requests.is_empty());
 }
