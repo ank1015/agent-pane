@@ -33,9 +33,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     let client = PlatformClient::new(&url, uuid::Uuid::new_v4(), token, ClientConfig::default())?;
-    // No production harnesses. Adding one means compiling/registering a library,
-    // not starting another independently deployed HTTP server.
-    let supervisor = Supervisor::new(client, Registry::default(), settings)?;
+    let mut registry = Registry::default();
+    let basic_enabled = std::env::var("BASIC_CC_TOOLS_ENABLED").as_deref() == Ok("true");
+    let environments_enabled = std::env::var("ENVIRONMENTS_ENABLED").as_deref() == Ok("true");
+    if basic_enabled || environments_enabled {
+        let mut llm_config = llm_client::LlmClientConfig::new(
+            std::env::var("LLM_GATEWAY_URL")?.parse()?,
+            std::env::var("LLM_GATEWAY_API_TOKEN")?,
+        );
+        let mut execution_config = execution_client::ExecutionClientConfig::new(
+            std::env::var("EXECUTION_GATEWAY_URL")?.parse()?,
+            std::env::var("EXECUTION_GATEWAY_API_TOKEN")?,
+        );
+        let insecure = std::env::var("GATEWAYS_ALLOW_INSECURE_HTTP").as_deref() == Ok("true");
+        llm_config.allow_insecure_http = insecure;
+        execution_config.allow_insecure_http = insecure;
+        let llm = llm_client::LlmClient::new(llm_config)?;
+        let execution = execution_client::ExecutionClient::new(execution_config)?;
+        if basic_enabled {
+            registry.register(
+                basic_cc_tools_harness::ID,
+                Arc::new(basic_cc_tools_harness::BasicCcToolsHarness::new(
+                    llm.clone(),
+                    execution.clone(),
+                )),
+            )?;
+        }
+        if environments_enabled {
+            let web = match std::env::var("FIRECRAWL_API_KEY") {
+                Ok(key) if key.is_empty() => None,
+                Ok(key) => Some(environments_harness::WebTools {
+                    search: tool_firecrawl_search::FirecrawlSearchToolContext::new(key.clone())?,
+                    scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext::new(key)?,
+                }),
+                Err(std::env::VarError::NotPresent) => None,
+                Err(error) => return Err(error.into()),
+            };
+            registry.register(
+                environments_harness::ID,
+                Arc::new(environments_harness::EnvironmentsHarness::new(
+                    llm, execution, web,
+                )),
+            )?;
+        }
+    }
+    let supervisor = Supervisor::new(client, registry, settings)?;
     let health = supervisor.snapshot();
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let app = Router::new()
