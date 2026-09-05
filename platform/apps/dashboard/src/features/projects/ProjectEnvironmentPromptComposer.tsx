@@ -22,6 +22,7 @@ import { ProviderIcon } from '../providers/provider-icons'
 
 type ProjectEnvironmentPromptComposerProps = {
   promptValue?: string
+  placeholder?: string
   onPromptChange?: (prompt: string) => void
   defaultReasoningLevel?: string
   webSearchSupported?: boolean
@@ -36,6 +37,7 @@ type ProjectEnvironmentPromptComposerProps = {
   isSubmissionReady?: boolean
   isSubmitting?: boolean
   isRunActive?: boolean
+  allowSteering?: boolean
   isStopping?: boolean
   submitError?: string | null
   onSubmit?: (submission: ProjectEnvironmentPromptSubmission) => void
@@ -68,6 +70,7 @@ type AccountTooltip = {
 
 export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironmentPromptComposer({
   promptValue,
+  placeholder = 'Describe the Environment',
   onPromptChange,
   defaultReasoningLevel,
   webSearchSupported = true,
@@ -82,6 +85,7 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
   isSubmissionReady = true,
   isSubmitting = false,
   isRunActive = false,
+  allowSteering = false,
   isStopping = false,
   submitError = null,
   onSubmit,
@@ -155,7 +159,7 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
     selectedReasoningLevel !== null &&
     isSubmissionReady &&
     !isSubmitting &&
-    !isRunActive
+    (!isRunActive || allowSteering) && !isStopping
 
   const submit = () => {
     if (
@@ -267,9 +271,10 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
         autoFocus
         className="project-environment-composer-input"
         value={prompt}
-        placeholder="Describe the Environment"
+        placeholder={placeholder}
         aria-label="Environment instructions"
         spellCheck
+        readOnly={isSubmitting}
         onChange={(event) => setPrompt(event.target.value)}
         onKeyDown={(event) => {
           if (
@@ -288,7 +293,8 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
           type="button"
           className="project-environment-attachment-button"
           aria-label="Add attachment"
-          title="Add attachment"
+          title="Attachments are not supported yet"
+          disabled
         >
           <HugeiconsIcon
             icon={PlusSignIcon}
@@ -624,13 +630,14 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
           >
             <span className="project-environment-stop-glyph" aria-hidden="true" />
           </button>
-        ) : (
+        ) : null}
+        {!isRunActive || allowSteering ? (
           <button
             type="button"
             className={`project-environment-send-button${
               isSubmitting ? ' project-environment-send-button--loading' : ''
             }`}
-            aria-label={isSubmitting ? 'Starting run' : 'Send prompt'}
+            aria-label={isSubmitting ? 'Sending prompt' : isRunActive ? 'Send steering message' : 'Send prompt'}
             aria-busy={isSubmitting}
             disabled={!canSubmit}
             onClick={submit}
@@ -652,7 +659,7 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
               />
             )}
           </button>
-        )}
+        ) : null}
       </div>
       {submitError === null ? null : (
         <p className="project-environment-submit-error" role="alert">

@@ -1,12 +1,23 @@
-import { MoreHorizontalIcon } from '@hugeicons/core-free-icons'
-import { HugeiconsIcon } from '@hugeicons/react'
-import type { ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
+import { RenameDeleteMenu } from '../../components/RenameDeleteMenu'
+import { EnvironmentActionDialog } from './EnvironmentActionDialog'
 import type { useProjectEnvironments } from './project-queries'
 import type { ProjectEnvironment } from './project-types'
 
 export function ProjectEnvironmentsTable({ query }: { query: ReturnType<typeof useProjectEnvironments> }) {
+  const [dialog, setDialog] = useState<{ environment: ProjectEnvironment; action: 'rename' | 'delete' } | null>(null)
+  const trigger = useRef<HTMLButtonElement | null>(null)
+  const region = useRef<HTMLDivElement>(null)
+  const closeDialog = () => {
+    setDialog(null)
+    requestAnimationFrame(() => {
+      if (trigger.current?.isConnected) trigger.current.focus()
+      else region.current?.focus()
+    })
+  }
   return (
-    <div className="providers-table-wrap" role="region" aria-label="Project environments" tabIndex={0}>
+    <>
+    <div ref={region} className="providers-table-wrap" role="region" aria-label="Project environments" tabIndex={0}>
       <table className="providers-table project-environments-table">
         <caption className="visually-hidden">Saved environments for this project</caption>
         <colgroup>
@@ -24,30 +35,27 @@ export function ProjectEnvironmentsTable({ query }: { query: ReturnType<typeof u
             <button type="button" className="providers-retry-button" disabled={query.isFetching} onClick={() => void query.refetch()}>Retry</button>
           </TableMessage> : null}
           {query.data?.length === 0 ? <TableMessage>No environments present</TableMessage> : null}
-          {query.data?.map((environment) => <EnvironmentRow key={environment.id} environment={environment} />)}
+          {query.data?.map((environment) => <EnvironmentRow key={environment.id} environment={environment} onAction={(action, button) => {
+            trigger.current = button
+            setDialog({ environment, action })
+          }} />)}
         </tbody>
       </table>
     </div>
+    {dialog ? <EnvironmentActionDialog key={`${dialog.environment.id}:${dialog.action}`} {...dialog} onClose={closeDialog} /> : null}
+    </>
   )
 }
 
-function EnvironmentRow({ environment }: { environment: ProjectEnvironment }) {
+function EnvironmentRow({ environment, onAction }: { environment: ProjectEnvironment; onAction: (action: 'rename' | 'delete', trigger: HTMLButtonElement) => void }) {
   return (
     <tr>
       <td><span className="provider-name" title={environment.name}>{environment.name}</span></td>
       <td><span className="provider-detail">{environment.type === 'machine' ? 'Machine' : 'Sandbox'}</span></td>
-      <td><span className="provider-detail environment-code environment-root-path" title={environment.workspace_root_path ?? 'Root path not yet known'}>{environment.workspace_root_path ?? 'Not yet known'}</span></td>
+      <td><span className="provider-detail environment-code environment-root-path" title={environment.workspace_root}>{environment.workspace_root}</span></td>
       <td><span className="provider-detail environment-code" title={environment.path}>{environment.path}</span></td>
       <td className="provider-actions-cell">
-        <button
-          type="button"
-          className="cursor-button cursor-button--ghost cursor-icon-button provider-actions-trigger"
-          aria-label={`Actions for ${environment.name}`}
-          disabled
-          title="Environment actions are not available yet"
-        >
-          <HugeiconsIcon icon={MoreHorizontalIcon} size={16} color="currentColor" strokeWidth={1.5} aria-hidden="true" />
-        </button>
+        <RenameDeleteMenu name={environment.name} onAction={onAction} />
       </td>
     </tr>
   )

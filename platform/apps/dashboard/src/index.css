@@ -9,6 +9,9 @@
 @import "./styles/machine-actions.css";
 @import "./styles/environment-composer.css";
 @import "./styles/project-recents.css";
+@import "./styles/project-chat.css";
+@source "../node_modules/streamdown/dist/*.js";
+@source "../node_modules/@streamdown/code/dist/*.js";
 
 :root {
   color-scheme: dark;

@@ -14,11 +14,11 @@ const { projectKeys } = await vite.ssrLoadModule('/src/features/projects/project
 const { harnessOptions } = await vite.ssrLoadModule('/src/features/projects/project-bootstrap.ts')
 const { projectBootstrapOptions } = await vite.ssrLoadModule('/src/features/projects/project-queries.ts')
 const { ApiError } = await vite.ssrLoadModule('/src/lib/api-client.ts')
-const basicHarness = { id: 'basic-cc-tools-harness', name: 'Basic CC Tools Harness', enabled: true, supported_models: { openai: ['gpt-5.6-sol'] }, default_config: { reasoning_level: 'high' }, config_schema: { properties: { reasoning_level: { enum: ['low', 'high'] } } } }
+const basicHarness = { id: 'basic-cc-tools-harness', name: 'Basic CC Tools Harness', enabled: true, supported_models: { openai: ['gpt-5.6-sol'] }, default_config: { reasoning_level: 'high' }, config_schema: { properties: { environment: { type: 'object' }, reasoning_level: { enum: ['low', 'high'] } } } }
 const bootstrap = { harnesses: [basicHarness], provider_accounts: [{ id: 'account', name: 'Personal', provider: 'openai', status: 'enabled' }], project_environments: [] }
 const projectId = '01900000-0000-7000-8000-000000000001'
 const otherId = '01900000-0000-7000-8000-000000000002'
-const record = { id: '01900000-0000-7000-8000-000000000003', project_id: projectId, name: 'Local workspace', type: 'machine', machine_id: otherId, snapshot_id: null, workspace_root: 'workspace', workspace_root_path: '/Users/test/workspace', path: 'src/app', created_at: '2026-09-04T00:00:00Z', updated_at: '2026-09-04T01:00:00Z' }
+const record = { id: '01900000-0000-7000-8000-000000000003', project_id: projectId, name: 'Local workspace', type: 'machine', machine_id: otherId, snapshot_id: null, workspace_root: '/Users/test/workspace', path: 'src/app', created_at: '2026-09-04T00:00:00Z', updated_at: '2026-09-04T01:00:00Z' }
 function table(overrides = {}) {
   return renderToStaticMarkup(createElement(ProjectEnvironmentsTable, { query: { isPending: false, isError: false, isFetching: false, data: [], refetch: () => {}, ...overrides } }))
 }
@@ -75,7 +75,7 @@ test('harness options intersect enabled accounts and capabilities and derive sch
 })
 
 test('environments harness hides environment picker and has no optional web settings', () => {
-  const envHarness = { ...basicHarness, id: 'environments' }
+  const envHarness = { ...basicHarness, id: 'environments', config_schema: { properties: { reasoning_level: { enum: ['low', 'high'] } } } }
   const html = app(`/projects/${projectId}`, [record], { ...bootstrap, harnesses: [envHarness] })
   assert.ok(html.includes('Harness: environments'))
   assert.ok(!html.includes('Prompt settings'))
@@ -130,7 +130,8 @@ test('table renders machine and sandbox record fields safely', () => {
   assert.ok(!html.includes('Updated at'))
   assert.ok(!html.includes('Created at'))
   assert.ok(!html.includes('<time'))
-  assert.match(html, /aria-label="Actions for Local workspace" disabled=""/)
+  assert.match(html, /aria-label="Actions for Local workspace" aria-haspopup="menu" aria-expanded="false"/)
+  assert.ok(!html.includes('Environment actions are not available yet'))
   assert.match(html, /provider-actions-trigger/)
 })
 test('table handles empty, loading, offline, and retry states', () => {
@@ -152,5 +153,4 @@ test('name and workspace root omit their IDs while preserving the native path', 
   assert.ok(!html.includes('ID: workspace'))
   assert.ok(!html.includes('environment-record-id'))
   assert.ok(!html.includes(record.machine_id))
-  assert.match(table({ data: [{ ...record, workspace_root_path: null }] }), /Not yet known/)
 })

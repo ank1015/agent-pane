@@ -23,6 +23,7 @@ type ProjectContextPickerProps = {
   unavailableLabel: string
   emptyResultsLabel: string
   isPending: boolean
+  disabled?: boolean
   showSelectedIcon?: boolean
   onSelect: (optionId: string) => void
 }
@@ -38,6 +39,7 @@ export const ProjectContextPicker = memo(function ProjectContextPicker({
   unavailableLabel,
   emptyResultsLabel,
   isPending,
+  disabled = false,
   showSelectedIcon = false,
   onSelect,
 }: ProjectContextPickerProps) {
@@ -143,7 +145,7 @@ export const ProjectContextPicker = memo(function ProjectContextPicker({
         aria-haspopup="listbox"
         aria-controls={isOpen ? listboxId : undefined}
         aria-expanded={isOpen}
-        disabled={selectedOption === null}
+        disabled={disabled || selectedOption === null}
         onClick={() => (isOpen ? close() : open())}
         onKeyDown={(event) => {
           if (
@@ -224,6 +226,7 @@ export const ProjectContextPicker = memo(function ProjectContextPicker({
                     aria-selected={isSelected}
                     onMouseEnter={() => setActiveOptionId(option.id)}
                     onMouseDown={(event) => event.preventDefault()}
+                    disabled={disabled}
                     onClick={() => select(option.id)}
                   >
                     {option.icon !== undefined ? (

@@ -14,7 +14,6 @@ export type ProjectEnvironment = {
   project_id: string
   name: string
   workspace_root: string
-  workspace_root_path: string | null
   path: string
   created_at: string
   updated_at: string

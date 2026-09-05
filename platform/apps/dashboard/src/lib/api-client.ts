@@ -22,10 +22,11 @@ export async function getJson<T>(
   return parseResponse<T>(response)
 }
 
-export async function postJson<T>(path: string, body: unknown): Promise<T> {
+export async function postJson<T>(path: string, body: unknown, idempotencyKey?: string): Promise<T> {
   const response = await fetch(path, {
     method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}) },
+    signal: idempotencyKey ? AbortSignal.timeout(30_000) : undefined,
     body: JSON.stringify(body),
   })
   return parseResponse<T>(response)

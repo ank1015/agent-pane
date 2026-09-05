@@ -7,10 +7,11 @@ type DialogProps = {
   footer: ReactNode
   initialFocusRef?: RefObject<HTMLElement | null>
   title: string
+  role?: 'dialog' | 'alertdialog'
   onClose: () => void
 }
 
-export function Dialog({ children, className = '', dismissible = true, footer, initialFocusRef, title, onClose }: DialogProps) {
+export function Dialog({ children, className = '', dismissible = true, footer, initialFocusRef, title, role, onClose }: DialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const titleId = useId()
 
@@ -24,6 +25,7 @@ export function Dialog({ children, className = '', dismissible = true, footer, i
   return (
     <dialog
       ref={dialogRef}
+      role={role}
       className={`app-dialog ${className}`}
       aria-labelledby={titleId}
       onCancel={(event) => {

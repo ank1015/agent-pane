@@ -1,5 +1,5 @@
-import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ApiError, getJson, postJson } from '../../lib/api-client'
+import { mutationOptions, queryOptions, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { ApiError, deleteRequest, getJson, patchJson, postJson } from '../../lib/api-client'
 import type { ProjectBootstrap } from './project-bootstrap'
 import type { CreateProjectInput, Project, ProjectEnvironment } from './project-types'
 
@@ -44,6 +44,42 @@ export function useProjectEnvironments(projectId: string) {
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   })
+}
+
+type EnvironmentAction = { environmentId: string; action: 'rename'; name: string } | { environmentId: string; action: 'delete' }
+
+export function environmentActionOptions(client: QueryClient, projectId: string) {
+  const environmentsKey = projectKeys.environments(projectId)
+  const bootstrapKey = projectKeys.bootstrap(projectId)
+  return mutationOptions({
+    mutationKey: [...environmentsKey, 'actions'],
+    retry: false,
+    gcTime: 0,
+    mutationFn: async (input: EnvironmentAction) => {
+      const path = `/api/projects/${encodeURIComponent(projectId)}/environments/${encodeURIComponent(input.environmentId)}`
+      if (input.action === 'rename') return patchJson<ProjectEnvironment>(path, { name: input.name })
+      await deleteRequest(path)
+      return null
+    },
+    onSuccess: async (environment, input) => {
+      await Promise.all([client.cancelQueries({ queryKey: environmentsKey }), client.cancelQueries({ queryKey: bootstrapKey })])
+      const update = (items: ProjectEnvironment[]) => items
+        .flatMap(item => item.id !== input.environmentId ? [item] : environment ? [environment] : [])
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id))
+      // Update existing caches only, keeping other environments and bootstrap data intact.
+      client.setQueryData<ProjectEnvironment[]>(environmentsKey, previous => previous ? update(previous) : undefined)
+      client.setQueryData<ProjectBootstrap>(bootstrapKey, previous => previous ? { ...previous, project_environments: update(previous.project_environments) } : undefined)
+    },
+    onSettled: () => {
+      // Reconcile uncertain failures too, without retrying a destructive request.
+      void client.invalidateQueries({ queryKey: environmentsKey })
+      void client.invalidateQueries({ queryKey: bootstrapKey })
+    },
+  })
+}
+
+export function useEnvironmentAction(projectId: string) {
+  return useMutation(environmentActionOptions(useQueryClient(), projectId))
 }
 
 export const projectsOptions = queryOptions({
