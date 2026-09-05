@@ -96,6 +96,7 @@ impl RuntimeService {
         {
             return Err(RuntimeError::Invalid("Provide valid expected versions."));
         }
+        super::session_state::validate(&request.session_state)?;
         if request.messages.len() > 200
             || request.input_results.len() > 200
             || request.waits.len() > 200
@@ -185,6 +186,15 @@ impl RuntimeService {
                 sqlx::query("insert into run_checkpoints(run_id,state,saved_by_lease_epoch) values($1,$2,$3)").bind(id).bind(json!(c.state)).bind(owner.lease_epoch).execute(&mut *tx).await?;
             }
         }
+        let session_state = super::session_state::apply(
+            &mut tx,
+            r.project_id,
+            r.session_id,
+            id,
+            owner,
+            &request.session_state,
+        )
+        .await?;
         for wait in &request.cancel_wait_ids {
             let changed=sqlx::query("update run_waits set status='cancelled',resolved_at=clock_timestamp(),result='{}' where id=$1 and run_id=$2 and status='pending'").bind(wait).bind(id).execute(&mut *tx).await?.rows_affected();
             if changed != 1 {
@@ -284,7 +294,7 @@ impl RuntimeService {
             .bind(r.session_id)
             .fetch_one(&mut *tx)
             .await?;
-        let reply=Reply::new(200,json!({"run":run_json(&mut tx,id).await?,"session_revision":revision,"checkpoint":checkpoint,"message_ids":message_ids,"wait_ids":wait_ids,"events":event_rows})).owned_by(owner);
+        let reply=Reply::new(200,json!({"run":run_json(&mut tx,id).await?,"session_revision":revision,"checkpoint":checkpoint,"session_state":session_state,"message_ids":message_ids,"wait_ids":wait_ids,"events":event_rows})).owned_by(owner);
         receipts::save(&mut tx, r.project_id, scope, id, key, &hash, &reply).await?;
         tx.commit().await?;
         self.notify(id);

@@ -11,6 +11,7 @@ mod model;
 mod mutations;
 mod queries;
 mod receipts;
+mod session_state;
 mod stream;
 mod waits;
 mod worker_http;

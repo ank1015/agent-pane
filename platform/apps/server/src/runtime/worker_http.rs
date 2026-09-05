@@ -44,6 +44,7 @@ pub fn worker_router(service: RuntimeService, registration_token: impl AsRef<str
         .route("/internal/workers/{id}/claims", post(claim))
         .route("/internal/workers/{id}/assignments", get(assignments))
         .route("/internal/runs/{id}/context", get(context))
+        .route("/internal/runs/{id}/session-state", get(session_state))
         .route("/internal/runs/{id}/inputs", get(inputs))
         .route("/internal/runs/{id}/commits", post(commit))
         .route("/internal/runs/{id}/events", post(events))
@@ -177,6 +178,17 @@ async fn inputs(
 ) -> Result<Json<Value>> {
     Ok(Json(
         s.worker_inputs(id(p)?, owner(w, &h)?, query(q)?).await?,
+    ))
+}
+async fn session_state(
+    State(s): State<RuntimeService>,
+    Extension(w): Extension<Uuid>,
+    p: Id,
+    h: HeaderMap,
+    q: Params<platform_runtime_contracts::SessionStateQuery>,
+) -> Result<Json<Value>> {
+    Ok(Json(
+        s.session_state(id(p)?, owner(w, &h)?, query(q)?).await?,
     ))
 }
 async fn commit(
