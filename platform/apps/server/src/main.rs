@@ -86,6 +86,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.llm_gateway_timeout,
     )?;
     let listener = TcpListener::bind(bind_address).await?;
+    let bootstrap_app =
+        projects::bootstrap::router(projects::bootstrap::ProjectBootstrapService::new(
+            database.pool().clone(),
+            providers::ProviderService::new(llm_gateway.clone()),
+            environment_service.clone(),
+        ));
     let login_service = ChatGptLoginService::new(llm_gateway.clone())?;
     let login_service = match TcpListener::bind(providers::CALLBACK_ADDRESS).await {
         Ok(callback_listener) => {
@@ -111,6 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         router(execution_gateway, llm_gateway)
             .merge(providers::login_router(login_service))
             .merge(projects::router(project_service))
+            .merge(bootstrap_app)
             .merge(runtime::router(runtime_service))
             .merge(worker_app)
             .merge(admin_app)
