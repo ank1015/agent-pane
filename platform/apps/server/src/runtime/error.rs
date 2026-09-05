@@ -7,6 +7,8 @@ use platform_runtime_contracts::{ConflictCode, ErrorEnvelope, ErrorInfo};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    #[error(transparent)]
+    Environment(#[from] crate::projects::environments::EnvironmentError),
     #[error("administrator authentication failed")]
     AdminUnauthorized,
     #[error("worker authentication failed")]
@@ -32,6 +34,7 @@ pub enum RuntimeError {
 impl IntoResponse for RuntimeError {
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
+            Self::Environment(error) => return error.into_response(),
             Self::AdminUnauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "ADMIN_UNAUTHORIZED",

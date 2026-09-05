@@ -44,6 +44,10 @@ pub fn worker_router(service: RuntimeService, registration_token: impl AsRef<str
         .route("/internal/workers/{id}/claims", post(claim))
         .route("/internal/workers/{id}/assignments", get(assignments))
         .route("/internal/runs/{id}/context", get(context))
+        .route(
+            "/internal/runs/{id}/environments",
+            get(environments).post(create_environment),
+        )
         .route("/internal/runs/{id}/session-state", get(session_state))
         .route("/internal/runs/{id}/inputs", get(inputs))
         .route("/internal/runs/{id}/commits", post(commit))
@@ -168,6 +172,24 @@ async fn context(
     q: Params<ContextQuery>,
 ) -> Result<Json<Value>> {
     Ok(Json(s.context(id(p)?, owner(w, &h)?, query(q)?).await?))
+}
+async fn environments(
+    State(s): State<RuntimeService>,
+    Extension(w): Extension<Uuid>,
+    p: Id,
+    h: HeaderMap,
+) -> Result<Json<Value>> {
+    Ok(Json(s.worker_environments(id(p)?, owner(w, &h)?).await?))
+}
+async fn create_environment(
+    State(s): State<RuntimeService>,
+    Extension(w): Extension<Uuid>,
+    p: Id,
+    h: HeaderMap,
+    b: Body<crate::projects::environments::CreateEnvironment>,
+) -> Result<Reply> {
+    s.worker_create_environment(id(p)?, owner(w, &h)?, key(&h)?, body(b)?)
+        .await
 }
 async fn inputs(
     State(s): State<RuntimeService>,

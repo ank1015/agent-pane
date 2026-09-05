@@ -5,6 +5,7 @@ mod background;
 mod commits;
 mod configuration;
 mod coordination;
+mod environments;
 mod error;
 mod http;
 mod model;
@@ -32,12 +33,25 @@ use uuid::Uuid;
 pub struct RuntimeService {
     pool: PgPool,
     signals: broadcast::Sender<Uuid>,
+    environments: Option<crate::projects::environments::EnvironmentService>,
 }
 
 impl RuntimeService {
     pub fn new(pool: PgPool) -> Self {
         let (signals, _) = broadcast::channel(256);
-        Self { pool, signals }
+        Self {
+            pool,
+            signals,
+            environments: None,
+        }
+    }
+
+    pub fn with_environments(
+        mut self,
+        service: crate::projects::environments::EnvironmentService,
+    ) -> Self {
+        self.environments = Some(service);
+        self
     }
 
     fn notify(&self, run: Uuid) {

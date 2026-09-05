@@ -56,10 +56,30 @@ impl EnvironmentService {
         input.validate()?;
         self.require_project(project_id).await?;
         let root_path = self.gateway.validate(&input).await?;
+        let mut tx = self.pool.begin().await?;
+        let environment = Self::insert(&mut tx, project_id, input, root_path).await?;
+        tx.commit().await?;
+        Ok(environment)
+    }
+
+    pub(crate) async fn validate_reference(
+        &self,
+        input: &CreateEnvironment,
+    ) -> Result<Option<String>, EnvironmentError> {
+        input.validate()?;
+        self.gateway.validate(input).await
+    }
+
+    pub(crate) async fn insert(
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+        project_id: Uuid,
+        input: CreateEnvironment,
+        root_path: Option<String>,
+    ) -> Result<Environment, EnvironmentError> {
         Ok(sqlx::query_as("insert into project_environments (id, project_id, name, type, machine_id, snapshot_id, workspace_root, path, workspace_root_path) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *")
             .bind(Uuid::now_v7()).bind(project_id).bind(input.name).bind(input.kind).bind(input.machine_id).bind(input.snapshot_id).bind(input.workspace_root).bind(input.path)
             .bind(root_path)
-            .fetch_one(&self.pool).await?)
+            .fetch_one(&mut **tx).await?)
     }
 
     pub async fn update(

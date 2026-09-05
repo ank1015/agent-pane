@@ -29,7 +29,7 @@ pub struct Environment {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateEnvironment {
     pub name: String,
