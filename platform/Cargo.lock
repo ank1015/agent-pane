@@ -143,6 +143,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "basic-cc-tools-harness"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "cc-harness-support",
+ "chrono",
+ "execution-client",
+ "execution-core",
+ "execution-supervisor-core",
+ "execution-wire",
+ "futures-util",
+ "harness-runtime",
+ "jsonschema",
+ "llm-client",
+ "llm-contracts",
+ "platform-runtime-client",
+ "platform-server",
+ "provider-chatgpt",
+ "provider-fireworks",
+ "provider-openai",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tool-bash-minimal",
+ "tool-edit",
+ "tool-read",
+ "tool-write",
+ "uuid",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -219,6 +253,25 @@ checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
 dependencies = [
  "find-msvc-tools",
  "shlex",
+]
+
+[[package]]
+name = "cc-harness-support"
+version = "0.1.0"
+dependencies = [
+ "execution-core",
+ "jsonschema",
+ "llm-contracts",
+ "provider-chatgpt",
+ "provider-fireworks",
+ "provider-openai",
+ "serde",
+ "serde_json",
+ "tool-bash-minimal",
+ "tool-edit",
+ "tool-read",
+ "tool-write",
+ "uuid",
 ]
 
 [[package]]
@@ -405,6 +458,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "environments-harness"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "cc-harness-support",
+ "chrono",
+ "execution-api",
+ "execution-client",
+ "execution-core",
+ "execution-supervisor-core",
+ "execution-wire",
+ "futures-util",
+ "harness-runtime",
+ "jsonschema",
+ "llm-client",
+ "llm-contracts",
+ "platform-runtime-client",
+ "platform-server",
+ "provider-chatgpt",
+ "provider-fireworks",
+ "provider-openai",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tool-bash-minimal",
+ "tool-edit",
+ "tool-filesystem",
+ "tool-firecrawl-scrape",
+ "tool-firecrawl-search",
+ "tool-read",
+ "tool-write",
+ "uuid",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -462,6 +553,7 @@ dependencies = [
  "execution-core",
  "execution-wire",
  "reqwest",
+ "serde",
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
@@ -1185,6 +1277,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "llm-client"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "llm-contracts"
 version = "0.1.0"
 dependencies = [
@@ -1545,9 +1653,13 @@ name = "platform-worker"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "basic-cc-tools-harness",
  "dotenvy",
+ "environments-harness",
+ "execution-client",
  "futures-util",
  "harness-runtime",
+ "llm-client",
  "platform-runtime-client",
  "platform-server",
  "rand 0.8.8",
@@ -1556,6 +1668,8 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+ "tool-firecrawl-scrape",
+ "tool-firecrawl-search",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -1608,6 +1722,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "provider-chatgpt"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "httpdate",
+ "llm-contracts",
+ "provider-openai",
+ "reqwest",
+ "serde_json",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "provider-fireworks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "httpdate",
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "provider-openai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "httpdate",
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -2648,6 +2804,32 @@ name = "tool-filesystem"
 version = "0.1.0"
 dependencies = [
  "execution-core",
+]
+
+[[package]]
+name = "tool-firecrawl-scrape"
+version = "0.1.0"
+dependencies = [
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "tool-firecrawl-search"
+version = "0.1.0"
+dependencies = [
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
 ]
 
 [[package]]

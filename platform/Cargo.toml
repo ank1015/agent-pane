@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/*", "packages/harness-runtime", "packages/platform-runtime-client", "packages/platform-runtime-contracts", "packages/tools/*"]
+members = ["apps/*", "packages/cc-harness-support", "packages/harness-runtime", "packages/platform-runtime-client", "packages/platform-runtime-contracts", "packages/tools/*", "packages/harnesses/*"]
 exclude = ["apps/dashboard"]
 resolver = "3"
 
