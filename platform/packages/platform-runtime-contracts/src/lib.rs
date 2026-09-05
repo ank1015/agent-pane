@@ -1,5 +1,7 @@
 //! Transport-independent Platform runtime contracts. Harness state remains opaque.
+mod environments;
 mod errors;
+pub use environments::*;
 mod harness_id;
 mod records;
 mod requests;

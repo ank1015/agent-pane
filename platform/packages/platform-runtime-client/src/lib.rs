@@ -288,6 +288,22 @@ impl RunClient {
     pub async fn commit(&self, command: &Command<Commit>) -> Result<CommitResponse> {
         self.post("/commits", command).await
     }
+    /// Environments belonging to this run's project; requires a live lease.
+    pub async fn environments(&self) -> Result<Items<Environment>> {
+        self.client
+            .inner
+            .transport
+            .send(self.request(Method::GET, "/environments")?, true)
+            .await
+    }
+    /// Persist the command key before calling. Same-key retries return the
+    /// original record, including after worker takeover or reference deletion.
+    pub async fn create_environment(
+        &self,
+        command: &Command<CreateEnvironment>,
+    ) -> Result<Environment> {
+        self.post("/environments", command).await
+    }
     pub async fn append_events(&self, command: &Command<Events>) -> Result<Items<RunEvent>> {
         self.post("/events", command).await
     }
