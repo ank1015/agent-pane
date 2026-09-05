@@ -7,6 +7,7 @@ mod prompt;
 mod state;
 mod tools;
 
+pub use cc_harness_support::model::supported_models;
 pub use config::{Config, ReasoningLevel, config_schema};
 use execution_client::ExecutionClient;
 use futures_util::future::BoxFuture;

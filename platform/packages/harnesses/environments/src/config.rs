@@ -9,13 +9,7 @@ pub struct Config {
     pub model: ModelRef,
     pub reasoning_level: ReasoningLevel,
     pub account_id: Option<Uuid>,
-    #[serde(default = "enabled")]
-    pub web_search_enabled: bool,
     pub system_prompt_append: Option<String>,
-}
-
-fn enabled() -> bool {
-    true
 }
 
 pub use cc_harness_support::model::ReasoningLevel;
@@ -26,7 +20,6 @@ pub fn config_schema() -> Value {
             "provider":{"enum":["openai","chatgpt","fireworks"]},"id":{"type":"string","minLength":1},"name":{"type":["string","null"]}}},
         "reasoning_level":{"enum":["low","medium","high","xhigh","max"]},
         "account_id":{"type":["string","null"],"format":"uuid"},
-        "web_search_enabled":{"type":"boolean","default":true},
         "system_prompt_append":{"type":["string","null"],"maxLength":8192}
     }})
 }

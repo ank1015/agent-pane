@@ -79,8 +79,9 @@ databases. The test database role needs CREATEDB. No development data is modifie
 
 Set `ENVIRONMENTS_ENABLED=true` to advertise the `environments` implementation.
 It shares the LLM/execution gateway settings with the basic harness. Set
-`FIRECRAWL_API_KEY` for web-enabled runs; without it, config must set
-`web_search_enabled=false` (otherwise the run fails configuration validation).
+`FIRECRAWL_API_KEY` for environments runs; web tools are always enabled and
+there is no configuration flag to disable them. Missing credentials fail the run
+before model dispatch.
 Filesystem targeting is per call; project scope is derived from the run. The
 Platform catalog migration registers its config schema separately from worker
 availability. Neither harness is enabled automatically.
