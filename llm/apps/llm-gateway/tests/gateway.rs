@@ -211,9 +211,97 @@ async fn llm_call_is_authenticated_executed_and_accounted() {
     )
     .await;
 
+    verify_client_runs(&gateway_url, &database, &provider_calls, &provider_release).await;
+
     provider_task.abort();
     gateway_task.abort();
     reset_database(&database).await;
+}
+
+async fn verify_client_runs(
+    url: &str,
+    database: &Database,
+    calls: &AtomicUsize,
+    release: &Semaphore,
+) {
+    use llm_client::{
+        ClientError, CompletionRequest, GatewayErrorKind, IdempotencyKey, LlmClient,
+        LlmClientConfig, RunState, WaitOptions,
+    };
+
+    let mut config = LlmClientConfig::new(url.parse().unwrap(), API_TOKEN);
+    config.allow_insecure_http = true;
+    let client = LlmClient::new(config).unwrap();
+    let key = IdempotencyKey::new("production-client-run").unwrap();
+    let input: CompletionRequest = serde_json::from_value(llm_request()).unwrap();
+    let before = calls.load(Ordering::SeqCst);
+    let run = client.submit(&key, &input).await.unwrap();
+    assert!(matches!(run.state, RunState::Running));
+    let replay = client.submit(&key, &input).await.unwrap();
+    assert_eq!(replay.run_id, run.run_id);
+
+    // A timed out wait leaves the accepted provider call running.
+    let error = client
+        .wait(run.run_id, WaitOptions::new(Duration::from_millis(50)))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ClientError::WaitTimeout { run_id } if run_id == run.run_id));
+    release.add_permits(1);
+    let result = client
+        .wait(run.run_id, WaitOptions::new(Duration::from_secs(5)))
+        .await
+        .unwrap();
+    assert_eq!(result.request_id, run.run_id);
+    assert_eq!(result.message.id.as_str(), "response-integration");
+    assert_eq!(
+        client
+            .complete(&key, &input, WaitOptions::default())
+            .await
+            .unwrap(),
+        result
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), before + 1);
+
+    let mut changed = input.clone();
+    changed.request.instructions = Some("A different request".into());
+    assert!(matches!(client.submit(&key, &changed).await.unwrap_err(),
+        ClientError::Gateway { status: 409, failure } if failure.error.kind == GatewayErrorKind::Conflict));
+
+    sqlx::query("update llm_runs set expires_at = now() - interval '1 second' where id = $1")
+        .bind(run.run_id)
+        .execute(database.pool())
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.get_run(run.run_id).await.unwrap().state,
+        RunState::Expired
+    ));
+    assert!(matches!(
+        client.submit(&key, &input).await.unwrap().state,
+        RunState::Expired
+    ));
+    assert!(matches!(
+        client
+            .wait(run.run_id, WaitOptions::default())
+            .await
+            .unwrap_err(),
+        ClientError::RunExpired { .. }
+    ));
+
+    let mut invalid = input.clone();
+    invalid.request.model.id = "unknown-model".parse().unwrap();
+    let error = client
+        .complete(
+            &IdempotencyKey::new("client-failed-run").unwrap(),
+            &invalid,
+            WaitOptions::new(Duration::from_secs(5)),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ClientError::RunFailed { failure, .. } if failure.error.kind == GatewayErrorKind::UnknownModel)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), before + 1);
 }
 
 fn llm_request() -> Value {

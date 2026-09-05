@@ -31,5 +31,8 @@ url.workspace = true
 uuid.workspace = true
 zeroize.workspace = true
 
+[dev-dependencies]
+llm-client.workspace = true
+
 [lints]
 workspace = true
