@@ -30,7 +30,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     database.migrate().await?;
     let project_service = ProjectService::new(database.pool().clone());
-    let runtime_service = runtime::RuntimeService::new(database.pool().clone());
+    let environment_service = projects::environments::EnvironmentService::new(
+        database.pool().clone(),
+        projects::environments::EnvironmentGateway::new(
+            config.execution_gateway_url.clone(),
+            &config.execution_gateway_token,
+            config.execution_gateway_timeout,
+        )?,
+    );
+    let runtime_service = runtime::RuntimeService::new(database.pool().clone())
+        .with_environments(environment_service.clone());
     let registration_token = zeroize::Zeroizing::new(
         std::env::var("PLATFORM_WORKER_REGISTRATION_TOKEN").unwrap_or_default(),
     );
@@ -66,14 +75,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let admin_app = runtime::admin_router(runtime_service.clone(), admin_token.as_str());
     let reconciler = runtime_service.spawn_reconciler();
     let notifications = runtime_service.spawn_notification_listener();
-    let environment_service = projects::environments::EnvironmentService::new(
-        database.pool().clone(),
-        projects::environments::EnvironmentGateway::new(
-            config.execution_gateway_url.clone(),
-            &config.execution_gateway_token,
-            config.execution_gateway_timeout,
-        )?,
-    );
     let execution_gateway = ExecutionGatewayClient::new(
         config.execution_gateway_url,
         &config.execution_gateway_token,
