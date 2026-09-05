@@ -80,6 +80,19 @@ created from exactly one of these sources:
 uses `execution_e2b::EXECUTION_BASE_TEMPLATE_ID`, whose image contains
 `/usr/local/bin/execution-supervisor`.
 
+`POST /v1/hosts` returns `202 Accepted` with the host resource. Its top-level
+`roots` array is available immediately, including while `state` is `provisioning`
+and `descriptor` is null:
+
+```json
+[{"id":"workspace","name":"Workspace","native_path":"/home/user","read_only":false}]
+```
+
+These roots use the same supervisor configuration as sandbox startup. Once a
+descriptor is available, `roots` reflects its reported roots. Registered hosts
+return an empty array until their descriptor is available. Root availability
+does not imply readiness; wait for `state: "ready"` before executing operations.
+
 Or create from a snapshot known to this gateway:
 
 ```json
@@ -173,8 +186,17 @@ List filters are `state`, `kind`, `e2b_account_id`, and `include_deleted`.
 | `DELETE` | `/v1/snapshots/{id}` | Request provider deletion |
 
 E2B pauses a host when creating its snapshot. After successful snapshot
-creation, the gateway records the source host as `paused`; call its resume
-endpoint before sending another execution operation.
+creation, the gateway records the source host as `paused`. The next execution
+operation (including a Describe/SDK connect) requests resume and waits for the
+supervisor handshake before forwarding the operation. No explicit resume tool
+is required. The gateway waits up to 20 seconds; if still resuming it returns
+retryable `503 HOST_RESUMING` without dispatching the requested operation.
+Deleted hosts and pauses/snapshots in progress are not automatically overridden.
+The explicit resume endpoint remains available for callers that want to start
+compute before executing anything. Snapshot retries with the same key and body
+return the original snapshot even after its source pauses or is deleted; a
+different body with that key conflicts. This replay check precedes mutable host
+validation inside the snapshot transaction.
 
 List filters are `state`, `e2b_account_id`, `source_host_id`, and
 `include_deleted`.

@@ -68,9 +68,28 @@ dependency on the gateway application, provider implementations, or supervisor.
 
 ## Operation semantics
 
+### Gateway management
+
+`list_accounts`, `list_hosts`/`get_host`, `create_host`, `resume_host`, and
+`list_snapshots`/`get_snapshot`/`create_snapshot` use the same authenticated,
+bounded, cancellable transport settings as execution. Types are re-exported
+through `execution_client::api`; list queries use `HostFilter`/`SnapshotFilter`.
+The configured base URL is still the deployment root, not `/v1`.
+
+Creation requires a caller-owned idempotency key (1–255 printable ASCII
+characters without spaces). Persist it and the request before dispatch; reuse
+both after an ambiguous failure. No automatic retries or new keys are generated.
+Lifecycle mutations return the accepted resource state, not a ready guarantee:
+poll `get_host`/`get_snapshot` with a bounded caller-owned recovery policy.
+Restoring a logical gateway snapshot uses its account; base creation can select
+an account or use the gateway default. Listing metadata does not resume hosts.
+
+### Host execution
+
 - **Connection:** performs a live protocol handshake and validates the host
-  descriptor and identity. It does not create or resume hosts. Paused and
-  unavailable hosts return gateway errors.
+  descriptor and identity. It does not create hosts. The gateway resumes paused
+  E2B hosts on use, including this handshake. Other unavailable states return
+  gateway errors. Resume waits are bounded; `HOST_RESUMING` is retryable.
 - **Descriptor:** a snapshot from connection time. Connect again to refresh it.
   The client does not fence every operation to that snapshot's generation; the
   current wire contract has no generation field on filesystem requests or
