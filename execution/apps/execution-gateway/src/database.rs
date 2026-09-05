@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 const HOST_SELECT: &str = r#"
 select h.*, e.e2b_account_id, e.e2b_sandbox_id, e.source_type,
-       e.source_snapshot_id, e.timeout_seconds,
+       e.source_snapshot_id, e.timeout_seconds, e.network_access, e.ram_mb,
        r.installation_id, r.daemon_version, r.protocol_version,
        r.registered_at, r.last_connected_at, r.last_disconnected_at
 from execution_hosts h
@@ -73,6 +73,8 @@ pub struct HostWork {
     pub source_type: String,
     pub source_snapshot_provider_id: Option<String>,
     pub timeout_seconds: u64,
+    pub network_access: bool,
+    pub ram_mb: Option<u32>,
     pub credential: StoredCredential,
 }
 
@@ -372,6 +374,8 @@ impl Database {
         source_type: &str,
         source_snapshot_id: Option<Uuid>,
         timeout_seconds: u64,
+        network_access: bool,
+        ram_mb: Option<u32>,
         idempotency_key: &str,
         request_hash: &str,
     ) -> Result<IdempotentResource, DatabaseError> {
@@ -403,8 +407,9 @@ impl Database {
         .await?;
         sqlx::query(
             "insert into e2b_hosts
-                (host_id, e2b_account_id, source_type, source_snapshot_id, timeout_seconds)
-             values ($1, $2, $3, $4, $5)",
+                (host_id, e2b_account_id, source_type, source_snapshot_id, timeout_seconds,
+                 network_access, ram_mb)
+             values ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(id)
         .bind(e2b_account_id)
@@ -413,6 +418,12 @@ impl Database {
         .bind(i64::try_from(timeout_seconds).map_err(|_| {
             DatabaseError::InvalidData("host timeout does not fit bigint".to_owned())
         })?)
+        .bind(network_access)
+        .bind(
+            ram_mb.map(i32::try_from).transpose().map_err(|_| {
+                DatabaseError::InvalidData("host RAM does not fit integer".to_owned())
+            })?,
+        )
         .execute(&mut *transaction)
         .await?;
         complete_idempotency(
@@ -629,7 +640,7 @@ impl Database {
             "select h.id, h.desired_state, h.observed_state,
                     e.e2b_account_id, e.e2b_sandbox_id, e.source_type,
                     source.e2b_snapshot_id as source_snapshot_provider_id,
-                    e.timeout_seconds,
+                    e.timeout_seconds, e.network_access, e.ram_mb,
                     a.status as account_status, a.credential_ciphertext,
                     a.credential_nonce, a.credential_key_version
              from execution_hosts h
@@ -653,6 +664,15 @@ impl Database {
                 source_type: row.try_get("source_type")?,
                 source_snapshot_provider_id: row.try_get("source_snapshot_provider_id")?,
                 timeout_seconds: to_u64(row.try_get("timeout_seconds")?, "timeout_seconds")?,
+                network_access: row.try_get("network_access")?,
+                ram_mb: row
+                    .try_get::<Option<i32>, _>("ram_mb")?
+                    .map(|value| {
+                        u32::try_from(value).map_err(|_| {
+                            DatabaseError::InvalidData("ram_mb must not be negative".to_owned())
+                        })
+                    })
+                    .transpose()?,
                 credential: StoredCredential {
                     account_id,
                     ciphertext: row.try_get("credential_ciphertext")?,
@@ -1423,6 +1443,7 @@ fn host_from_row(row: sqlx::postgres::PgRow) -> Result<ExecutionHost, DatabaseEr
             let source = match source_type.as_str() {
                 "base" => E2bHostSource::Base {
                     e2b_account_id: Some(account_id),
+                    ram: Some(to_u32(row.try_get("ram_mb")?, "ram_mb")?),
                 },
                 "snapshot" => E2bHostSource::Snapshot {
                     snapshot_id: row.try_get("source_snapshot_id")?,
@@ -1440,6 +1461,7 @@ fn host_from_row(row: sqlx::postgres::PgRow) -> Result<ExecutionHost, DatabaseEr
                     e2b_sandbox_id: row.try_get("e2b_sandbox_id")?,
                     source,
                     timeout_seconds: to_u64(row.try_get("timeout_seconds")?, "timeout_seconds")?,
+                    network_access: row.try_get("network_access")?,
                 }),
                 None,
             )
@@ -1606,6 +1628,11 @@ fn parse_snapshot_state(value: String) -> Result<SnapshotState, DatabaseError> {
 
 fn to_u64(value: i64, field: &str) -> Result<u64, DatabaseError> {
     u64::try_from(value)
+        .map_err(|_| DatabaseError::InvalidData(format!("{field} must not be negative")))
+}
+
+fn to_u32(value: i32, field: &str) -> Result<u32, DatabaseError> {
+    u32::try_from(value)
         .map_err(|_| DatabaseError::InvalidData(format!("{field} must not be negative")))
 }
 
