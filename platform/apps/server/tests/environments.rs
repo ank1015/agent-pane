@@ -78,7 +78,7 @@ async fn concurrent_patches_do_not_lose_updates(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("insert into project_environments (id,project_id,name,type,snapshot_id,workspace_root,path) values ($1,$2,'Test','sandbox',$3,'workspace','.')")
+    sqlx::query("insert into project_environments (id,project_id,name,type,snapshot_id,workspace_root,path) values ($1,$2,'Test','sandbox',$3,'/workspace','.')")
         .bind(id).bind(project).bind(target).execute(&pool).await.unwrap();
     let barrier = Arc::new(tokio::sync::Barrier::new(2));
     let gateway = serve(Router::new().fallback(move || {
@@ -148,7 +148,7 @@ async fn serve(app: Router) -> Server {
 }
 fn payload(kind: &str, target: Uuid) -> Value {
     json!({"name":"Development", "type":kind, "machine_id":if kind == "machine" {Some(target)} else {None},
-        "snapshot_id":if kind == "sandbox" {Some(target)} else {None}, "workspace_root":"workspace", "path":"repo"})
+        "snapshot_id":if kind == "sandbox" {Some(target)} else {None}, "workspace_root":"/Users/test/workspace", "path":"repo"})
 }
 
 #[test]
@@ -295,14 +295,8 @@ async fn crud_scoping_validation_and_database_constraints(pool: PgPool) {
         let created: Value = response.json().await.unwrap();
         assert_eq!(created["type"], kind);
         assert_eq!(created["project_id"], project.to_string());
-        assert_eq!(
-            created["workspace_root_path"],
-            if kind == "machine" {
-                json!("/Users/test/workspace")
-            } else {
-                Value::Null
-            }
-        );
+        assert_eq!(created["workspace_root"], "/Users/test/workspace");
+        assert!(created.get("workspace_root_path").is_none());
         let id = created["id"].as_str().unwrap();
         let url = format!("{base}/{id}");
         let scoped = format!("{}/api/projects/{other}/environments/{id}", app.url);
@@ -337,16 +331,10 @@ async fn crud_scoping_validation_and_database_constraints(pool: PgPool) {
         );
 
         if kind == "machine" {
-            // Simulate a pre-migration record; the same root ID can resolve its missing path.
-            sqlx::query("update project_environments set workspace_root_path=null where id=$1")
-                .bind(Uuid::parse_str(id).unwrap())
-                .execute(&pool)
-                .await
-                .unwrap();
-            for (root, native_path) in [
-                ("workspace", "/Users/test/workspace"),
-                ("other", "C:\\workspace"),
-                ("workspace", "/Users/test/workspace"),
+            for root in [
+                "/Users/test/workspace",
+                "C:\\workspace",
+                "/Users/test/workspace",
             ] {
                 let response = client
                     .patch(&url)
@@ -357,7 +345,7 @@ async fn crud_scoping_validation_and_database_constraints(pool: PgPool) {
                 assert_eq!(response.status(), StatusCode::OK);
                 let refreshed: Value = response.json().await.unwrap();
                 assert_eq!(refreshed["workspace_root"], root);
-                assert_eq!(refreshed["workspace_root_path"], native_path);
+                assert!(refreshed.get("workspace_root_path").is_none());
             }
             let spoofed = client
                 .patch(&url)
@@ -378,10 +366,7 @@ async fn crud_scoping_validation_and_database_constraints(pool: PgPool) {
         let renamed: Value = renamed.json().await.unwrap();
         assert_eq!(renamed["name"], "Renamed");
         assert_eq!(renamed["created_at"], created["created_at"]);
-        assert_eq!(
-            renamed["workspace_root_path"],
-            created["workspace_root_path"]
-        );
+        assert_eq!(renamed["workspace_root"], created["workspace_root"]);
         assert_ne!(renamed["updated_at"], created["updated_at"]);
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -432,7 +417,7 @@ async fn crud_scoping_validation_and_database_constraints(pool: PgPool) {
     }
 
     let mut invalid_root = payload("machine", Uuid::new_v4());
-    invalid_root["workspace_root"] = json!("unknown");
+    invalid_root["workspace_root"] = json!("/unknown");
     assert_eq!(
         client
             .post(&base)
@@ -455,7 +440,7 @@ async fn crud_scoping_validation_and_database_constraints(pool: PgPool) {
             .status(),
         StatusCode::PAYLOAD_TOO_LARGE
     );
-    let invalid = sqlx::query("insert into project_environments (id,project_id,name,type,workspace_root,path) values ($1,$2,'Bad','machine','workspace','.')")
+    let invalid = sqlx::query("insert into project_environments (id,project_id,name,type,workspace_root,path) values ($1,$2,'Bad','machine','/workspace','.')")
         .bind(Uuid::new_v4()).bind(project).execute(&pool).await;
     assert!(
         invalid

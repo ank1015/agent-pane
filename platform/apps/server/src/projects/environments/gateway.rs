@@ -50,10 +50,7 @@ impl EnvironmentGateway {
         Ok(Self { http, base })
     }
 
-    pub(super) async fn validate(
-        &self,
-        input: &CreateEnvironment,
-    ) -> Result<Option<String>, EnvironmentError> {
+    pub(super) async fn validate(&self, input: &CreateEnvironment) -> Result<(), EnvironmentError> {
         match input.kind {
             EnvironmentType::Machine => {
                 let id = input
@@ -76,7 +73,7 @@ impl EnvironmentGateway {
                 let root = descriptor
                     .roots
                     .into_iter()
-                    .find(|root| root.id == input.workspace_root)
+                    .find(|root| root.native_path == input.workspace_root)
                     .ok_or(EnvironmentError::Reference(
                         "workspace_root is not a configured root on this machine.",
                     ))?;
@@ -86,7 +83,7 @@ impl EnvironmentGateway {
                 {
                     return Err(EnvironmentError::Gateway);
                 }
-                Ok(Some(root.native_path))
+                Ok(())
             }
             EnvironmentType::Sandbox => {
                 let id = input
@@ -104,9 +101,9 @@ impl EnvironmentGateway {
                         "Choose a ready, non-deleted snapshot.",
                     ));
                 }
-                // Snapshot records do not advertise execution roots. Root/path existence
-                // must be checked when a sandbox is eventually instantiated, not here.
-                Ok(None)
+                // Persist the caller's absolute path; verify it against the restored
+                // host when used. Do not start a sandbox just to register a record.
+                Ok(())
             }
         }
     }
@@ -165,7 +162,6 @@ struct Descriptor {
 }
 #[derive(Deserialize)]
 struct Root {
-    id: String,
     native_path: String,
 }
 #[derive(Deserialize)]

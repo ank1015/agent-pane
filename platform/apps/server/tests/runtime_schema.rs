@@ -10,6 +10,9 @@ struct Fixture {
 }
 
 async fn fixture(pool: &PgPool) -> Fixture {
+    fixture_version(pool, true).await
+}
+async fn fixture_version(pool: &PgPool, has_session_config: bool) -> Fixture {
     let f = Fixture {
         project: Uuid::new_v4(),
         session: Uuid::new_v4(),
@@ -27,12 +30,16 @@ async fn fixture(pool: &PgPool) -> Fixture {
         .unwrap();
     sqlx::query("insert into workers (id, build_id, supported_harnesses, capacity) values ($1, 'test-build', array['test'], 4)")
         .bind(f.worker).execute(pool).await.unwrap();
-    sqlx::query("insert into sessions (id, project_id, harness_id) values ($1, $2, 'test')")
-        .bind(f.session)
-        .bind(f.project)
-        .execute(pool)
-        .await
-        .unwrap();
+    sqlx::query(if has_session_config {
+        "insert into sessions (id, project_id, harness_id,config) values ($1, $2, 'test','{}')"
+    } else {
+        "insert into sessions (id, project_id, harness_id) values ($1, $2, 'test')"
+    })
+    .bind(f.session)
+    .bind(f.project)
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::query("insert into runs (id, project_id, session_id) values ($1, $2, $3)")
         .bind(f.run)
         .bind(f.project)
@@ -123,7 +130,7 @@ async fn creates_runtime_tables_without_replacing_project_data(pool: PgPool) {
         .fetch_one(&pool).await.unwrap();
     assert_eq!(count, 13);
     let f = fixture(&pool).await;
-    sqlx::query("insert into project_environments (id,project_id,name,type,machine_id,workspace_root,path) values ($1,$2,'Existing environment','machine',$3,'root','.')")
+    sqlx::query("insert into project_environments (id,project_id,name,type,machine_id,workspace_root,path) values ($1,$2,'Existing environment','machine',$3,'/','.')")
         .bind(Uuid::new_v4()).bind(f.project).bind(Uuid::new_v4()).execute(&pool).await.unwrap();
     assert_eq!(
         sqlx::query_scalar::<_, i64>("select count(*) from project_environments")
@@ -187,7 +194,7 @@ async fn forks_share_immutable_content_and_require_a_complete_exact_prefix(pool:
     let second = message(&pool, &f, "{\"role\":\"assistant\",\"content\":[]}").await;
     let child = Uuid::new_v4();
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("insert into sessions (id,project_id,harness_id,forked_from_session_id,forked_at_revision) values ($1,$2,'test',$3,2)")
+    sqlx::query("insert into sessions (id,project_id,harness_id,forked_from_session_id,forked_at_revision,config) values ($1,$2,'test',$3,2,'{}')")
         .bind(child).bind(f.project).bind(f.session).execute(&mut *tx).await.unwrap();
     sqlx::query("insert into session_messages (project_id,session_id,revision,message_id) select project_id,$1,revision,message_id from session_messages where session_id=$2 and revision<=2 order by revision")
         .bind(child).bind(f.session).execute(&mut *tx).await.unwrap();
@@ -231,10 +238,10 @@ async fn forks_share_immutable_content_and_require_a_complete_exact_prefix(pool:
             .await,
         "23514",
     );
-    rejected(sqlx::query("insert into sessions (id,project_id,harness_id,forked_from_session_id,forked_at_revision) values ($1,$2,'test',$3,3)")
+    rejected(sqlx::query("insert into sessions (id,project_id,harness_id,forked_from_session_id,forked_at_revision,config) values ($1,$2,'test',$3,3,'{}')")
         .bind(Uuid::new_v4()).bind(f.project).bind(f.session).execute(&pool).await, "23514");
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("insert into sessions (id,project_id,harness_id,forked_from_session_id,forked_at_revision) values ($1,$2,'test',$3,2)")
+    sqlx::query("insert into sessions (id,project_id,harness_id,forked_from_session_id,forked_at_revision,config) values ($1,$2,'test',$3,2,'{}')")
         .bind(Uuid::new_v4()).bind(f.project).bind(f.session).execute(&mut *tx).await.unwrap();
     rejected(tx.commit().await, "23514");
     rejected(
@@ -685,12 +692,14 @@ async fn abort_acknowledgement_releases_lease_and_local_waits_without_stopping_c
     let w = wait(&pool, &f, "any", 1).await;
     let session = Uuid::new_v4();
     let child = Uuid::new_v4();
-    sqlx::query("insert into sessions (id,project_id,harness_id) values ($1,$2,'test')")
-        .bind(session)
-        .bind(f.project)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "insert into sessions (id,project_id,harness_id,config) values ($1,$2,'test','{}')",
+    )
+    .bind(session)
+    .bind(f.project)
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("insert into runs (id,project_id,session_id,parent_run_id) values ($1,$2,$3,$4)")
         .bind(child)
         .bind(f.project)
@@ -754,12 +763,14 @@ async fn run_dependencies_cannot_report_completion_while_the_target_is_live(pool
     let f = fixture(&pool).await;
     let session = Uuid::new_v4();
     let child = Uuid::new_v4();
-    sqlx::query("insert into sessions (id,project_id,harness_id) values ($1,$2,'test')")
-        .bind(session)
-        .bind(f.project)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "insert into sessions (id,project_id,harness_id,config) values ($1,$2,'test','{}')",
+    )
+    .bind(session)
+    .bind(f.project)
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("insert into runs (id,project_id,session_id,parent_run_id) values ($1,$2,$3,$4)")
         .bind(child)
         .bind(f.project)
@@ -840,7 +851,7 @@ async fn upgrade_preserves_existing_projects_and_environments(pool: PgPool) {
     .await
     .unwrap();
     tx.commit().await.unwrap();
-    let existing = fixture(&pool).await;
+    let existing = fixture_version(&pool, false).await;
     claim(&pool, &existing).await;
     sqlx::query("insert into run_checkpoints(run_id,state,saved_by_lease_epoch) values($1,'{\"phase\":\"existing\"}',1)")
         .bind(existing.run).execute(&pool).await.unwrap();
@@ -848,9 +859,17 @@ async fn upgrade_preserves_existing_projects_and_environments(pool: PgPool) {
         include_str!("../migrations/20260904030000_worker_runtime.sql"),
         include_str!("../migrations/20260904040000_allow_empty_workers.sql"),
         include_str!("../migrations/20260904050000_create_session_state.sql"),
+        include_str!("../migrations/20260905060000_session_configuration.sql"),
+        include_str!("../migrations/20260906000000_environment_native_paths.sql"),
     ] {
         sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     }
+    let frozen: serde_json::Value = sqlx::query_scalar("select config from sessions where id=$1")
+        .bind(existing.session)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(frozen, serde_json::json!({}));
     assert_eq!(
         sqlx::query_scalar::<_, String>(
             "select state->>'phase' from run_checkpoints where run_id=$1"
@@ -878,7 +897,7 @@ async fn upgrade_preserves_existing_projects_and_environments(pool: PgPool) {
     );
     assert_eq!(
         sqlx::query_scalar::<_, String>(
-            "select workspace_root_path || path from project_environments where id=$1"
+            "select workspace_root || path from project_environments where id=$1"
         )
         .bind(environment)
         .fetch_one(&pool)

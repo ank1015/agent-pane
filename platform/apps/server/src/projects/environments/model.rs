@@ -23,7 +23,6 @@ pub struct Environment {
     pub machine_id: Option<Uuid>,
     pub snapshot_id: Option<Uuid>,
     pub workspace_root: String,
-    pub workspace_root_path: Option<String>,
     pub path: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -79,17 +78,13 @@ impl CreateEnvironment {
                 "Machine environments require only machine_id; sandbox environments require only snapshot_id.",
             ));
         }
-        if self.workspace_root.trim() != self.workspace_root
-            || self.workspace_root.is_empty()
-            || self.workspace_root.len() > 128
-            || self.workspace_root.chars().any(char::is_control)
-        {
+        if !platform_runtime_contracts::is_absolute_workspace_root(&self.workspace_root) {
             return Err(EnvironmentError::Invalid(
-                "workspace_root must be a root ID of 1–128 bytes.",
+                "workspace_root must be an absolute native path of at most 4096 bytes, without control characters or dot/parent segments.",
             ));
         }
-        let root = RootId::new(self.workspace_root.clone())
-            .map_err(|_| EnvironmentError::Invalid("Invalid workspace root ID."))?;
+        // ExecutionPath validates only the portable relative portion here.
+        let root = RootId::new("workspace").expect("static root ID");
         if self.path.len() > 4096
             || self.path.chars().any(char::is_control)
             || ExecutionPath::new(root, self.path.clone()).is_err()

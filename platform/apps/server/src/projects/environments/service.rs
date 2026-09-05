@@ -55,9 +55,9 @@ impl EnvironmentService {
     ) -> Result<Environment, EnvironmentError> {
         input.validate()?;
         self.require_project(project_id).await?;
-        let root_path = self.gateway.validate(&input).await?;
+        self.gateway.validate(&input).await?;
         let mut tx = self.pool.begin().await?;
-        let environment = Self::insert(&mut tx, project_id, input, root_path).await?;
+        let environment = Self::insert(&mut tx, project_id, input).await?;
         tx.commit().await?;
         Ok(environment)
     }
@@ -65,7 +65,7 @@ impl EnvironmentService {
     pub(crate) async fn validate_reference(
         &self,
         input: &CreateEnvironment,
-    ) -> Result<Option<String>, EnvironmentError> {
+    ) -> Result<(), EnvironmentError> {
         input.validate()?;
         self.gateway.validate(input).await
     }
@@ -74,11 +74,9 @@ impl EnvironmentService {
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         project_id: Uuid,
         input: CreateEnvironment,
-        root_path: Option<String>,
     ) -> Result<Environment, EnvironmentError> {
-        Ok(sqlx::query_as("insert into project_environments (id, project_id, name, type, machine_id, snapshot_id, workspace_root, path, workspace_root_path) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *")
+        Ok(sqlx::query_as("insert into project_environments (id, project_id, name, type, machine_id, snapshot_id, workspace_root, path) values ($1,$2,$3,$4,$5,$6,$7,$8) returning *")
             .bind(Uuid::now_v7()).bind(project_id).bind(input.name).bind(input.kind).bind(input.machine_id).bind(input.snapshot_id).bind(input.workspace_root).bind(input.path)
-            .bind(root_path)
             .fetch_one(&mut **tx).await?)
     }
 
@@ -89,24 +87,20 @@ impl EnvironmentService {
         patch: UpdateEnvironment,
     ) -> Result<Environment, EnvironmentError> {
         let old = self.get(project_id, id).await?;
-        // Explicitly supplying the root ID also refreshes its stored native path.
-        let refresh_root = patch.workspace_root.is_some();
+        let validate_root = patch.workspace_root.is_some();
         let input = patch.merge(&old)?;
-        let root_path = if refresh_root
+        if validate_root
             || input.machine_id != old.machine_id
             || input.snapshot_id != old.snapshot_id
             || input.workspace_root != old.workspace_root
             || input.path != old.path
         {
-            self.gateway.validate(&input).await?
-        } else {
-            old.workspace_root_path.clone()
-        };
+            self.gateway.validate(&input).await?;
+        }
         // No transaction/row lock is held across a gateway request. Compare the
         // original timestamp so concurrent PATCH operations cannot silently lose edits.
-        sqlx::query_as("update project_environments set name=$3, machine_id=$4, snapshot_id=$5, workspace_root=$6, path=$7, workspace_root_path=$9 where project_id=$1 and id=$2 and updated_at=$8 returning *")
+        sqlx::query_as("update project_environments set name=$3, machine_id=$4, snapshot_id=$5, workspace_root=$6, path=$7 where project_id=$1 and id=$2 and updated_at=$8 returning *")
             .bind(project_id).bind(id).bind(input.name).bind(input.machine_id).bind(input.snapshot_id).bind(input.workspace_root).bind(input.path).bind(old.updated_at)
-            .bind(root_path)
             .fetch_optional(&self.pool).await?.ok_or(EnvironmentError::Conflict)
     }
 

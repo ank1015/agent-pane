@@ -13,11 +13,30 @@ fn parts(value: &str, windows: bool) -> ExecutionResult<(String, Vec<String>)> {
             "file_path must be nonempty and contain no NUL bytes",
         ));
     }
-    let value = if windows {
+    let mut value = if windows {
         value.replace('\\', "/")
     } else {
         value.to_owned()
     };
+    // Windows canonicalize advertises verbatim paths. Accept only filesystem
+    // drive/UNC forms, not arbitrary device namespaces (GLOBALROOT, pipes, etc.).
+    // Normalize for lexical root matching only; the supervisor retains its
+    // canonical root and performs the actual filesystem/security checks.
+    if windows && let Some(tail) = value.strip_prefix("//?/") {
+        value = if tail
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("UNC/"))
+        {
+            format!("//{}", &tail[4..])
+        } else if tail.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+            && tail.as_bytes().get(1) == Some(&b':')
+            && tail.as_bytes().get(2) == Some(&b'/')
+        {
+            tail.to_owned()
+        } else {
+            return Err(error(Code::InvalidPath, "unsupported Windows device path"));
+        };
+    }
     let (prefix, tail) = if windows && value.starts_with("//") {
         let tail = &value[2..];
         let mut segments = tail.splitn(3, '/');
@@ -242,7 +261,9 @@ mod tests {
         for value in [
             r"C:relative.txt",
             r"\rooted.txt",
-            r"\\?\C:\Users\Ank\work\a",
+            r"\\?\C:relative",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\a",
+            r"\\?\UNC\server",
             r"\\.\pipe\name",
             r"C:\Users\Ank\work-other\a",
             r"..\a",
@@ -251,6 +272,52 @@ mod tests {
             "a ",
         ] {
             assert!(resolve(&host, &cwd, value).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn windows_verbatim_roots_and_inputs_match_ordinary_paths() {
+        for roots in [
+            [
+                ("c", r"\\?\C:\"),
+                ("e", r"\\?\E:\"),
+                ("share", r"\\?\UNC\server\share\project"),
+            ],
+            [
+                ("c", r"C:\"),
+                ("e", r"E:\"),
+                ("share", r"\\server\share\project"),
+            ],
+        ] {
+            let host = host(PathConvention::Windows, &roots);
+            let cwd = ExecutionPath::new(RootId::new("c").unwrap(), ".").unwrap();
+            for value in [r"\\?\C:\", r"C:\", "C:/", "//?/c:/"] {
+                assert_eq!(resolve(&host, &cwd, value).unwrap(), cwd);
+            }
+            for value in [
+                r"E:\Users\Ank\Desktop\test",
+                r"\\?\E:\Users\Ank\Desktop\test",
+            ] {
+                let path = resolve(&host, &cwd, value).unwrap();
+                assert_eq!(path.root_id.as_str(), "e");
+                assert_eq!(path.path, "Users/Ank/Desktop/test");
+            }
+            for value in [
+                r"\\server\share\project\file",
+                r"\\?\UNC\server\share\project\file",
+            ] {
+                let path = resolve(&host, &cwd, value).unwrap();
+                assert_eq!(path.root_id.as_str(), "share");
+                assert_eq!(path.path, "file");
+            }
+            for value in [
+                r"\\?\C:\..\file",
+                r"\\?\C:\file:stream",
+                r"\\?\C:\file.",
+                r"\\?\C:\file ",
+            ] {
+                assert!(resolve(&host, &cwd, value).is_err(), "{value}");
+            }
         }
     }
 }

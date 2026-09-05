@@ -213,7 +213,7 @@ Example create body:
   "type": "machine",
   "machine_id": "018f47a8-80cc-7b2f-9d44-6657f5f82ad0",
   "snapshot_id": null,
-  "workspace_root": "workspace",
+  "workspace_root": "/home/user",
   "path": "."
 }
 ```
@@ -222,18 +222,19 @@ Responses add `id`, `project_id`, `created_at`, and `updated_at`. A `machine`
 requires only `machine_id`; a `sandbox` requires only `snapshot_id` (the gateway
 snapshot record UUID, not an external E2B identifier). The unused reference is
 null. Identity, project ownership, and type cannot be changed. Names need not be
-unique and are limited to 128 characters. Root IDs are limited to 128 bytes;
-relative paths to 4096 bytes. `workspace_root` is a gateway root ID, not an
-absolute filesystem path. Responses also include `workspace_root_path`, a separate
-nullable field containing the last validated absolute native path from the
-machine's gateway descriptor. Clients cannot supply this field. Creation and
-target/root/path changes resolve it server-side; explicitly patching the same
-`workspace_root` ID refreshes it (also useful for backfilling older records).
-Renames preserve it without contacting the gateway. It is saved metadata, not a
-live guarantee: a machine can change its registered root later. Sandbox snapshots
-do not expose root paths, so their value remains null rather than being guessed.
-The dashboard shows this native path in Workspace root; root and environment IDs
-remain in the API but are not displayed beneath the root path or environment name.
+unique and are limited to 128 characters. `workspace_root` is the absolute native
+workspace path (POSIX, Windows drive, or UNC), limited to 4096 bytes; `path` is
+relative to it, with `.` selecting the root. Machine roots must match the gateway
+descriptor. Sandbox paths are supplied from discovery and verified against the
+restored host when used; registration never provisions compute. Renames do not
+contact the gateway. The API has no root-ID or `workspace_root_path` field.
+
+Before upgrading an existing database, run `node scripts/backfill-environment-roots.mjs`
+from this server folder, then start the server to apply migrations. The preflight
+uses gateway metadata to fill unresolved legacy root paths without waking sandboxes.
+It stops on unknown roots; the migration also refuses unresolved records rather
+than guessing paths. Session/run history stays immutable; the basic harness privately
+supports legacy root-ID configurations.
 Paths use execution-core validation: `.` means the
 root itself; absolute paths, traversal, backslashes, and empty segments are rejected.
 
@@ -276,7 +277,7 @@ deployment/autoscaling remain separate work.
 | --- | --- |
 | `harnesses` | Registered implementation IDs, configuration defaults, and availability |
 | `workers` | Build, supported harnesses, capacity, and heartbeat metadata |
-| `sessions` | Project-owned history, a fixed harness, and optional fork provenance |
+| `sessions` | Project-owned history, a fixed harness and resolved configuration, and optional fork provenance |
 | `runs` | Parent/child relationships, configuration, scheduling, leases, and lifecycle |
 | `messages` | Immutable common-envelope message content, including custom messages |
 | `session_messages` | Ordered history membership; forks share message records |
@@ -288,6 +289,9 @@ deployment/autoscaling remain separate work.
 | `runtime_requests` | Scoped idempotency receipts committed with their effects |
 | `worker_credentials` | Hashed per-process credentials, separate from metadata |
 | `worker_claim_requests` | Idempotent assignment-allocation receipts |
+
+See [CHAT_RUNTIME_API.md](CHAT_RUNTIME_API.md) for session creation/fork configuration,
+accepted-input reconciliation, harness-owned environment resolution, and live chat reads.
 
 The migration enforces project-scoped relationships, one live run per session,
 immutable history and identity, exact fork prefixes, monotonic versions and lease
@@ -340,6 +344,26 @@ cargo run -p platform-server --example migrate
 ```
 
 ## Run locally
+
+### Worker work-availability notifications
+
+`GET /internal/workers/{id}/work-available?wait_seconds=25` uses the existing
+per-process worker token and returns `{"available":true|false}`. The optional
+wait is bounded to 0–25 seconds (default 25); zero is an immediate check.
+This is a read-only hint: it does not claim runs, renew leases, or count as a
+heartbeat. Offline workers receive `WORKER_STATE_CONFLICT`.
+
+The server subscribes before checking the database, preventing a lost wake-up
+between checking and waiting. Eligibility matches claims: supported harness,
+accepting worker, free registered capacity, and either due ready work or expired
+running work. Existing PostgreSQL notifications carry hints across Platform
+replicas. Hint bursts are coalesced; a check at most five seconds later also catches
+missed hints, future availability and lease expiry. Every wait has a final check.
+
+No transaction, row lock, or pool connection is held while awaiting a hint.
+The existing ready/lease/worker indexes support these reads; no migration or
+additional infrastructure is required. Keep any reverse-proxy request timeout
+longer than the 25-second wait plus response overhead.
 
 Projects use a dedicated PostgreSQL database configured with
 `PLATFORM_SERVER_DATABASE_URL`. Create an empty `platform_server` database and
