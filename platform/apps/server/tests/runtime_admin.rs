@@ -158,8 +158,48 @@ async fn harness_upsert_patch_validation_and_authentication(pool: PgPool) {
     }
     let first = app.harness().await;
     assert_eq!(first["enabled"], true);
+    assert_eq!(first["supported_models"], json!({}));
+    let models =
+        json!({"openai":["example-model"],"fireworks":["accounts/fireworks/models/example"]});
+    let capabilities = app
+        .request(
+            Method::PATCH,
+            "/internal/harnesses/test",
+            ADMIN,
+            Some(json!({"supported_models":models})),
+            200,
+        )
+        .await;
+    assert_eq!(capabilities["supported_models"], models);
+    let fetched = app
+        .request(Method::GET, "/api/harnesses/test", "", None, 200)
+        .await;
+    assert_eq!(fetched["supported_models"], models);
+    let listed = app
+        .request(Method::GET, "/api/harnesses", "", None, 200)
+        .await;
+    assert_eq!(
+        listed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["id"] == "test")
+            .unwrap()["supported_models"],
+        models
+    );
+    let registered = app
+        .request(
+            Method::PUT,
+            "/internal/harnesses/with-models",
+            ADMIN,
+            Some(json!({"name":"With models","supported_models":models})),
+            200,
+        )
+        .await;
+    assert_eq!(registered["supported_models"], models);
     let patched=app.request(Method::PATCH,"/internal/harnesses/test",ADMIN,Some(json!({"enabled":false,"description":"Example","default_config":{"keep":1,"remove":2},"config_schema":{"type":"object","required":["model"]}})),200).await;
     assert_eq!(patched["name"], "Test");
+    assert_eq!(patched["supported_models"], models);
     assert_eq!(patched["enabled"], false);
     let patched = app
         .request(
@@ -180,6 +220,15 @@ async fn harness_upsert_patch_validation_and_authentication(pool: PgPool) {
         json!({"name":null}),
         json!({"enabled":null}),
         json!({"default_config":null}),
+        json!({"supported_models":null}),
+        json!({"supported_models":[]}),
+        json!({"supported_models":{"openai":"model"}}),
+        json!({"supported_models":{"openai":[null]}}),
+        json!({"supported_models":{"openai":[""]}}),
+        json!({"supported_models":{"openai":["a","a"]}}),
+        json!({"supported_models":{"Bad Provider":["a"]}}),
+        json!({"supported_models":{"openai":[" a "]}}),
+        json!({"supported_models":{"openai":["a\nb"]}}),
         json!({"name":" bad "}),
         json!({"config_schema":{"type":123}}),
         json!({"config_schema":{"$ref":"https://example.invalid/schema"}}),
@@ -226,6 +275,7 @@ async fn harness_upsert_patch_validation_and_authentication(pool: PgPool) {
     let replaced = app.harness().await;
     assert_eq!(replaced["created_at"], first["created_at"]);
     assert_eq!(replaced["default_config"], json!({}));
+    assert_eq!(replaced["supported_models"], json!({}));
     assert_eq!(replaced["enabled"], true);
     let response = app
         .client

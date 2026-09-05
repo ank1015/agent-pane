@@ -1,5 +1,60 @@
 # Platform server
 
+## Project landing bootstrap
+
+`GET /api/projects/{project_id}/bootstrap` returns exactly three arrays:
+
+```json
+{"harnesses": [], "provider_accounts": [], "project_environments": []}
+```
+
+`harnesses` contains all enabled catalog entries, with the same fields as
+`GET /api/harnesses` items (including `config_schema`, `default_config`, and
+`supported_models`). Catalog availability does not guarantee an online worker.
+`provider_accounts` contains the same credential-free summaries as
+`GET /api/providers`, including disabled/reauth-required accounts and their status;
+the UI should only offer usable accounts matching the selected harness provider.
+`project_environments` contains that project's existing environment records,
+including native workspace-root paths. No host or snapshot discovery is performed.
+
+Malformed project UUIDs return 400; missing projects return 404 before contacting
+the LLM gateway. After project validation, independent reads run concurrently
+without holding a database transaction across the gateway request. A failed source
+fails the request (no partial-success empty arrays); existing sanitized gateway
+timeout/status handling applies. Every response has `Cache-Control: no-store`.
+The frontend can cache this GET through its query library. This is a fresh
+aggregate, not a cross-service transactional snapshot.
+
+Like the existing dashboard APIs, this endpoint is local-development/single-user:
+provider accounts are gateway-wide, not filtered by an authenticated user. Add
+user/project authorization before exposing it to multiple users. This endpoint
+does not create sessions/runs. The project landing UI consumes it with a
+project-scoped query cache, bounded transient retries, and foreground/focus/reconnect
+refreshes. It intersects enabled accounts with harness model capabilities and
+derives reasoning/web-search controls from the selected harness schema. The
+`environments` harness hides the environment picker. Starting runs is not wired yet.
+
+## Harness model capabilities
+
+Harness catalog records returned by `GET /api/harnesses` and
+`GET /api/harnesses/{id}` include `supported_models`, a JSON object mapping
+provider IDs to explicit model-ID arrays, alongside `config_schema` and
+`default_config`. For example: `{"openai":["gpt-5.6-sol"]}`.
+
+Authenticated `PUT /internal/harnesses/{id}` accepts this field (omission defaults
+to `{}`); `PATCH` replaces the whole map when supplied and preserves it otherwise.
+Empty maps mean no declared capabilities, not support for every model. Provider
+keys use the same lowercase ID syntax as harness IDs. Model IDs must be nonempty,
+unique within a provider, at most 512 characters, and free of surrounding
+whitespace/control characters. Maps are limited to 64 providers, 1,000 models per
+provider, and 64 KiB. These are catalog metadata, not account availability or new
+run-validation rules; the harness still validates its own configuration.
+
+The environments migration seeds its map from the current compiled catalogs.
+Its package exports `supported_models()` and a parity test detects catalog drift;
+update registration metadata with a new migration or the admin API when changing
+those catalogs. Worker registration continues to advertise only harness IDs.
+
 The Rust API used by the platform dashboard.
 
 ## Machines API
