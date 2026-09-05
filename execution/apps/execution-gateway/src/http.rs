@@ -1003,11 +1003,41 @@ async fn execute_operation(
         )
         .retryable(true)
     })?;
-    let host = state
+    let mut host = state
         .database
         .host(host_id, false)
         .await?
         .ok_or_else(|| GatewayError::not_found("execution host"))?;
+    if host.kind == ExecutionHostKind::E2b
+        && matches!(
+            host.state,
+            ExecutionHostState::Paused | ExecutionHostState::Resuming
+        )
+        && host.desired_state != execution_api::DesiredHostState::Deleted
+    {
+        state.database.resume_host_on_use(host_id).await?;
+        kick(&state);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            host = state
+                .database
+                .host(host_id, false)
+                .await?
+                .ok_or_else(|| GatewayError::not_found("execution host"))?;
+            if host.state != ExecutionHostState::Resuming {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(GatewayError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "HOST_RESUMING",
+                    "host is still resuming; retry the same operation",
+                )
+                .retryable(true));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
     if host.state != ExecutionHostState::Ready
         || host.desired_state != execution_api::DesiredHostState::Ready
     {
@@ -1100,23 +1130,6 @@ async fn create_snapshot(
     Json(request): Json<CreateSnapshotRequest>,
 ) -> Result<Response, GatewayError> {
     validate_object(&request.metadata, "metadata")?;
-    let host = state
-        .database
-        .host(host_id, false)
-        .await?
-        .ok_or_else(|| GatewayError::not_found("execution host"))?;
-    if host.kind != ExecutionHostKind::E2b {
-        return Err(GatewayError::conflict(
-            "HOST_OPERATION_UNSUPPORTED",
-            "Registered Hosts do not support snapshots",
-        ));
-    }
-    if host.state != ExecutionHostState::Ready {
-        return Err(GatewayError::conflict(
-            "HOST_NOT_READY",
-            "only a ready host can be snapshotted",
-        ));
-    }
     let name = request
         .name
         .clone()

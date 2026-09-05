@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use execution_core::ExecutionHostDescriptor;
+use execution_core::{ExecutionHostDescriptor, ExecutionRoot};
 use execution_wire::{RequestEnvelope, ResponseEnvelope};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -189,6 +189,9 @@ pub struct ExecutionHost {
     pub status_message: Option<String>,
     pub status_retryable: bool,
     pub descriptor: Option<ExecutionHostDescriptor>,
+    /// Filesystem roots, available for E2B hosts even before provisioning completes.
+    /// Registered hosts expose their reported roots once a descriptor is available.
+    pub roots: Vec<ExecutionRoot>,
     pub metadata: Value,
     pub e2b: Option<E2bHostBinding>,
     pub registered: Option<RegisteredHostBinding>,

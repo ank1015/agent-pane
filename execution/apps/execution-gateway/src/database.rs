@@ -5,7 +5,8 @@ use execution_api::{
     E2bHostSource, E2bSnapshot, ExecutionHost, ExecutionHostKind, ExecutionHostState,
     RegisteredHostBinding, SnapshotState,
 };
-use execution_core::ExecutionHostDescriptor;
+use execution_core::{ExecutionHostDescriptor, ExecutionRoot};
+use execution_e2b::SupervisorConfig;
 use serde_json::Value;
 use sqlx::{Error as SqlxError, PgPool, Postgres, Row, Transaction, postgres::PgPoolOptions};
 use thiserror::Error;
@@ -38,6 +39,12 @@ pub enum DatabaseError {
     IdempotencyConflict,
     #[error("the idempotency record does not reference the expected resource")]
     InvalidIdempotencyRecord,
+    #[error("host is not ready for snapshotting")]
+    SnapshotHostNotReady,
+    #[error("registered hosts do not support snapshots")]
+    SnapshotUnsupported,
+    #[error("execution host not found")]
+    HostNotFound,
 }
 
 #[derive(Clone, Debug)]
@@ -571,6 +578,14 @@ impl Database {
         self.host(id, true).await
     }
 
+    /// Resume-on-use is conditional: never resurrect deleted hosts or interrupt
+    /// a pause/snapshot in progress. Concurrent callers share the reconciler.
+    pub async fn resume_host_on_use(&self, id: Uuid) -> Result<(), DatabaseError> {
+        sqlx::query("update execution_hosts set desired_state='ready', observed_state='resuming', reconcile_after=now(), revision=revision+1 where id=$1 and kind='e2b' and desired_state='paused' and observed_state='paused' and deleted_at is null and not exists(select 1 from e2b_snapshots where source_host_id=$1 and desired_state='ready' and observed_state='creating')")
+            .bind(id).execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn schedule_host_reconcile(
         &self,
         id: Uuid,
@@ -1028,6 +1043,17 @@ impl Database {
                 replayed: true,
             });
         }
+        // Replay is resolved above, before checking mutable host state. A
+        // completed snapshot pauses its source, but its receipt remains valid.
+        let host: Option<(String, String, String)> = sqlx::query_as("select kind, desired_state, observed_state from execution_hosts where id=$1 and deleted_at is null for update")
+            .bind(host_id).fetch_optional(&mut *transaction).await?;
+        let (kind, desired, observed) = host.ok_or(DatabaseError::HostNotFound)?;
+        if kind != "e2b" {
+            return Err(DatabaseError::SnapshotUnsupported);
+        }
+        if desired != "ready" || observed != "ready" {
+            return Err(DatabaseError::SnapshotHostNotReady);
+        }
         let account_id: Uuid = sqlx::query_scalar(
             "select e.e2b_account_id from execution_hosts h
              join e2b_hosts e on e.host_id = h.id
@@ -1385,7 +1411,7 @@ fn credential_from_row(row: sqlx::postgres::PgRow) -> Result<StoredCredential, D
 
 fn host_from_row(row: sqlx::postgres::PgRow) -> Result<ExecutionHost, DatabaseError> {
     let kind: String = row.try_get("kind")?;
-    let descriptor = row
+    let descriptor: Option<ExecutionHostDescriptor> = row
         .try_get::<Option<Value>, _>("descriptor")?
         .map(serde_json::from_value)
         .transpose()
@@ -1445,6 +1471,7 @@ fn host_from_row(row: sqlx::postgres::PgRow) -> Result<ExecutionHost, DatabaseEr
             )));
         }
     };
+    let roots = host_roots(&kind, descriptor.as_ref());
     Ok(ExecutionHost {
         id: row.try_get("id")?,
         kind,
@@ -1455,6 +1482,7 @@ fn host_from_row(row: sqlx::postgres::PgRow) -> Result<ExecutionHost, DatabaseEr
         status_message: row.try_get("status_message")?,
         status_retryable: row.try_get("status_retryable")?,
         descriptor,
+        roots,
         metadata: row.try_get("metadata")?,
         e2b,
         registered,
@@ -1464,6 +1492,27 @@ fn host_from_row(row: sqlx::postgres::PgRow) -> Result<ExecutionHost, DatabaseEr
         updated_at: row.try_get("updated_at")?,
         deleted_at: row.try_get("deleted_at")?,
     })
+}
+
+fn host_roots(
+    kind: &ExecutionHostKind,
+    descriptor: Option<&ExecutionHostDescriptor>,
+) -> Vec<ExecutionRoot> {
+    if let Some(descriptor) = descriptor {
+        return descriptor.roots.clone();
+    }
+    match kind {
+        ExecutionHostKind::E2b => {
+            let config = SupervisorConfig::default();
+            vec![ExecutionRoot {
+                id: config.root_id,
+                name: config.root_name,
+                native_path: config.workspace_path,
+                read_only: config.read_only,
+            }]
+        }
+        ExecutionHostKind::Registered => Vec::new(),
+    }
 }
 
 fn snapshot_from_row(row: sqlx::postgres::PgRow) -> Result<E2bSnapshot, DatabaseError> {
@@ -1563,6 +1612,15 @@ fn to_u64(value: i64, field: &str) -> Result<u64, DatabaseError> {
 impl From<DatabaseError> for crate::error::GatewayError {
     fn from(error: DatabaseError) -> Self {
         match error {
+            DatabaseError::HostNotFound => crate::error::GatewayError::not_found("execution host"),
+            DatabaseError::SnapshotUnsupported => crate::error::GatewayError::conflict(
+                "HOST_OPERATION_UNSUPPORTED",
+                "Registered Hosts do not support snapshots",
+            ),
+            DatabaseError::SnapshotHostNotReady => crate::error::GatewayError::conflict(
+                "HOST_NOT_READY",
+                "only a ready host can be snapshotted",
+            ),
             DatabaseError::IdempotencyConflict => {
                 crate::error::GatewayError::conflict("IDEMPOTENCY_KEY_REUSED", error.to_string())
             }
@@ -1574,5 +1632,25 @@ impl From<DatabaseError> for crate::error::GatewayError {
                 crate::error::GatewayError::internal("database operation failed")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod root_tests {
+    use super::*;
+
+    #[test]
+    fn provisioning_e2b_host_exposes_writable_workspace_without_descriptor() {
+        let roots = host_roots(&ExecutionHostKind::E2b, None);
+        assert_eq!(
+            serde_json::to_value(roots).unwrap(),
+            serde_json::json!([{
+                "id": "workspace",
+                "name": "Workspace",
+                "native_path": "/home/user",
+                "read_only": false
+            }])
+        );
+        assert!(host_roots(&ExecutionHostKind::Registered, None).is_empty());
     }
 }
