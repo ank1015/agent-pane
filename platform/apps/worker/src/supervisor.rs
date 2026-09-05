@@ -1,5 +1,6 @@
-use crate::{Execution, Registry, Signals};
+use crate::Registry;
 use futures_util::FutureExt;
+use harness_runtime::{Execution, Signals};
 use platform_runtime_client::{
     Command, Error, PlatformClient, RequestKey, Result, WorkerRegistration, types::*,
 };

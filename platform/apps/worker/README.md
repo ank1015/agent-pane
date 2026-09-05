@@ -23,11 +23,24 @@ cancels external operations. Transient transport failures still retry normally.
 ## Execution contract
 
 `Registry` hosts trusted Rust libraries implementing `Harness::run(Execution)`.
+`Harness`, `Execution`, and `Signals` live in
+[`harness-runtime`](../../packages/harness-runtime/); the worker re-exports them
+for compatibility. Each harness package imports that shared interface directly
+and uses `platform-runtime-client` for durable state and Platform interactions.
+It must not depend on this worker package: the worker depends on the harness
+libraries, compiles them into one executable, and registers their implementations.
+The registry and supervisor remain here, not in the shared interface crate.
+
 There are **no production harness registrations**. Integration tests supply
 test-only implementations through that same interface.
 
 - Each activation is one recoverable lease, not a universal agent turn. Harnesses
   load context/checkpoints and paginate history/inputs through the client.
+- `execution.client.session_state(...)` loads private tool data for the current
+  session; `Commit::session_state` writes it atomically with checkpoints and input
+  handling. It survives worker replacement and follow-up runs, but not history
+  forks. The harness owns namespaces/payloads; Platform owns durable storage and
+  fencing. See the [SDK example](../../packages/platform-runtime-client/README.md#session-scoped-tool-state).
 - `execution.client.queries()` supplies read-only shared session history, child
   status/results, waits, and events. It shares transport/retry policy without
   exposing registration or claiming. Reading another run does not confer its

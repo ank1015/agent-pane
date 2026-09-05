@@ -6,11 +6,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::future::BoxFuture;
+use harness_runtime::{Execution, Harness};
 use platform_runtime_client::{
     ClientConfig, Command, PlatformClient, RequestKey, Result, types::*,
 };
 use platform_server::runtime::{RuntimeService, router, worker_router};
-use platform_worker::{Execution, Harness, Registry, Settings, Snapshot, Supervisor};
+use platform_worker::{Registry, Settings, Snapshot, Supervisor};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::{
