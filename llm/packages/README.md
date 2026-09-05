@@ -4,6 +4,8 @@ Reusable contracts and implementation crates in the standalone LLM architecture 
 
 - `llm-contracts`: provider-neutral completion contracts plus separate
   extension contracts for optional provider APIs such as search.
+- `llm-client`: authenticated submission and waiting for gateway LLM runs using
+  the shared completion contracts.
 - `provider-openai`: catalog-backed OpenAI Responses and provider-backed search
   transport.
 - `provider-chatgpt`: ChatGPT Codex backend transport built on the shared OpenAI

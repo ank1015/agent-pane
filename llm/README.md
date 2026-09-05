@@ -7,6 +7,8 @@ This directory contains the clean-slate LLM architecture while the legacy LLM ga
   accounts, and records request outcomes and usage.
 - `packages/llm-contracts` contains provider-neutral completion contracts and
   optional provider API contracts such as search.
+- `packages/llm-client` provides typed submission, retrieval, and waiting for
+  gateway-managed LLM runs.
 - `packages/provider-openai` implements OpenAI Responses completion and the
   optional provider-backed search API.
 - `packages/provider-chatgpt` implements the ChatGPT Codex backend using its
