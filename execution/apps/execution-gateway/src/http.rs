@@ -26,7 +26,9 @@ use execution_api::{
     UpdateSnapshotRequest, VersionResponse,
 };
 use execution_core::{ExecutionHostId, Validate};
-use execution_e2b::{E2bApiKey, E2bErrorKind};
+use execution_e2b::{
+    DEFAULT_EXECUTION_BASE_RAM_MB, E2bApiKey, E2bErrorKind, EXECUTION_BASE_RAM_OPTIONS_MB,
+};
 use execution_wire::{PROTOCOL_NAME, PROTOCOL_VERSION, RequestEnvelope, ResponseEnvelope};
 use rand::{RngCore, rngs::OsRng};
 use serde::Deserialize;
@@ -762,8 +764,11 @@ async fn create_host(
         .map(|name| validated_name(name, "host name"))
         .transpose()?
         .flatten();
-    let (account_id, source_type, source_snapshot_id) = match request.source {
-        E2bHostSource::Base { e2b_account_id } => {
+    let (account_id, source_type, source_snapshot_id, ram_mb) = match request.source {
+        E2bHostSource::Base {
+            e2b_account_id,
+            ram,
+        } => {
             let account_id = match e2b_account_id {
                 Some(id) => id,
                 None => state.database.default_account_id().await?.ok_or_else(|| {
@@ -774,7 +779,9 @@ async fn create_host(
                 })?,
             };
             require_active_account(&state, account_id).await?;
-            (account_id, "base", None)
+            let ram_mb = ram.unwrap_or(DEFAULT_EXECUTION_BASE_RAM_MB);
+            validate_base_ram(ram_mb)?;
+            (account_id, "base", None, Some(ram_mb))
         }
         E2bHostSource::Snapshot { snapshot_id } => {
             let snapshot = state
@@ -792,6 +799,7 @@ async fn create_host(
                 snapshot.e2b_account_id,
                 "snapshot",
                 Some(snapshot.snapshot_id),
+                None,
             )
         }
     };
@@ -799,6 +807,7 @@ async fn create_host(
         .timeout_seconds
         .unwrap_or(state.default_host_timeout_seconds);
     validate_timeout(timeout)?;
+    let network_access = request.network_access.unwrap_or(true);
     let key = idempotency_key(&headers)?;
     let hash = request_hash(&request)?;
     let resource = state
@@ -811,6 +820,8 @@ async fn create_host(
             source_type,
             source_snapshot_id,
             timeout,
+            network_access,
+            ram_mb,
             key,
             &hash,
         )
@@ -1338,6 +1349,16 @@ fn validate_timeout(timeout: u64) -> Result<(), GatewayError> {
         return Err(GatewayError::bad_request(
             "INVALID_TIMEOUT",
             "timeout_seconds must be between 1 and 86400",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_base_ram(ram_mb: u32) -> Result<(), GatewayError> {
+    if !EXECUTION_BASE_RAM_OPTIONS_MB.contains(&ram_mb) {
+        return Err(GatewayError::bad_request(
+            "INVALID_RAM",
+            "source.ram must be one of 1024, 2048, 4096, or 8192",
         ));
     }
     Ok(())
