@@ -1,0 +1,27 @@
+[package]
+name = "tool-edit"
+description = "Exact remote text replacements with revision checks and replayable writes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+execution-core.workspace = true
+tool-filesystem.workspace = true
+tool-write = { path = "../write" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+execution-client.workspace = true
+execution-supervisor-core = { path = "../../../../execution/packages/execution-supervisor-core" }
+execution-wire = { path = "../../../../execution/packages/execution-wire" }
+tool-read = { path = "../read" }
+axum.workspace = true
+tokio.workspace = true
+jsonschema.workspace = true
+tempfile = "3.0"
+
+[lints]
+workspace = true
