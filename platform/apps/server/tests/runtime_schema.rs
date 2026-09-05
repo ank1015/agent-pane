@@ -118,10 +118,10 @@ async fn wait(pool: &PgPool, f: &Fixture, mode: &str, count: i32) -> Uuid {
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires DATABASE_URL; isolated SQLx database"]
-async fn creates_twelve_runtime_tables_without_replacing_project_data(pool: PgPool) {
-    let count: i64 = sqlx::query_scalar("select count(*) from information_schema.tables where table_schema='public' and table_name in ('harnesses','sessions','messages','session_messages','runs','run_checkpoints','run_inputs','run_waits','run_wait_dependencies','run_events','workers','runtime_requests')")
+async fn creates_runtime_tables_without_replacing_project_data(pool: PgPool) {
+    let count: i64 = sqlx::query_scalar("select count(*) from information_schema.tables where table_schema='public' and table_name in ('harnesses','sessions','messages','session_messages','runs','run_checkpoints','run_inputs','run_waits','run_wait_dependencies','run_events','workers','runtime_requests','session_state')")
         .fetch_one(&pool).await.unwrap();
-    assert_eq!(count, 12);
+    assert_eq!(count, 13);
     let f = fixture(&pool).await;
     sqlx::query("insert into project_environments (id,project_id,name,type,machine_id,workspace_root,path) values ($1,$2,'Existing environment','machine',$3,'root','.')")
         .bind(Uuid::new_v4()).bind(f.project).bind(Uuid::new_v4()).execute(&pool).await.unwrap();
@@ -840,6 +840,34 @@ async fn upgrade_preserves_existing_projects_and_environments(pool: PgPool) {
     .await
     .unwrap();
     tx.commit().await.unwrap();
+    let existing = fixture(&pool).await;
+    claim(&pool, &existing).await;
+    sqlx::query("insert into run_checkpoints(run_id,state,saved_by_lease_epoch) values($1,'{\"phase\":\"existing\"}',1)")
+        .bind(existing.run).execute(&pool).await.unwrap();
+    for migration in [
+        include_str!("../migrations/20260904030000_worker_runtime.sql"),
+        include_str!("../migrations/20260904040000_allow_empty_workers.sql"),
+        include_str!("../migrations/20260904050000_create_session_state.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(&pool).await.unwrap();
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "select state->>'phase' from run_checkpoints where run_id=$1"
+        )
+        .bind(existing.run)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "existing"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("select count(*) from session_state")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
     assert_eq!(
         sqlx::query_scalar::<_, String>("select name from projects where project_id=$1")
             .bind(project)
@@ -857,5 +885,74 @@ async fn upgrade_preserves_existing_projects_and_environments(pool: PgPool) {
         .await
         .unwrap(),
         "/Users/test/Desktop/test"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn session_state_database_guards_scope_ownership_versions_and_deletion(pool: PgPool) {
+    let f = fixture(&pool).await;
+    claim(&pool, &f).await;
+    sqlx::query("insert into session_state(project_id,session_id,namespace,key,version,value,saved_by_run_id,saved_by_lease_epoch) values($1,$2,'tool','a',1,'{}',$3,1)")
+        .bind(f.project).bind(f.session).bind(f.run).execute(&pool).await.unwrap();
+    let other = fixture(&pool).await;
+    claim(&pool, &other).await;
+    rejected(
+        sqlx::query(
+            "update session_state set version=version+1,saved_by_run_id=$2 where session_id=$1",
+        )
+        .bind(f.session)
+        .bind(other.run)
+        .execute(&pool)
+        .await,
+        "23514",
+    );
+    rejected(
+        sqlx::query("update session_state set version=version+1,project_id=$2 where session_id=$1")
+            .bind(f.session)
+            .bind(other.project)
+            .execute(&pool)
+            .await,
+        "23514",
+    );
+    for sql in [
+        "update session_state set version=version+2 where session_id=$1",
+        "update session_state set version=version+1,key='different' where session_id=$1",
+        "update session_state set version=version+1,namespace='different' where session_id=$1",
+        "update session_state set version=version+1,value='[]' where session_id=$1",
+        "update session_state set version=version+1,saved_by_lease_epoch=2 where session_id=$1",
+        "delete from session_state where session_id=$1",
+    ] {
+        rejected(
+            sqlx::query(sql).bind(f.session).execute(&pool).await,
+            "23514",
+        );
+    }
+    sqlx::query("update session_state set version=version+1,value=null where session_id=$1")
+        .bind(f.session)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("select version from session_state where session_id=$1")
+            .bind(f.session)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        2
+    );
+    sqlx::query(
+        "update runs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+    )
+    .bind(f.run)
+    .execute(&pool)
+    .await
+    .unwrap();
+    rejected(
+        sqlx::query("update session_state set version=version+1,value='{}' where session_id=$1")
+            .bind(f.session)
+            .execute(&pool)
+            .await,
+        "23514",
     );
 }

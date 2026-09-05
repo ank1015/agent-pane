@@ -153,7 +153,7 @@ be consumed later.
 
 ### `POST /internal/runs/{run_id}/commits`
 
-One transaction coordinates messages, input outcomes, checkpoint CAS, wait
+One transaction coordinates messages, input outcomes, checkpoint and session-state CAS, wait
 registration/cancellation, events, and lifecycle. No partial success.
 
 ```json
@@ -200,7 +200,12 @@ Completion cannot silently discard newly pending input: settle it or reload afte
 commits cancel remaining local waits; they never cascade to children. Every
 successful commit increments run version; heartbeat renewal does not. A commit
 does not itself extend the lease. Return values include `run`, `session_revision`,
-`checkpoint`, appended message/wait IDs, and appended harness events.
+`checkpoint`, updated `session_state` entries, appended message/wait IDs, and appended harness events.
+
+For private tool data that must survive subsequent runs, use the lease-scoped
+`GET /internal/runs/{id}/session-state` and the commit's optional `session_state`
+writes. These do not change transcript revisions or copy into forks. See
+[session-state semantics and limits](session-state.md).
 
 Wait objects contain `wait_key`, `mode` (any/all), optional `deadline_at`, optional
 object `metadata`, and 1–200 dependencies:
