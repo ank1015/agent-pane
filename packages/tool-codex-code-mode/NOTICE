@@ -1,8 +1,0 @@
-This product includes software derived from OpenAI Codex:
-https://github.com/openai/codex
-
-The code-mode tool descriptions, JavaScript identifier normalization, and JSON
-Schema-to-TypeScript rendering are adapted from OpenAI Codex revision
-536f86e749c2f8557b0050c9278f1c39a33cf592.
-
-OpenAI Codex is licensed under the Apache License, Version 2.0.
