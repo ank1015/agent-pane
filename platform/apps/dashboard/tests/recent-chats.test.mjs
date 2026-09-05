@@ -23,7 +23,7 @@ function render(items, next = null) {
 test('recent chats preserve row styling, selection, escaped titles and hover actions', () => {
   const html = render([session])
   assert.match(html, /Recent Chats/)
-  assert.match(html, /project-recents-action.*aria-label="New chat"/)
+  assert.doesNotMatch(html, /project-recents-action|aria-label="New chat"/)
   assert.match(html, /project-session-item--active/)
   assert.match(html, /aria-current="page"/)
   assert.match(html, /A &lt;chat&gt;/)

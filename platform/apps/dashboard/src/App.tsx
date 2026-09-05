@@ -6,6 +6,9 @@ import { ProviderPage } from './features/providers/ProviderPage'
 import { ProjectsPage } from './features/projects/ProjectsPage'
 import { ProjectPage, ProjectEnvironmentsPage, ProjectSettingsPage } from './features/projects/ProjectPage'
 import { ProjectNewChatPage } from './features/projects/ProjectNewChatPage'
+import { lazy, Suspense } from 'react'
+
+const ProjectSessionPage = lazy(() => import('./features/projects/ProjectSessionPage'))
 
 function App() {
   return (
@@ -16,7 +19,7 @@ function App() {
         <Route path="settings" element={<ProjectSettingsPage />} />
         <Route path="environments/edit" element={<Navigate to=".." replace />} />
         <Route path="environments/list" element={<Navigate to="../environments" replace />} />
-        <Route path=":sessionId" element={null} />
+        <Route path=":sessionId" element={<Suspense fallback={<span className="project-chat-loading" role="status" aria-label="Loading chat" />}><ProjectSessionPage /></Suspense>} />
       </Route>
       <Route path="/providers/:providerId" element={<ProviderPage />} />
       <Route path="/" element={<DashboardShell />}>

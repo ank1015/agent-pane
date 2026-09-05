@@ -1,6 +1,6 @@
-import { Archive03Icon, Edit02Icon, Loading03Icon } from '@hugeicons/core-free-icons'
+import { Archive03Icon, Loading03Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useArchiveSession, useProjectSessions } from './session-queries'
 
 export function ProjectRecentChats({ projectId }: { projectId: string }) {
@@ -13,11 +13,6 @@ export function ProjectRecentChats({ projectId }: { projectId: string }) {
   return <section className="project-recents" aria-label="Recent Chats">
     <div className="project-recents-header">
       <span className="project-recents-label">Recent Chats</span>
-      <span className="project-recents-actions">
-        <Link className="project-recents-action" to={projectPath} aria-label="New chat" title="New chat">
-          <HugeiconsIcon icon={Edit02Icon} size={14} strokeWidth={1.5} aria-hidden="true" />
-        </Link>
-      </span>
     </div>
     <div className="project-session-list">
       {query.isPending ? query.fetchStatus === 'paused'
