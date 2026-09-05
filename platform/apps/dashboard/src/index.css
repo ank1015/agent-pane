@@ -7,6 +7,8 @@
 @import "./styles/provider-analytics.css";
 @import "./styles/projects.css";
 @import "./styles/machine-actions.css";
+@import "./styles/environment-composer.css";
+@import "./styles/project-recents.css";
 
 :root {
   color-scheme: dark;
@@ -129,7 +131,7 @@ body {
 
 .sidebar-nav {
   display: grid;
-  gap: 1px;
+  gap: 4px;
   margin-top: 12px;
 }
 

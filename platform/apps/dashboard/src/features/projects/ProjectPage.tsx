@@ -1,39 +1,69 @@
-import { ArrowLeft01Icon, Folder03Icon } from '@hugeicons/core-free-icons'
+import { ArrowLeft01Icon, Folder03Icon, Edit02Icon, Settings01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { Link, NavLink, useParams } from 'react-router-dom'
+import { Link, NavLink, Outlet, useParams } from 'react-router-dom'
 import { ApiError } from '../../lib/api-client'
 import { useProjectEnvironments, useProjects } from './project-queries'
 import { ProjectEnvironmentsTable } from './ProjectEnvironmentsTable'
+import { ProjectRecentChats } from './ProjectRecentChats'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export function ProjectPage() {
   const { projectId = '' } = useParams()
+  const projectPath = `/projects/${encodeURIComponent(projectId)}`
   return (
     <div className="provider-detail-shell">
-      <aside className="provider-detail-sidebar">
+      <aside className="provider-detail-sidebar project-chat-sidebar" aria-label="Project sidebar">
         <Link className="provider-detail-nav-item provider-detail-back" to="/projects" aria-label="Back to Dashboard" title="Back to Dashboard">
           <span className="nav-icon-frame" aria-hidden="true"><HugeiconsIcon icon={ArrowLeft01Icon} size={16} strokeWidth={1.5} /></span>
           <span className="nav-item-label">Back to Dashboard</span>
         </Link>
         <nav className="provider-detail-nav" aria-label="Project">
-          <NavLink end to={`/projects/${encodeURIComponent(projectId)}`} aria-label="Environments" title="Environments"
+          <NavLink end to={projectPath} aria-label="New Chat" title="New Chat"
+            className={({ isActive }) => `provider-detail-nav-item${isActive ? ' provider-detail-nav-item--active' : ''}`}>
+            <span className="nav-icon-frame" aria-hidden="true"><HugeiconsIcon icon={Edit02Icon} size={16} strokeWidth={1.5} /></span>
+            <span className="nav-item-label">New Chat</span>
+          </NavLink>
+          <NavLink to={`${projectPath}/environments`} aria-label="Environments" title="Environments"
             className={({ isActive }) => `provider-detail-nav-item${isActive ? ' provider-detail-nav-item--active' : ''}`}>
             <span className="nav-icon-frame" aria-hidden="true"><HugeiconsIcon icon={Folder03Icon} size={16} strokeWidth={1.5} /></span>
             <span className="nav-item-label">Environments</span>
           </NavLink>
         </nav>
+        {UUID_PATTERN.test(projectId) ? <ProjectRecentChats key={projectId} projectId={projectId.toLowerCase()} /> : null}
+        <nav className="project-sidebar-footer" aria-label="Project settings">
+          <NavLink to={`${projectPath}/settings`} aria-label="Project Settings" title="Project Settings"
+            className={({ isActive }) => `provider-detail-nav-item${isActive ? ' provider-detail-nav-item--active' : ''}`}>
+            <span className="nav-icon-frame" aria-hidden="true"><HugeiconsIcon icon={Settings01Icon} size={16} strokeWidth={1.5} /></span>
+            <span className="nav-item-label">Project Settings</span>
+          </NavLink>
+        </nav>
       </aside>
       <main className="provider-detail-main">
         <div className="provider-detail-container">
-          <header className="provider-detail-header"><h1 className="cursor-page-title">Environments</h1></header>
           {UUID_PATTERN.test(projectId)
-            ? <ProjectEnvironments key={projectId} projectId={projectId.toLowerCase()} />
+            ? <Outlet />
             : <p className="project-detail-notice" role="alert">Invalid project ID.</p>}
         </div>
       </main>
     </div>
   )
+}
+
+export function ProjectSettingsPage() {
+  return <header className="provider-detail-header">
+    <h1 className="cursor-page-title">Settings</h1>
+  </header>
+}
+
+export function ProjectEnvironmentsPage() {
+  const { projectId = '' } = useParams()
+  return <>
+    <header className="provider-detail-header">
+      <h1 className="cursor-page-title">Environments</h1>
+    </header>
+    <ProjectEnvironments key={projectId} projectId={projectId.toLowerCase()} />
+  </>
 }
 
 function ProjectEnvironments({ projectId }: { projectId: string }) {
