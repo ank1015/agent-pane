@@ -270,6 +270,9 @@ pub struct Harness {
     pub description: Option<String>,
     pub default_config: JsonObject,
     pub config_schema: Option<JsonObject>,
+    /// Provider IDs mapped to explicit supported model IDs. Empty is unspecified, not a wildcard.
+    #[serde(default)]
+    pub supported_models: std::collections::BTreeMap<String, Vec<String>>,
     pub enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
