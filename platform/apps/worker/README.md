@@ -2,8 +2,8 @@
 
 Run from this directory with `cargo run -p platform-worker`. Supply the variables
 in `.env.example`; the registration secret must match Platform. Apply Platform's
-migrations/start the updated server first. No database URL, gateway credential,
-broker, or production harness is needed by this empty build.
+migrations/start the updated server first. The worker needs no database URL or
+broker. Gateway credentials are required only when enabling a harness that uses them.
 
 The executable generates a fresh random process identity and token on every
 start. An empty registry registers with zero capabilities and heartbeats normally;
@@ -31,8 +31,12 @@ It must not depend on this worker package: the worker depends on the harness
 libraries, compiles them into one executable, and registers their implementations.
 The registry and supervisor remain here, not in the shared interface crate.
 
-There are **no production harness registrations**. Integration tests supply
-test-only implementations through that same interface.
+Set `BASIC_CC_TOOLS_ENABLED=true` and supply the LLM/execution gateway settings
+in `.env.example` to register `basic-cc-tools-harness`. Apply the server's harness
+catalog migration before starting runs. See the
+[harness package](../../packages/harnesses/basic-cc-tools-harness/) for its config
+and recovery behavior. With the flag omitted/false the registry remains empty.
+Integration tests also supply test-only implementations through the same interface.
 
 - Each activation is one recoverable lease, not a universal agent turn. Harnesses
   load context/checkpoints and paginate history/inputs through the client.
@@ -71,3 +75,12 @@ test-only implementations through that same interface.
 `DATABASE_URL=postgresql://localhost/postgres cargo test -p platform-worker -- --include-ignored`
 runs tests against actual Platform HTTP handlers, migrations, and isolated SQLx
 databases. The test database role needs CREATEDB. No development data is modified.
+## Environments harness
+
+Set `ENVIRONMENTS_ENABLED=true` to advertise the `environments` implementation.
+It shares the LLM/execution gateway settings with the basic harness. Set
+`FIRECRAWL_API_KEY` for web-enabled runs; without it, config must set
+`web_search_enabled=false` (otherwise the run fails configuration validation).
+Filesystem targeting is per call; project scope is derived from the run. The
+Platform catalog migration registers its config schema separately from worker
+availability. Neither harness is enabled automatically.
