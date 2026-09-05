@@ -1,12 +1,34 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { getJson, postJson } from '../../lib/api-client'
+import { ApiError, getJson, postJson } from '../../lib/api-client'
+import type { ProjectBootstrap } from './project-bootstrap'
 import type { CreateProjectInput, Project, ProjectEnvironment } from './project-types'
 
 export const projectKeys = {
   all: ['projects'] as const,
   list: () => [...projectKeys.all, 'list'] as const,
   detail: (projectId: string) => [...projectKeys.all, 'detail', projectId] as const,
+  bootstrap: (projectId: string) => [...projectKeys.detail(projectId), 'bootstrap'] as const,
   environments: (projectId: string) => [...projectKeys.detail(projectId), 'environments'] as const,
+}
+
+export function projectBootstrapOptions(projectId: string) {
+  return queryOptions({
+    queryKey: projectKeys.bootstrap(projectId),
+    queryFn: ({ signal }) => getJson<ProjectBootstrap>(`/api/projects/${encodeURIComponent(projectId)}/bootstrap`, signal),
+    enabled: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId),
+    staleTime: 30_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    retry: (count, error) => count < 2 && (!(error instanceof ApiError) || error.status === 408 || error.status === 429 || error.status >= 500),
+    retryDelay: attempt => Math.min(1000 * 2 ** attempt, 10_000),
+  })
+}
+
+export function useProjectBootstrap(projectId: string) {
+  return useQuery(projectBootstrapOptions(projectId))
 }
 
 export function useProjectEnvironments(projectId: string) {
