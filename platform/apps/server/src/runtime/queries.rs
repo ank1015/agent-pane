@@ -246,6 +246,47 @@ impl RuntimeService {
             "next_after_revision",
         ))
     }
+    /// Durable inbox across all runs, including queued inputs not yet in history.
+    pub(super) async fn session_inputs(&self, id: Uuid, q: ListQuery) -> Result<Value> {
+        if q.archived.is_some()
+            || q.status
+                .as_deref()
+                .is_some_and(|s| !["pending", "handled", "rejected"].contains(&s))
+        {
+            return Err(RuntimeError::Invalid(
+                "Session inputs support pending, handled or rejected status; not archived filtering.",
+            ));
+        }
+        self.exists("sessions", "id", id).await?;
+        let count = limit(q.limit)?;
+        let tag = format!("session-inputs:v1:{id}:{:?}", q.status);
+        let c = cursor(q.cursor.as_deref(), &tag)?;
+        let mut query = QueryBuilder::<Postgres>::new(
+            "select to_jsonb(i)-'deduplication_key' from run_inputs i join runs r on r.id=i.run_id where r.session_id=",
+        );
+        query.push_bind(id);
+        if let Some(status) = q.status {
+            query.push(" and i.status=").push_bind(status);
+        }
+        if let Some(c) = c {
+            query
+                .push(" and (i.created_at,i.id)>(")
+                .push_bind(c.at)
+                .push(",")
+                .push_bind(c.id)
+                .push(")");
+        }
+        query
+            .push(" order by i.created_at,i.id limit ")
+            .push_bind(count + 1);
+        page(
+            query.build_query_scalar().fetch_all(&self.pool).await?,
+            count,
+            tag,
+            "created_at",
+        )
+    }
+
     pub(super) async fn inputs(&self, id: Uuid, q: SequenceQuery) -> Result<Value> {
         self.exists("runs", "id", id).await?;
         if let Some(status) = &q.status {

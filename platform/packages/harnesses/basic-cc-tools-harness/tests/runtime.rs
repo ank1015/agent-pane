@@ -41,12 +41,15 @@ const BOOT: &str = "basic-cc-tests-bootstrap-secret-0123456789";
 
 #[derive(Default)]
 struct Script {
+    host_requests: BTreeMap<String, Value>,
+    host_attempts: usize,
     responses: VecDeque<RunState>,
     requests: Vec<CompletionRequest>,
     receipts: BTreeMap<String, (CompletionRequest, Run)>,
     jobs: BTreeMap<Uuid, Run>,
 }
 struct App {
+    lose_create: Arc<AtomicBool>,
     pool: PgPool,
     temp: tempfile::TempDir,
     url: String,
@@ -122,8 +125,28 @@ impl App {
         let aborts = Arc::new(AtomicUsize::new(0));
         let abort_count = aborts.clone();
         let runtime = RuntimeService::new(pool.clone());
+        let sandbox_script = script.clone();
+        let sandbox_host = host.clone();
+        let lose_create = Arc::new(AtomicBool::new(false));
+        let create_lost = lose_create.clone();
         let app = router(runtime.clone())
             .merge(worker_router(runtime, BOOT))
+            .route("/v1/hosts", post(move |headers: HeaderMap, Json(request): Json<Value>| {
+                let script = sandbox_script.clone();
+                let host = sandbox_host.clone();
+                let lost = create_lost.clone();
+                async move {
+                    let key = headers["idempotency-key"].to_str().unwrap().to_owned();
+                    let mut script = script.lock().await;
+                    script.host_attempts += 1;
+                    if let Some(previous) = script.host_requests.get(&key) { assert_eq!(previous, &request); }
+                    else { script.host_requests.insert(key, request); }
+                    if lost.swap(false, Ordering::SeqCst) { return StatusCode::BAD_GATEWAY.into_response(); }
+                    let now = chrono::Utc::now();
+                    Json(json!({"id":host,"kind":"e2b","state":"ready","desired_state":"ready",
+                        "status_retryable":false,"roots":[],"metadata":{},"revision":1,"created_at":now,"updated_at":now})).into_response()
+                }
+            }))
             .route(
                 "/v1/llm/runs",
                 post(
@@ -227,6 +250,7 @@ impl App {
             axum::serve(listener, app).await.unwrap();
         });
         Self {
+            lose_create,
             pool,
             temp,
             url,
@@ -269,11 +293,11 @@ impl App {
             .post(
                 &format!("/api/projects/{}/sessions", self.project),
                 json!({"harness_id":ID,"initial_run":{
-                    "expected_session_revision":0,"input":user("Do the work"),"config_override":{
+                    "expected_session_revision":0,"input":user("Do the work")},"config_override":{
                         "model":{"provider":"openai","id":"gpt-5.6-terra"},"reasoning_level":"high",
-                        "execution":{"host_id":self.host,"workspace_root":"work","path":"."}
+                        "environment":{"type":"machine","machine_id":self.host,"workspace_root":self.temp.path().join("workspace").canonicalize().unwrap(),"path":"."}
                     }
-                }}),
+                }),
             )
             .await;
         serde_json::from_value(response["run"]["id"].clone()).unwrap()
@@ -419,6 +443,70 @@ fn final_answer() -> RunState {
 
 #[sqlx::test(migrations = "../../../apps/server/migrations")]
 #[ignore = "requires PostgreSQL with CREATEDB"]
+async fn sandbox_creation_replays_and_followups_reuse_target_but_forks_do_not(pool: PgPool) {
+    let app = App::new(pool, vec![final_answer(), final_answer(), final_answer()]).await;
+    let snapshot = Uuid::new_v4();
+    let created = app.post(&format!("/api/projects/{}/sessions", app.project), json!({
+        "harness_id":ID,"config_override":{
+            "model":{"provider":"openai","id":"gpt-5.6-terra"},"reasoning_level":"high",
+            "environment":{"type":"sandbox","snapshot_id":snapshot,"workspace_root":app.temp.path().join("workspace").canonicalize().unwrap(),"path":"."}
+        },"initial_run":{"expected_session_revision":0,"input":user("Start sandbox")}
+    })).await;
+    let run: Uuid = serde_json::from_value(created["run"]["id"].clone()).unwrap();
+    let session: Uuid = serde_json::from_value(created["session"]["id"].clone()).unwrap();
+    app.lose_create.store(true, Ordering::SeqCst);
+    assert!(app.activate(app.claim().await).await.is_err());
+    assert_eq!(app.script.lock().await.requests.len(), 0);
+    app.expire(run).await;
+    app.activate(app.claim().await).await.unwrap();
+    assert_eq!(app.status(run).await, "completed");
+    assert_eq!(app.script.lock().await.host_requests.len(), 1);
+    assert_eq!(app.script.lock().await.host_attempts, 2);
+    let revision: i64 = sqlx::query_scalar("select current_revision from sessions where id=$1")
+        .bind(session)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    app.post(
+        &format!("/api/sessions/{session}/runs"),
+        json!({"expected_session_revision":revision,"input":user("Continue")}),
+    )
+    .await;
+    app.activate(app.claim().await).await.unwrap();
+    assert_eq!(
+        app.script.lock().await.host_attempts,
+        2,
+        "followup must use the saved host, not create again"
+    );
+    app.post(
+        &format!("/api/sessions/{session}/forks"),
+        json!({"at_revision":revision,
+        "initial_run":{"expected_session_revision":revision,"input":user("Fork work")}}),
+    )
+    .await;
+    app.activate(app.claim().await).await.unwrap();
+    assert_eq!(
+        app.script.lock().await.host_requests.len(),
+        2,
+        "fork has its own durable creation identity"
+    );
+    assert_eq!(app.script.lock().await.host_attempts, 3);
+    for request in app.script.lock().await.host_requests.values() {
+        assert_eq!(
+            request["source"],
+            json!({"type":"snapshot","snapshot_id":snapshot})
+        );
+    }
+    let states: i64 =
+        sqlx::query_scalar("select count(*) from session_state where key='execution-target'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(states, 2);
+}
+
+#[sqlx::test(migrations = "../../../apps/server/migrations")]
+#[ignore = "requires PostgreSQL with CREATEDB"]
 async fn all_four_tools_and_fresh_read_per_edit(pool: PgPool) {
     let app = App::new(
         pool,
@@ -496,7 +584,29 @@ async fn all_four_tools_and_fresh_read_per_edit(pool: PgPool) {
         .fetch_one(&app.pool)
         .await
         .unwrap();
-    assert_eq!(entries, 0);
+    assert_eq!(
+        entries, 1,
+        "only the resolved execution target is session-scoped"
+    );
+    let state: Value =
+        sqlx::query_scalar("select value from session_state where key='execution-target'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(state["host_id"], json!(app.host));
+    let input: Value = sqlx::query_scalar(
+        "select to_jsonb(i) from run_inputs i where kind='user_message' limit 1",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let linked: bool =
+        sqlx::query_scalar("select exists(select 1 from session_messages where message_id=$1)")
+            .bind(serde_json::from_value::<Uuid>(input["handling"]["message_id"].clone()).unwrap())
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(linked);
 }
 
 #[sqlx::test(migrations = "../../../apps/server/migrations")]
@@ -752,7 +862,7 @@ async fn followup_run_requires_a_new_read_despite_old_history(pool: PgPool) {
     .await;
     let first = app.create().await;
     app.activate(app.claim().await).await.unwrap();
-    let (session, config): (Uuid, Value) =
+    let (session, _config): (Uuid, Value) =
         sqlx::query_as("select session_id,config from runs where id=$1")
             .bind(first)
             .fetch_one(&app.pool)
@@ -763,7 +873,12 @@ async fn followup_run_requires_a_new_read_despite_old_history(pool: PgPool) {
         .fetch_one(&app.pool)
         .await
         .unwrap();
-    let response = app.post(&format!("/api/sessions/{session}/runs"), json!({"expected_session_revision":revision,"input":user("Edit the file"),"config_override":config})).await;
+    let response = app
+        .post(
+            &format!("/api/sessions/{session}/runs"),
+            json!({"expected_session_revision":revision,"input":user("Edit the file")}),
+        )
+        .await;
     let second: Uuid = serde_json::from_value(response["run"]["id"].clone()).unwrap();
     app.activate(app.claim().await).await.unwrap();
     assert_eq!(app.status(second).await, "completed");

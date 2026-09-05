@@ -144,7 +144,7 @@ async fn sdk_environment_creation_is_project_scoped_fenced_and_replayable(pool: 
         kind: EnvironmentType::Machine,
         machine_id: Some(Uuid::new_v4()),
         snapshot_id: None,
-        workspace_root: "workspace".into(),
+        workspace_root: "/home/user".into(),
         path: "test".into(),
     };
     let cmd = command("environment-create", body.clone());
@@ -152,7 +152,7 @@ async fn sdk_environment_creation_is_project_scoped_fenced_and_replayable(pool: 
     let saved = a.unwrap();
     assert_eq!(saved.id, b.unwrap().id);
     assert_eq!(saved.project_id, app.project);
-    assert_eq!(saved.workspace_root_path.as_deref(), Some("/home/user"));
+    assert_eq!(saved.workspace_root, "/home/user");
     let mut changed = body.clone();
     changed.path = "other".into();
     conflict(
@@ -166,7 +166,7 @@ async fn sdk_environment_creation_is_project_scoped_fenced_and_replayable(pool: 
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("insert into project_environments(id,project_id,name,type,machine_id,workspace_root,path) values($1,$2,'Hidden','machine',$3,'workspace','.')").bind(Uuid::new_v4()).bind(other_project).bind(body.machine_id).execute(&pool).await.unwrap();
+    sqlx::query("insert into project_environments(id,project_id,name,type,machine_id,workspace_root,path) values($1,$2,'Hidden','machine',$3,'/workspace','.')").bind(Uuid::new_v4()).bind(other_project).bind(body.machine_id).execute(&pool).await.unwrap();
     let listed = run.environments().await.unwrap();
     assert_eq!(listed.items.len(), 1);
     assert_eq!(listed.items[0].id, saved.id);
@@ -230,13 +230,13 @@ async fn sdk_follow_up_preserves_child_history_and_accepts_further_messages(pool
         .create_child(&command(
             "child",
             Child {
+                config_override: Default::default(),
                 harness_id: None,
                 title: None,
                 fork_at_revision: None,
                 initial_run: StartRun {
                     input: serde_json::from_value(user()).unwrap(),
                     expected_session_revision: 0,
-                    config_override: Default::default(),
                 },
             },
         ))
@@ -296,7 +296,6 @@ async fn sdk_follow_up_preserves_child_history_and_accepts_further_messages(pool
             run: StartRun {
                 input: serde_json::from_value(user()).unwrap(),
                 expected_session_revision: 1,
-                config_override: Default::default(),
             },
         },
     );
@@ -405,12 +404,12 @@ async fn sdk_worker_recovery_coordination_and_history_round_trip(pool: PgPool) {
     let child_command = command(
         "child-1",
         Child {
+            config_override: Default::default(),
             harness_id: None,
             title: Some("Child".into()),
             fork_at_revision: Some(2),
             initial_run: StartRun {
                 input: serde_json::from_value(user()).unwrap(),
-                config_override: Default::default(),
                 expected_session_revision: 2,
             },
         },

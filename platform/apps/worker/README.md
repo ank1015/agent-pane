@@ -14,6 +14,25 @@ keep it private if configuring another address. Autoscaling infrastructure is no
 provisioned here; replicas are independent and capacity-bounded.
 
 Run the executable under a process supervisor with restart-on-failure enabled.
+
+## Prompt work pickup
+
+With spare capacity, the supervisor opens one cancellable
+`GET /internal/workers/{id}/work-available?wait_seconds=25` request. An eligible
+run wakes it and schedules the existing claim/reconciliation path immediately,
+without waiting for the idle polling backoff. This also runs while other harnesses
+are executing. No waits are started for empty registries or at full capacity.
+
+The wait is separate from heartbeat and allocation tasks. Allocation, capacity
+exhaustion, drain and shutdown cancel it. Transient failures reconnect with bounded
+backoff; ordinary allocation polling remains independent as a fallback. An
+uncertain claim retains its original idempotency key and is reconciled before
+notifications can trigger another allocation attempt. There is no new broker,
+database dependency, or per-harness notification code.
+
+Notifications do not reserve work, replace leases, or start new worker processes.
+All replicas may receive a hint; the normal claim locks decide ownership.
+
 If Platform expires this worker's identity (for example, after a prolonged network
 partition), the worker cancels local activations and exits unsuccessfully with
 `WorkerOffline`. Restarting generates a fresh UUID/token and allows expired work

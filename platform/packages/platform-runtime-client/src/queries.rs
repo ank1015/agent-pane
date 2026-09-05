@@ -43,6 +43,13 @@ impl QueryClient {
     pub async fn session_runs(&self, id: Uuid, query: &ListQuery) -> Result<CursorPage<Run>> {
         self.client.session_runs(id, query).await
     }
+    pub async fn session_inputs(
+        &self,
+        id: Uuid,
+        query: &ListQuery,
+    ) -> Result<CursorPage<RunInput>> {
+        self.client.session_inputs(id, query).await
+    }
     pub async fn run_state(&self, id: Uuid) -> Result<Run> {
         self.client.run_state(id).await
     }

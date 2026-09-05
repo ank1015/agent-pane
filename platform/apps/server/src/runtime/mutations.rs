@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 type Tx<'a> = Transaction<'a, Postgres>;
 pub(super) async fn session(tx: &mut Tx<'_>, id: Uuid) -> Result<SessionRow> {
-    sqlx::query_as("select id,project_id,harness_id,title,current_revision,archived_at from sessions where id=$1 for update").bind(id).fetch_optional(&mut **tx).await?.ok_or(RuntimeError::NotFound)
+    sqlx::query_as("select id,project_id,harness_id,config,title,current_revision,archived_at from sessions where id=$1 for update").bind(id).fetch_optional(&mut **tx).await?.ok_or(RuntimeError::NotFound)
 }
 pub(super) async fn run(tx: &mut Tx<'_>, id: Uuid) -> Result<RunRow> {
     sqlx::query_as("select id,project_id,session_id,status,abort_requested_at from runs where id=$1 for update").bind(id).fetch_optional(&mut **tx).await?.ok_or(RuntimeError::NotFound)
@@ -122,7 +122,8 @@ pub(super) async fn start_with_parent(
             "This session already has an active run. Submit input to that run instead.",
         ));
     }
-    let config = configuration::resolve(tx, &s.harness_id, &request.config_override).await?;
+    enabled(tx, &s.harness_id).await?;
+    let config = &s.config;
     let id = Uuid::now_v7();
     sqlx::query(
         "insert into runs(id,project_id,session_id,config,parent_run_id) values($1,$2,$3,$4,$5)",
@@ -200,14 +201,19 @@ impl RuntimeService {
                 .await?;
         exists.ok_or(RuntimeError::NotFound)?;
         enabled(&mut tx, &request.harness_id).await?;
+        let config =
+            configuration::resolve(&mut tx, &request.harness_id, &request.config_override).await?;
         let id = Uuid::now_v7();
-        sqlx::query("insert into sessions(id,project_id,harness_id,title) values($1,$2,$3,$4)")
-            .bind(id)
-            .bind(project)
-            .bind(request.harness_id)
-            .bind(request.title)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "insert into sessions(id,project_id,harness_id,title,config) values($1,$2,$3,$4,$5)",
+        )
+        .bind(id)
+        .bind(project)
+        .bind(request.harness_id)
+        .bind(request.title)
+        .bind(config)
+        .execute(&mut *tx)
+        .await?;
         let mut run_id = None;
         let mut initial = Value::Null;
         if let Some(r) = request.initial_run {
@@ -254,9 +260,16 @@ impl RuntimeService {
         }
         let harness = request.harness_id.as_deref().unwrap_or(&source.harness_id);
         enabled(&mut tx, harness).await?;
+        let config = configuration::resolve_from(
+            &mut tx,
+            harness,
+            &request.config_override,
+            (harness == source.harness_id).then_some(&source.config),
+        )
+        .await?;
         let child = Uuid::now_v7();
-        sqlx::query("insert into sessions(id,project_id,harness_id,title,forked_from_session_id,forked_at_revision) values($1,$2,$3,$4,$5,$6)")
-            .bind(child).bind(source.project_id).bind(harness).bind(request.title.as_ref().or(source.title.as_ref())).bind(id).bind(request.at_revision).execute(&mut *tx).await?;
+        sqlx::query("insert into sessions(id,project_id,harness_id,title,forked_from_session_id,forked_at_revision,config) values($1,$2,$3,$4,$5,$6,$7)")
+            .bind(child).bind(source.project_id).bind(harness).bind(request.title.as_ref().or(source.title.as_ref())).bind(id).bind(request.at_revision).bind(config).execute(&mut *tx).await?;
         sqlx::query("insert into session_messages(project_id,session_id,revision,message_id,run_id) select project_id,$1,revision,message_id,null from session_messages where session_id=$2 and revision<=$3 order by revision")
             .bind(child).bind(id).bind(request.at_revision).execute(&mut *tx).await?;
         let mut run_id = None;

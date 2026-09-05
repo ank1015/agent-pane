@@ -43,6 +43,7 @@ pub fn worker_router(service: RuntimeService, registration_token: impl AsRef<str
         .route("/internal/workers/{id}/heartbeat", post(heartbeat))
         .route("/internal/workers/{id}/claims", post(claim))
         .route("/internal/workers/{id}/assignments", get(assignments))
+        .route("/internal/workers/{id}/work-available", get(work_available))
         .route("/internal/runs/{id}/context", get(context))
         .route(
             "/internal/runs/{id}/environments",
@@ -163,6 +164,13 @@ async fn claim(
 }
 async fn assignments(State(s): State<RuntimeService>, p: Id) -> Result<Json<Value>> {
     Ok(Json(s.assignments(id(p)?).await?))
+}
+async fn work_available(
+    State(s): State<RuntimeService>,
+    p: Id,
+    q: Params<platform_runtime_contracts::WorkAvailabilityQuery>,
+) -> Result<Json<platform_runtime_contracts::WorkAvailability>> {
+    Ok(Json(s.work_available(id(p)?, query(q)?).await?))
 }
 async fn context(
     State(s): State<RuntimeService>,

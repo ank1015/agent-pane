@@ -1,4 +1,119 @@
 //! Real Platform HTTP + PostgreSQL. Harness fixtures are never linked by main.
+
+fn gated_registry(gate: Arc<tokio::sync::Semaphore>) -> Registry {
+    registry(move |execution| {
+        let gate = gate.clone();
+        Box::pin(async move {
+            gate.acquire().await.unwrap().forget();
+            let ctx = execution.client.context(&ContextQuery::default()).await?;
+            let mut commit = Commit::new(ctx.run.run.version, ctx.session.current_revision);
+            let inputs = execution.client.inputs(&SequenceQuery::default()).await?;
+            commit.input_results = inputs
+                .items
+                .into_iter()
+                .map(|input| InputResult {
+                    id: input.id,
+                    status: InputStatus::Handled,
+                    handling: Default::default(),
+                })
+                .collect();
+            let final_id = Uuid::now_v7();
+            commit.messages.push(AppendMessage {
+                message_id: final_id,
+                message: serde_json::from_value(json!({"role":"assistant","id":"final","timestamp":0,"model":{"provider":"fixture","id":"test"},"duration_ms":1,"native_message":{},"content":[{"type":"response","response":{"content":"Done"}}],"stop_reason":"stop"})).unwrap(),
+            });
+            commit.disposition = Disposition::Completed {
+                final_message_id: final_id,
+            };
+            execution.client.commit(&command(commit)).await?;
+            Ok(())
+        })
+    })
+}
+
+#[sqlx::test(migrations = "../server/migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn notifications_pick_up_work_with_spare_capacity_without_waiting_for_poll(pool: PgPool) {
+    let app = App::new(pool).await;
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let worker = app.worker_with_settings(
+        gated_registry(gate.clone()),
+        Settings {
+            capacity: 2,
+            poll_interval: Duration::from_secs(10),
+            heartbeat_interval: Duration::from_millis(100),
+            ..Default::default()
+        },
+    );
+    until(async || app.faults.work_waits.load(Ordering::SeqCst) >= 1).await;
+    // Prove idle long polls do not block heartbeat or spin on claims.
+    let heartbeats = app.faults.heartbeats.load(Ordering::SeqCst);
+    let claims = app.faults.claims.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    assert!(app.faults.heartbeats.load(Ordering::SeqCst) > heartbeats);
+    assert_eq!(app.faults.claims.load(Ordering::SeqCst), claims);
+    let start = std::time::Instant::now();
+    let first = app.create().await;
+    until(async || worker.snapshot.read().await.active_runs == 1).await;
+    assert!(start.elapsed() < Duration::from_secs(2));
+    until(async || app.faults.work_waits.load(Ordering::SeqCst) >= 2).await;
+    let start = std::time::Instant::now();
+    let second = app.create().await;
+    until(async || worker.snapshot.read().await.active_runs == 2).await;
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "a busy worker must fill its free slot"
+    );
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let waits = app.faults.work_waits.load(Ordering::SeqCst);
+    let third = app.create().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(app.status(third).await, "ready");
+    assert_eq!(
+        app.faults.work_waits.load(Ordering::SeqCst),
+        waits,
+        "no new waits at full capacity"
+    );
+    gate.add_permits(1);
+    until(async || app.status(third).await == "running").await;
+    gate.add_permits(2);
+    until(async || {
+        app.status(first).await == "completed"
+            && app.status(second).await == "completed"
+            && app.status(third).await == "completed"
+    })
+    .await;
+    until(async || worker.snapshot.read().await.active_runs == 0).await;
+    until(async || app.faults.work_waits.load(Ordering::SeqCst) > waits).await;
+    let start = std::time::Instant::now();
+    worker.shutdown().await;
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "shutdown must cancel the long poll"
+    );
+}
+
+#[sqlx::test(migrations = "../server/migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn notification_failures_preserve_polling_and_reconnect(pool: PgPool) {
+    let app = App::new(pool).await;
+    app.faults.fail_work_wait.store(true, Ordering::SeqCst);
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let worker = app.worker(gated_registry(gate.clone()));
+    until(async || app.faults.work_waits.load(Ordering::SeqCst) > 0).await;
+    let first = app.create().await;
+    until(async || app.status(first).await == "running").await;
+    gate.add_permits(1);
+    until(async || worker.snapshot.read().await.active_runs == 0).await;
+    app.faults.fail_work_wait.store(false, Ordering::SeqCst);
+    let waits = app.faults.work_waits.load(Ordering::SeqCst);
+    until(async || app.faults.work_waits.load(Ordering::SeqCst) > waits).await;
+    let second = app.create().await;
+    until(async || app.status(second).await == "running").await;
+    gate.add_permits(1);
+    until(async || worker.snapshot.read().await.active_runs == 0).await;
+    worker.shutdown().await;
+}
 use axum::{
     extract::{Request, State},
     http::StatusCode,
@@ -27,6 +142,10 @@ use uuid::Uuid;
 const BOOT: &str = "worker-integration-bootstrap-01234567890123456789";
 #[derive(Default)]
 struct Faults {
+    fail_work_wait: AtomicBool,
+    work_waits: AtomicUsize,
+    heartbeats: AtomicUsize,
+    claims: AtomicUsize,
     lose_claim: AtomicBool,
     fail_heartbeat: AtomicBool,
     fail_assignments: AtomicBool,
@@ -55,6 +174,19 @@ async fn lose_claim_reply(
     let claim = request.uri().path().ends_with("/claims");
     let heartbeat = request.uri().path().ends_with("/heartbeat");
     let assignments = request.uri().path().ends_with("/assignments");
+    let work_wait = request.uri().path().ends_with("/work-available");
+    if claim {
+        faults.claims.fetch_add(1, Ordering::SeqCst);
+    }
+    if heartbeat {
+        faults.heartbeats.fetch_add(1, Ordering::SeqCst);
+    }
+    if work_wait {
+        faults.work_waits.fetch_add(1, Ordering::SeqCst);
+        if faults.fail_work_wait.load(Ordering::SeqCst) {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
+    }
     if faults.disconnected.load(Ordering::SeqCst)
         || assignments && faults.fail_assignments.load(Ordering::SeqCst)
     {
@@ -134,18 +266,7 @@ impl App {
         serde_json::from_value(result["run"]["id"].clone()).unwrap()
     }
     fn worker(&self, registry: Registry) -> Running {
-        let client = PlatformClient::new(
-            &self.url,
-            Uuid::new_v4(),
-            format!("{}{}", Uuid::new_v4(), Uuid::new_v4()),
-            ClientConfig {
-                max_attempts: 1,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let worker = Supervisor::new(
-            client,
+        self.worker_with_settings(
             registry,
             Settings {
                 capacity: 1,
@@ -156,7 +277,19 @@ impl App {
                 ..Default::default()
             },
         )
+    }
+    fn worker_with_settings(&self, registry: Registry, settings: Settings) -> Running {
+        let client = PlatformClient::new(
+            &self.url,
+            Uuid::new_v4(),
+            format!("{}{}", Uuid::new_v4(), Uuid::new_v4()),
+            ClientConfig {
+                max_attempts: 1,
+                ..Default::default()
+            },
+        )
         .unwrap();
+        let worker = Supervisor::new(client, registry, settings).unwrap();
         let snapshot = worker.snapshot();
         let (stop, stopped) = watch::channel(false);
         let task = tokio::spawn(worker.run(zeroize::Zeroizing::new(BOOT.into()), stopped));

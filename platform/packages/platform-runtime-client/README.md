@@ -1,5 +1,13 @@
 # Platform runtime client
 
+Workers can use `client.wait_for_work(25).await?` to await a work-availability
+hint. The wait accepts 0–25 seconds, uses the worker's existing credentials,
+and overrides the normal HTTP timeout with the requested wait plus five seconds.
+Dropping the future cancels it. This method does not retry internally; the
+supervisor owns reconnect backoff and polling fallback. An `available: true`
+response never grants execution ownership—use the existing claim and assignment
+reconciliation APIs. Continue heartbeating independently while waiting.
+
 Typed Rust transport for the shared worker and trusted harnesses. It talks to
 Platform over HTTP/HTTPS; it **does not connect to PostgreSQL**. Wire types are
 re-exported as `platform_runtime_client::types` and shared with the server through

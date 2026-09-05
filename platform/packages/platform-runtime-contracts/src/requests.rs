@@ -52,6 +52,21 @@ pub struct Claim {
     pub limit: u32,
 }
 
+/// Bounds the server's long poll; zero performs an immediate availability read.
+pub const MAX_WORK_WAIT_SECONDS: u32 = 25;
+
+#[derive(Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WorkAvailabilityQuery {
+    pub wait_seconds: Option<u32>,
+}
+
+/// A scheduling hint only. A true response does not reserve or assign a run.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct WorkAvailability {
+    pub available: bool,
+}
+
 #[derive(Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ContextQuery {
@@ -192,6 +207,9 @@ impl Commit {
 pub struct Child {
     pub harness_id: Option<String>,
     pub title: Option<String>,
+    /// Configuration is chosen for the new session, never for an individual run.
+    #[serde(default)]
+    pub config_override: JsonObject,
     /// None creates an empty child session; Some copies this run's session prefix.
     pub fork_at_revision: Option<i64>,
     pub initial_run: StartRun,
@@ -222,7 +240,5 @@ pub struct AbortRequest {
 #[serde(deny_unknown_fields)]
 pub struct StartRun {
     pub input: Message,
-    #[serde(default)]
-    pub config_override: JsonObject,
     pub expected_session_revision: i64,
 }

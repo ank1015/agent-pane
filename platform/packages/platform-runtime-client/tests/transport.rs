@@ -18,6 +18,57 @@ use uuid::Uuid;
 
 const TOKEN: &str = "worker-test-token-012345678901234567890";
 const BOOT: &str = "bootstrap-test-token-01234567890123456789";
+
+#[tokio::test]
+async fn work_wait_is_authenticated_bounded_and_has_no_transport_retry() {
+    let mock = Mock::new(vec![
+        Reply::json(200, json!({"available":true})),
+        Reply::json(503, json!({})),
+    ])
+    .await;
+    let client = mock.client();
+    assert!(client.wait_for_work(25).await.unwrap().available);
+    assert!(client.wait_for_work(26).await.is_err());
+    assert!(client.wait_for_work(25).await.is_err());
+    let seen = mock.seen();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].method, Method::GET);
+    assert_eq!(
+        seen[0].uri.path(),
+        format!("/prefix/internal/workers/{}/work-available", Uuid::nil())
+    );
+    assert_eq!(seen[0].uri.query(), Some("wait_seconds=25"));
+    assert_eq!(seen[0].headers["authorization"], format!("Bearer {TOKEN}"));
+    assert!(!seen[0].headers.contains_key("idempotency-key"));
+}
+
+#[tokio::test]
+async fn work_wait_overrides_short_normal_request_timeout_and_is_cancellable() {
+    let router = Router::new().fallback(|| async {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        axum::Json(json!({"available":false}))
+    });
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", socket.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(socket, router).await.unwrap() });
+    let client = PlatformClient::new(
+        &url,
+        Uuid::nil(),
+        TOKEN,
+        ClientConfig {
+            request_timeout: Duration::from_millis(20),
+            ..config()
+        },
+    )
+    .unwrap();
+    assert!(!client.wait_for_work(1).await.unwrap().available);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), client.wait_for_work(1))
+            .await
+            .is_err()
+    );
+    server.abort();
+}
 #[derive(Clone)]
 struct Seen {
     method: Method,

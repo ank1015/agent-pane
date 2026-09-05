@@ -123,12 +123,14 @@ impl App {
             .execute(&self.pool)
             .await
             .unwrap();
-        sqlx::query("insert into sessions(id,project_id,harness_id) values($1,$2,'test')")
-            .bind(session)
-            .bind(project)
-            .execute(&self.pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "insert into sessions (id,project_id,harness_id,config) values ($1,$2,'test','{}')",
+        )
+        .bind(session)
+        .bind(project)
+        .execute(&self.pool)
+        .await
+        .unwrap();
         sqlx::query("insert into runs(id,project_id,session_id) values($1,$2,$3)")
             .bind(run)
             .bind(project)

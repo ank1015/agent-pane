@@ -173,7 +173,13 @@ async fn make_wait(app: &App, run: Uuid, mode: &str, keys: &[&str]) -> Uuid {
 #[ignore = "requires DATABASE_URL; isolated SQLx database"]
 async fn all_application_routes_and_cooperative_abort(pool: PgPool) {
     let app = App::new(pool).await;
-    assert_eq!(app.get("/api/harnesses").await["items"][0]["id"], "test");
+    assert!(
+        app.get("/api/harnesses").await["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["id"] == "test")
+    );
     assert_eq!(app.get("/api/harnesses/test").await["enabled"], true);
     let created = app.create("create", false).await;
     assert!(created["run"].is_null());
@@ -341,9 +347,7 @@ async fn all_application_routes_and_cooperative_abort(pool: PgPool) {
 async fn creation_configuration_validation_and_atomic_failure(pool: PgPool) {
     let app = App::new(pool).await;
     let path = format!("/api/projects/{}/sessions", app.project);
-    let mut initial = start(0);
-    initial["config_override"] = json!({"nested":{"change":2},"remove":null});
-    let request = json!({"harness_id":"test","initial_run":initial});
+    let request = json!({"harness_id":"test","initial_run":start(0),"config_override":{"nested":{"change":2},"remove":null}});
     let created = app.post(&path, "good", request.clone(), 201).await;
     assert_eq!(
         created["run"]["config"],
@@ -354,7 +358,7 @@ async fn creation_configuration_validation_and_atomic_failure(pool: PgPool) {
     changed["title"] = json!("Other");
     app.post(&path, "good", changed, 409).await;
     let mut invalid = request.clone();
-    invalid["initial_run"]["config_override"] = json!({"model":null});
+    invalid["config_override"] = json!({"model":null});
     app.post(&path, "bad-config", invalid, 422).await;
     let mut stale = request.clone();
     stale["initial_run"]["expected_session_revision"] = json!(5);
@@ -381,11 +385,101 @@ async fn creation_configuration_validation_and_atomic_failure(pool: PgPool) {
         app.get("/api/harnesses").await["items"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .iter()
+            .all(|h| h["id"] != "test")
     );
     assert_eq!(app.get("/api/harnesses/test").await["enabled"], false);
     app.post(&path, "disabled", request.clone(), 409).await;
     assert_eq!(app.post(&path, "good", request, 201).await, created);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn session_configuration_is_frozen_and_forks_can_override(pool: PgPool) {
+    let app = App::new(pool).await;
+    let created = app.create("frozen", true).await;
+    let session = uuid(&created["session"]["id"]);
+    let run = uuid(&created["run"]["id"]);
+    let original = created["session"]["config"].clone();
+    assert_eq!(original, created["run"]["config"]);
+    sqlx::query("update harnesses set default_config=jsonb_set(default_config,'{model}','\"new-default\"') where id='test'")
+        .execute(&app.pool).await.unwrap();
+    fail(&app, run).await;
+    let followup = app
+        .post(
+            &format!("/api/sessions/{session}/runs"),
+            "followup",
+            start(0),
+            201,
+        )
+        .await;
+    assert_eq!(followup["run"]["config"], original);
+    let mut override_run = start(0);
+    override_run["config_override"] = json!({});
+    app.post(
+        &format!("/api/sessions/{session}/runs"),
+        "no-override",
+        override_run,
+        422,
+    )
+    .await;
+    app.check(
+        Method::PATCH,
+        &format!("/api/sessions/{session}"),
+        None,
+        Some(json!({"config":{}})),
+        422,
+    )
+    .await;
+    let fork = app
+        .post(
+            &format!("/api/sessions/{session}/forks"),
+            "fork",
+            json!({"at_revision":0,"config_override":{"nested":{"change":42}}}),
+            201,
+        )
+        .await;
+    assert_eq!(fork["session"]["config"]["model"], original["model"]);
+    assert_eq!(fork["session"]["config"]["nested"]["keep"], true);
+    assert_eq!(fork["session"]["config"]["nested"]["change"], 42);
+    assert_eq!(
+        app.get(&format!("/api/sessions/{session}")).await["config"],
+        original
+    );
+    assert!(
+        sqlx::query("update sessions set config='{}' where id=$1")
+            .bind(session)
+            .execute(&app.pool)
+            .await
+            .is_err()
+    );
+
+    let path = format!("/api/sessions/{session}/inputs?limit=1");
+    let page = app.get(&path).await;
+    assert_eq!(page["items"][0]["status"], "pending");
+    assert_eq!(page["items"][0]["id"], created["input"]["id"]);
+    assert!(page["items"][0].get("deduplication_key").is_none());
+    let next = app
+        .get(&format!(
+            "{path}&cursor={}",
+            page["next_cursor"].as_str().unwrap()
+        ))
+        .await;
+    assert_eq!(next["items"][0]["id"], followup["input"]["id"]);
+    assert!(next["next_cursor"].is_null());
+    assert!(
+        app.get(&format!("/api/sessions/{session}/messages")).await["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let fork_id = fork["session"]["id"].as_str().unwrap();
+    assert!(
+        app.get(&format!("/api/sessions/{fork_id}/inputs")).await["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -851,7 +945,7 @@ async fn active_worker_ownership_is_preserved_and_abort_does_not_cascade(pool: P
     for index in 0..3 {
         let session = uuid(&app.create(&format!("child-{index}"), false).await["session"]["id"]);
         let child = Uuid::now_v7();
-        sqlx::query("insert into runs(id,project_id,session_id,parent_run_id) values($1,$2,$3,$4)")
+        sqlx::query("insert into runs(id,project_id,session_id,parent_run_id,config) values($1,$2,$3,$4,(select config from sessions where id=$3))")
             .bind(child)
             .bind(app.project)
             .bind(session)
@@ -954,7 +1048,7 @@ async fn invalid_requests_are_bounded_and_do_not_create_state(pool: PgPool) {
     request["initial_run"]["input"]["content"] = json!([]);
     app.post(&path, "empty-content", request, 400).await;
     let mut request = json!({"harness_id":"test","initial_run":start(0)});
-    request["initial_run"]["config_override"] = json!({"large":"x".repeat(65536)});
+    request["config_override"] = json!({"large":"x".repeat(65536)});
     app.post(&path, "large-config", request, 400).await;
     app.post(
         &path,

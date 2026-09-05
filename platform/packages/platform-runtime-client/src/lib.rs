@@ -140,6 +140,24 @@ impl PlatformClient {
             )
             .await
     }
+
+    /// Wait for an advisory scheduling hint, not an assignment. Dropping this
+    /// future cancels the request. Heartbeats must run independently.
+    pub async fn wait_for_work(&self, wait_seconds: u32) -> Result<WorkAvailability> {
+        if wait_seconds > MAX_WORK_WAIT_SECONDS {
+            return Err(Error::Invalid("work wait must be between 0 and 25 seconds"));
+        }
+        let request = self
+            .request(Method::GET, &self.worker_path("/work-available"))?
+            .query(&WorkAvailabilityQuery {
+                wait_seconds: Some(wait_seconds),
+            })
+            // Override the ordinary 10s request timeout for this call only.
+            .timeout(std::time::Duration::from_secs(u64::from(wait_seconds) + 5));
+        // The supervisor owns reconnect/backoff and polling fallback. Avoid
+        // stacking transport retries on top of a long-lived advisory request.
+        self.inner.transport.send(request, false).await
+    }
     /// No automatic retry: PATCH has no receipt, and replay after a concurrent
     /// lifecycle change could overwrite newer administrative intent.
     pub async fn patch_worker(&self, request: &PatchWorker) -> Result<Worker> {
@@ -193,6 +211,14 @@ impl PlatformClient {
     }
     pub async fn session_runs(&self, id: Uuid, query: &ListQuery) -> Result<CursorPage<Run>> {
         self.get(&format!("api/sessions/{id}/runs"), query).await
+    }
+    /// All durable inputs across the session's runs. Reading does not acknowledge them.
+    pub async fn session_inputs(
+        &self,
+        id: Uuid,
+        query: &ListQuery,
+    ) -> Result<CursorPage<RunInput>> {
+        self.get(&format!("api/sessions/{id}/inputs"), query).await
     }
     pub async fn run_state(&self, id: Uuid) -> Result<Run> {
         self.get(&format!("api/runs/{id}"), &()).await

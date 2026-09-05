@@ -149,6 +149,7 @@ dependencies = [
  "axum",
  "cc-harness-support",
  "chrono",
+ "execution-api",
  "execution-client",
  "execution-core",
  "execution-supervisor-core",

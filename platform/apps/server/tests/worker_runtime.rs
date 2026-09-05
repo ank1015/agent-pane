@@ -1,4 +1,201 @@
 //! Contract tests exercise real HTTP and disposable PostgreSQL databases.
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn availability_is_authenticated_advisory_and_matches_claim_eligibility(pool: PgPool) {
+    let app = App::new(pool).await;
+    let w = app.register(1).await;
+    let path = format!("/internal/workers/{}/work-available", w.id);
+    app.request(Method::GET, &path, None, 0, None, None, 401)
+        .await;
+    app.request(
+        Method::GET,
+        &format!("{path}?wait_seconds=26"),
+        Some(&w),
+        0,
+        None,
+        None,
+        400,
+    )
+    .await;
+    app.request(
+        Method::GET,
+        &format!("{path}?unexpected=1"),
+        Some(&w),
+        0,
+        None,
+        None,
+        400,
+    )
+    .await;
+    assert_eq!(app.availability(&w, 0).await["available"], false);
+    let created = app.create().await;
+    let run: Uuid = serde_json::from_value(created["run"]["id"].clone()).unwrap();
+    assert_eq!(app.availability(&w, 0).await["available"], true);
+    assert_eq!(app.availability(&w, 0).await["available"], true);
+    let owned: Option<Uuid> = sqlx::query_scalar("select worker_id from runs where id=$1")
+        .bind(run)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(owned, None, "availability must never claim");
+
+    sqlx::query("update workers set supported_harnesses=array['other'] where id=$1")
+        .bind(w.id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(app.availability(&w, 0).await["available"], false);
+    sqlx::query("update workers set supported_harnesses=array['test'] where id=$1")
+        .bind(w.id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let other = app.register(1).await;
+    let (a, b) = tokio::join!(app.availability(&w, 0), app.availability(&other, 0));
+    assert_eq!(a["available"], true);
+    assert_eq!(b["available"], true);
+    let (a, b) = tokio::join!(app.claim(&w, "a", 1), app.claim(&other, "b", 1));
+    assert_eq!(
+        a["items"].as_array().unwrap().len() + b["items"].as_array().unwrap().len(),
+        1
+    );
+    let winner = if a["items"].as_array().unwrap().is_empty() {
+        &other
+    } else {
+        &w
+    };
+    app.create().await;
+    assert_eq!(
+        app.availability(winner, 0).await["available"],
+        false,
+        "capacity is enforced"
+    );
+    sqlx::query(
+        "update runs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+    )
+    .bind(run)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(app.availability(winner, 0).await["available"], true);
+    sqlx::query("update workers set status='draining' where id=$1")
+        .bind(winner.id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(app.availability(winner, 0).await["available"], false);
+    sqlx::query("update workers set status='offline' where id=$1")
+        .bind(winner.id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    app.request(
+        Method::GET,
+        &format!(
+            "/internal/workers/{}/work-available?wait_seconds=0",
+            winner.id
+        ),
+        Some(winner),
+        0,
+        None,
+        None,
+        409,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn availability_wakes_on_commit_without_holding_a_database_connection(pool: PgPool) {
+    use std::time::{Duration, Instant};
+    // A single-connection pool would deadlock creation if the wait held it.
+    let single = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(1))
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let app = App::new(single).await;
+    let w = app.register(2).await;
+    let start = Instant::now();
+    let (available, _) = tokio::join!(app.availability(&w, 5), async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        app.create().await;
+    });
+    assert_eq!(available["available"], true);
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "must wake before timeout/fallback"
+    );
+    app.pool.close().await;
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn availability_timeout_and_missing_hints_recheck_durable_state(pool: PgPool) {
+    use std::time::{Duration, Instant};
+    let app = App::new(pool).await;
+    let w = app.register(2).await;
+    let start = Instant::now();
+    assert_eq!(app.availability(&w, 1).await["available"], false);
+    assert!(start.elapsed() >= Duration::from_millis(900));
+    let created = app.create().await;
+    let run: Uuid = serde_json::from_value(created["run"]["id"].clone()).unwrap();
+    sqlx::query("update runs set available_at=clock_timestamp()+interval '250 milliseconds',version=version+1 where id=$1").bind(run).execute(&app.pool).await.unwrap();
+    assert_eq!(app.availability(&w, 0).await["available"], false);
+    // No notification is emitted when wall time crosses available_at.
+    assert_eq!(app.availability(&w, 1).await["available"], true);
+    app.claim(&w, "claim", 1).await;
+    let (available, _) = tokio::join!(app.availability(&w, 1), async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Simulate lease expiration without a notification.
+        sqlx::query(
+            "update runs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        )
+        .bind(run)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    });
+    assert_eq!(available["available"], true);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn availability_observes_notifications_from_another_platform_replica(pool: PgPool) {
+    use std::time::{Duration, Instant};
+    let app = App::new(pool.clone()).await;
+    let w = app.register(1).await;
+    let notifications = app.runtime.spawn_notification_listener();
+    // Wait until the dedicated PostgreSQL listener has connected.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let listening: bool = sqlx::query_scalar("select exists(select 1 from pg_stat_activity where datname=current_database() and application_name='platform-runtime-notifications')").fetch_one(&pool).await.unwrap();
+            if listening { break; }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    let other = router(RuntimeService::new(pool.clone()));
+    let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "http://{}/api/projects/{}/sessions",
+        socket.local_addr().unwrap(),
+        app.project
+    );
+    let server = tokio::spawn(async move { axum::serve(socket, other).await.unwrap() });
+    let start = Instant::now();
+    let (available, _) = tokio::join!(app.availability(&w, 5), async {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        app.client.post(url).header("Idempotency-Key", Uuid::new_v4().to_string())
+            .json(&json!({"harness_id":"test","initial_run":{"input":user(),"expected_session_revision":0}}))
+            .send().await.unwrap().error_for_status().unwrap();
+    });
+    notifications.abort();
+    server.abort();
+    assert_eq!(available["available"], true);
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
 use platform_server::runtime::{RuntimeService, router, worker_router};
 use reqwest::{Client, Method};
 use serde_json::{Value, json};
@@ -123,6 +320,21 @@ impl App {
     }
     async fn create(&self) -> Value {
         self.request(Method::POST,&format!("/api/projects/{}/sessions",self.project),None,0,Some(&Uuid::new_v4().to_string()),Some(json!({"harness_id":"test","initial_run":{"input":user(),"expected_session_revision":0}})),201).await
+    }
+    async fn availability(&self, w: &Worker, seconds: u32) -> Value {
+        self.request(
+            Method::GET,
+            &format!(
+                "/internal/workers/{}/work-available?wait_seconds={seconds}",
+                w.id
+            ),
+            Some(w),
+            0,
+            None,
+            None,
+            200,
+        )
+        .await
     }
     async fn claim(&self, w: &Worker, key: &str, limit: i32) -> Value {
         self.request(
@@ -341,12 +553,14 @@ async fn follow_up_fences_ownership_project_and_session_state(pool: PgPool) {
         .execute(&app.pool)
         .await
         .unwrap();
-    sqlx::query("insert into sessions(id,project_id,harness_id) values($1,$2,'test')")
-        .bind(foreign_session)
-        .bind(foreign_project)
-        .execute(&app.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "insert into sessions (id,project_id,harness_id,config) values ($1,$2,'test','{}')",
+    )
+    .bind(foreign_session)
+    .bind(foreign_project)
+    .execute(&app.pool)
+    .await
+    .unwrap();
     let mut cross_project = body.clone();
     cross_project["target_session_id"] = json!(foreign_session);
     app.request(

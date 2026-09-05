@@ -8,6 +8,24 @@ pub(super) async fn resolve(
     harness: &str,
     overrides: &JsonObject,
 ) -> Result<Value> {
+    resolve_from(tx, harness, overrides, None).await
+}
+
+pub(super) async fn resolve_from(
+    tx: &mut Transaction<'_, Postgres>,
+    harness: &str,
+    overrides: &JsonObject,
+    inherited: Option<&Value>,
+) -> Result<Value> {
+    if serde_json::to_vec(overrides)
+        .map_err(|_| RuntimeError::StoredData)?
+        .len()
+        > 64 * 1024
+    {
+        return Err(RuntimeError::Invalid(
+            "Configuration overrides must not exceed 64 KiB.",
+        ));
+    }
     let (mut config, schema, enabled): (Value, Option<Value>, bool) = sqlx::query_as(
         "select default_config,config_schema,enabled from harnesses where id=$1 for share",
     )
@@ -21,7 +39,19 @@ pub(super) async fn resolve(
             "The harness is disabled for new work.",
         ));
     }
+    if let Some(inherited) = inherited {
+        config = inherited.clone();
+    }
     merge(&mut config, &Value::Object(overrides.clone()));
+    if serde_json::to_vec(&config)
+        .map_err(|_| RuntimeError::StoredData)?
+        .len()
+        > 64 * 1024
+    {
+        return Err(RuntimeError::Invalid(
+            "Resolved session configuration must not exceed 64 KiB.",
+        ));
+    }
     if let Some(schema) = schema {
         // Network resolution is disabled by the dependency's feature set.
         let validator =

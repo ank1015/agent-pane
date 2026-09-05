@@ -46,7 +46,7 @@ impl RuntimeService {
             .environments
             .as_ref()
             .ok_or(RuntimeError::Configuration)?;
-        let root_path = service.validate_reference(&request).await?;
+        service.validate_reference(&request).await?;
 
         let mut tx = self.transaction().await?;
         // A concurrent request may have completed during reference validation.
@@ -60,7 +60,7 @@ impl RuntimeService {
             .bind(run)
             .fetch_one(&mut *tx)
             .await?;
-        let environment = EnvironmentService::insert(&mut tx, project, request, root_path).await?;
+        let environment = EnvironmentService::insert(&mut tx, project, request).await?;
         let reply = Reply::new(
             201,
             serde_json::to_value(environment).map_err(|_| RuntimeError::StoredData)?,

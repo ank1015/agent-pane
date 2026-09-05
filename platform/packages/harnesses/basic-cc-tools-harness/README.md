@@ -12,11 +12,30 @@ Configuration is exposed by `config_schema()`:
 {
   "model": {"provider":"openai", "id":"gpt-5.6-terra"},
   "reasoning_level":"high",
-  "execution": {"host_id":"<host UUID>", "workspace_root":"work", "path":"project"}
+  "environment": {"type":"machine", "machine_id":"<host UUID>", "workspace_root":"/home/user", "path":"project"}
 }
 ```
 
-Optional fields: `account_id` and `system_prompt_append`. Reasoning levels are
+Optional fields: `account_id` and `system_prompt_append`.
+
+For a sandbox, use `environment: {"type":"sandbox", "snapshot_id":"<snapshot UUID>",
+"workspace_root":"/home/user", "path":"project"}`. Supply a descriptor, not the full
+environment-table row; the UI copies these fields from its selected record.
+`workspace_root` is an absolute native path, not an execution root ID.
+The harness privately matches it against the connected host descriptor and translates
+to execution addressing. Historical immutable configs using IDs remain readable.
+Platform does not interpret environment configuration.
+
+The session freezes this config at creation. On first activation the harness
+resolves a machine directly or restores a snapshot with a deterministic session
+idempotency key. It saves the resulting target before connecting, and later runs
+reuse it. Forks inherit/override config but not private state, so sandbox forks
+restore a separate sandbox from the configured snapshot (not the parent's current
+filesystem). Expired/deleted targets are not silently replaced: recovery never
+resets the session's workspace to an old snapshot. There is no automatic sandbox
+deletion when a run finishes.
+
+Reasoning levels are
 `low`, `medium`, `high`, `xhigh`, `max`. The harness constructs provider options
 using Pi-style policy: stable session cache identity, provider-owned output
 limits, Responses reasoning/native replay, and model-specific Fireworks effort
@@ -25,9 +44,8 @@ catalogs are accepted. New catalog entries need an appropriate reasoning mapping
 Provider-native settings are not accepted from run config. Gateway credentials
 are injected through clients, not stored in the run.
 
-The execution target is explicit: an already connected host, registered root ID,
-and root-relative directory. Environment lookup/sandbox provisioning are not part
-of this harness. The initial system prompt includes host OS/root/directory and
+The execution target uses the resolved host, absolute workspace path,
+and root-relative directory. The initial system prompt includes host OS/root/directory and
 correct instructions for the four tools, and can have text appended.
 
 ## Loop and durability
@@ -55,7 +73,7 @@ not exactly-once execution across arbitrary gateway/supervisor crashes.
 Read observations are bounded per-run checkpoint data (128 entries / 64 KiB).
 Each successful edit/write consumes the matching observation; it never records a
 replacement observation. Revision conflicts invalidate observations. A new run
-starts empty. No session-scoped state or separate database is used. Eviction
+starts empty. Only the resolved execution target uses session-scoped state; no separate database is used. Eviction
 requires another read. Revisions still protect changes between read and mutation.
 
 Write contents and edit source/results are limited to 64 KiB so prepared mutations

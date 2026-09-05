@@ -177,13 +177,13 @@ async fn session_state_survives_followups_but_not_forks_or_other_sessions(pool: 
 
     let child = run
         .create_child(&command(Child {
+            config_override: Default::default(),
             harness_id: None,
             title: None,
             fork_at_revision: Some(1),
             initial_run: StartRun {
                 input: serde_json::from_value(user()).unwrap(),
                 expected_session_revision: 1,
-                config_override: Default::default(),
             },
         }))
         .await

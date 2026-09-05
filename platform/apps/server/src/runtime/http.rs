@@ -30,6 +30,7 @@ pub fn router(service: RuntimeService) -> Router {
         )
         .route("/api/sessions/{id}", get(session).patch(patch_session))
         .route("/api/sessions/{id}/messages", get(messages))
+        .route("/api/sessions/{id}/inputs", get(session_inputs))
         .route("/api/sessions/{id}/forks", post(fork))
         .route("/api/sessions/{id}/runs", get(runs).post(start_run))
         .route("/api/runs/{id}", get(run))
@@ -117,6 +118,13 @@ async fn messages(
 }
 async fn runs(State(s): State<RuntimeService>, p: Id, q: Params<ListQuery>) -> Result<Json<Value>> {
     Ok(Json(s.runs(id(p)?, false, query(q)?).await?))
+}
+async fn session_inputs(
+    State(s): State<RuntimeService>,
+    p: Id,
+    q: Params<ListQuery>,
+) -> Result<Json<Value>> {
+    Ok(Json(s.session_inputs(id(p)?, query(q)?).await?))
 }
 async fn children(
     State(s): State<RuntimeService>,

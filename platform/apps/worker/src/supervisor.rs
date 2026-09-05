@@ -80,7 +80,7 @@ fn deadline(start: Instant, seconds: u32) -> Instant {
     start + Duration::from_secs(u64::from(seconds.saturating_sub(5)))
 }
 fn heartbeat_error(error: Error) -> Error {
-    // Only the heartbeat interface guarantees this conflict means offline.
+    // Heartbeat and work-availability interfaces guarantee this means offline.
     // A claim can also conflict during an ordinary administrative drain.
     if error.conflict() == Some(ConflictCode::WorkerStateConflict) {
         Error::WorkerOffline
@@ -144,6 +144,10 @@ impl Supervisor {
         let mut active: HashMap<Uuid, Active> = HashMap::new();
         let mut retired = HashSet::new();
         let mut network = JoinSet::new();
+        // A separate, cancellable long poll cannot block heartbeat/allocation IO.
+        let mut work_wait = JoinSet::new();
+        let mut next_work_wait = Instant::now();
+        let mut work_wait_backoff = self.settings.poll_interval;
         let mut executions = JoinSet::new();
         let mut heartbeat_busy = false;
         let mut allocation_busy = false;
@@ -161,6 +165,26 @@ impl Supervisor {
             tokio::select! {
                 _ = stop.changed(), if !draining => {
                     if *stop.borrow() || stop.has_changed().is_err() { draining = true; }
+                }
+                Some(result) = work_wait.join_next() => {
+                    match result {
+                        Ok(Ok(WorkAvailability { available })) => {
+                            work_wait_backoff = self.settings.poll_interval;
+                            if available { next_poll = Instant::now(); }
+                            // Bound repeated hints when several workers race to claim.
+                            next_work_wait = Instant::now() + Duration::from_millis(100);
+                        }
+                        Ok(Err(e)) => {
+                            let error = heartbeat_error(e);
+                            if matches!(error, Error::WorkerOffline) { break Some(error); }
+                            tracing::warn!(error=%error, "work notification unavailable; allocation polling remains active");
+                            next_work_wait = Instant::now() + work_wait_backoff
+                                + Duration::from_millis(rand::random::<u8>() as u64);
+                            work_wait_backoff = (work_wait_backoff * 2).min(Duration::from_secs(15));
+                        }
+                        Err(e) if e.is_cancelled() => {}
+                        Err(_) => break Some(Error::Protocol("work notification task panicked")),
+                    }
                 }
                 _ = heartbeat.tick(), if !heartbeat_busy => {
                     heartbeat_busy = true;
@@ -312,6 +336,7 @@ impl Supervisor {
                 break None;
             }
             if !draining && !allocation_busy && Instant::now() >= next_poll {
+                work_wait.abort_all();
                 allocation_busy = true;
                 let command = pending_claim
                     .get_or_insert_with(|| {
@@ -360,6 +385,18 @@ impl Supervisor {
                     Network::Allocation(start, result)
                 });
             }
+            let spare_capacity =
+                !self.registry.0.is_empty() && active.len() < self.settings.capacity as usize;
+            if draining || !spare_capacity {
+                work_wait.abort_all();
+            } else if !allocation_busy
+                && pending_claim.is_none()
+                && work_wait.is_empty()
+                && Instant::now() >= next_work_wait
+            {
+                let client = self.client.clone();
+                work_wait.spawn(async move { client.wait_for_work(MAX_WORK_WAIT_SECONDS).await });
+            }
         };
         if failure.is_some() {
             for a in active.values() {
@@ -374,6 +411,8 @@ impl Supervisor {
         // Cancels local futures only. Never writes aborted/completed, never kills
         // children or external gateway operations. Unreleased leases expire.
         active.clear();
+        work_wait.abort_all();
+        while work_wait.join_next().await.is_some() {}
         network.abort_all();
         while network.join_next().await.is_some() {}
         while executions.join_next().await.is_some() {}

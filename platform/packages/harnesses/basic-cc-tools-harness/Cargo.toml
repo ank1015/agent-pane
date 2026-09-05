@@ -15,6 +15,7 @@ provider-openai = { path = "../../../../llm/packages/provider-openai" }
 provider-chatgpt = { path = "../../../../llm/packages/provider-chatgpt" }
 provider-fireworks = { path = "../../../../llm/packages/provider-fireworks" }
 execution-client.workspace = true
+execution-api.workspace = true
 execution-core.workspace = true
 tool-read = { path = "../../tools/read" }
 tool-write = { path = "../../tools/write" }

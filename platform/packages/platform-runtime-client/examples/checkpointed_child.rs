@@ -21,13 +21,13 @@ async fn ensure_child(run: &RunClient, task: Message) -> Result<ChildResponse> {
         let command = Command::new(
             RequestKey::new(Uuid::new_v4().to_string())?,
             Child {
+                config_override: Default::default(),
                 harness_id: None,
                 title: Some("Check the proof".into()),
                 fork_at_revision: Some(context.session.current_revision),
                 initial_run: StartRun {
                     input: task,
                     expected_session_revision: context.session.current_revision,
-                    config_override: Default::default(),
                 },
             },
         );

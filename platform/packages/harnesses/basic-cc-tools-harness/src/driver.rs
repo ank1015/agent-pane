@@ -29,6 +29,26 @@ pub(crate) async fn run(harness: BasicCcToolsHarness, execution: Execution) -> R
         Ok(config) => config,
         Err(message) => return initial_failure(&execution.client, &context, &message).await,
     };
+    if context.run.run.abort_requested_at.is_some() && context.checkpoint.is_none() {
+        let mut commit = Commit::new(context.run.run.version, context.session.current_revision);
+        commit.disposition = Disposition::Aborted;
+        execution.client.commit(&command(commit)?).await?;
+        return Ok(());
+    }
+    let target = match crate::environment::resolve(
+        &harness.execution,
+        &execution.client,
+        &mut context,
+        &config.environment,
+    )
+    .await
+    {
+        Ok(target) => target,
+        Err(crate::environment::ResolveError::Retry(error)) => return Err(error),
+        Err(crate::environment::ResolveError::Permanent(message)) => {
+            return initial_failure(&execution.client, &context, &message).await;
+        }
+    };
     let mut messages = std::mem::take(&mut context.messages.items);
     let revision = context.session.current_revision;
     let mut after = context.messages.next_after_revision;
@@ -71,7 +91,7 @@ pub(crate) async fn run(harness: BasicCcToolsHarness, execution: Execution) -> R
             .execution
             .connect_host(
                 &OperationContext::with_timeout(Duration::from_secs(30)),
-                config.execution.host_id.clone(),
+                target.host_id.clone(),
             )
             .await;
         let connected = match connected {
@@ -85,10 +105,10 @@ pub(crate) async fn run(harness: BasicCcToolsHarness, execution: Execution) -> R
                 return initial_failure(&execution.client, &context, &error.to_string()).await;
             }
         };
-        let cwd = config
-            .execution
-            .cwd()
-            .map_err(|_| Error::Invalid("invalid working directory"))?;
+        let cwd = match target.cwd(connected.descriptor()) {
+            Ok(cwd) => cwd,
+            Err(message) => return initial_failure(&execution.client, &context, &message).await,
+        };
         let tools = Tools {
             host: &connected,
             cwd: cwd.clone(),
@@ -123,6 +143,7 @@ pub(crate) async fn run(harness: BasicCcToolsHarness, execution: Execution) -> R
         client: execution.client,
         signals: execution.signals,
         config,
+        target,
         host,
         state,
         messages,
@@ -156,6 +177,7 @@ struct Driver {
     client: RunClient,
     signals: watch::Receiver<Signals>,
     config: Config,
+    target: crate::ExecutionTarget,
     host: Option<GatewayHostRuntime>,
     state: State,
     messages: Vec<SessionMessage>,
@@ -351,17 +373,18 @@ impl Driver {
                 }
                 let message = message.filter(|_| size <= 512 * 1024);
                 let accepted = message.is_some();
+                let message_id = accepted.then(Uuid::now_v7);
                 if accepted {
                     message_bytes += size;
                 }
                 if let Some(message) = message {
                     messages.push(AppendMessage {
-                        message_id: Uuid::now_v7(),
+                        message_id: message_id.unwrap(),
                         message,
                     });
                 }
                 results.push(InputResult { id: input.id, status: if accepted { InputStatus::Handled } else { InputStatus::Rejected },
-                    handling: object(json!({"reason": if accepted { "appended_to_history" } else { "unsupported input kind or user message exceeds 512 KiB" }})) });
+                    handling: object(json!({"message_id":message_id,"reason": if accepted { "appended_to_history" } else { "unsupported input kind or user message exceeds 512 KiB" }})) });
             }
             if !messages.is_empty() {
                 self.state.phase = Phase::Boundary {
@@ -517,7 +540,7 @@ impl Driver {
             let context = OperationContext::with_timeout(Duration::from_secs(30));
             let Some(result) = guarded(
                 &mut self.signals,
-                client.connect_host(&context, self.config.execution.host_id.clone()),
+                client.connect_host(&context, self.target.host_id.clone()),
             )
             .await
             else {
@@ -563,9 +586,8 @@ impl Driver {
         let tools = Tools {
             host: self.host.as_ref().unwrap(),
             cwd: self
-                .config
-                .execution
-                .cwd()
+                .target
+                .cwd(self.host.as_ref().unwrap().descriptor())
                 .map_err(|_| Error::Invalid("invalid cwd"))?,
         };
         let context = OperationContext::with_timeout(Duration::from_secs(30));
@@ -689,7 +711,7 @@ impl Driver {
                                 .execution
                                 .connect_host(
                                     &OperationContext::with_timeout(Duration::from_secs(10)),
-                                    self.config.execution.host_id.clone(),
+                                    self.target.host_id.clone(),
                                 )
                                 .await
                                 .map_err(|_| {
@@ -701,7 +723,10 @@ impl Driver {
                     let result = if let Some(running) = running {
                         Tools {
                             host,
-                            cwd: self.config.execution.cwd().unwrap(),
+                            cwd: self
+                                .target
+                                .cwd(host.descriptor())
+                                .map_err(|_| Error::Invalid("invalid working directory"))?,
                         }
                         .bash()
                         .map_err(|_| Error::Invalid("invalid bash configuration"))?
@@ -928,7 +953,7 @@ async fn guarded<T>(
         }
     }
 }
-fn command(commit: Commit) -> Result<Command<Commit>> {
+pub(crate) fn command(commit: Commit) -> Result<Command<Commit>> {
     Ok(Command::new(
         RequestKey::new(Uuid::new_v4().to_string())?,
         commit,

@@ -106,7 +106,7 @@ async fn bootstrap_returns_safe_catalog_accounts_and_project_scoped_environments
     let id = project(&pool).await;
     let other = project(&pool).await;
     for (owner, name) in [(id, "Desktop test"), (other, "Other project secret")] {
-        sqlx::query("insert into project_environments(id,project_id,name,type,machine_id,workspace_root,workspace_root_path,path) values($1,$2,$3,'machine',$4,'work','/work','test')")
+        sqlx::query("insert into project_environments(id,project_id,name,type,machine_id,workspace_root,path) values($1,$2,$3,'machine',$4,'/work','test')")
             .bind(Uuid::now_v7()).bind(owner).bind(name).bind(Uuid::now_v7()).execute(&pool).await.unwrap();
     }
     sqlx::query("insert into harnesses(id,name,enabled) values('hidden','Hidden',false)")
@@ -118,10 +118,7 @@ async fn bootstrap_returns_safe_catalog_accounts_and_project_scoped_environments
     assert_eq!(body["provider_accounts"].as_array().unwrap().len(), 3);
     assert_eq!(body["project_environments"].as_array().unwrap().len(), 1);
     assert_eq!(body["project_environments"][0]["name"], "Desktop test");
-    assert_eq!(
-        body["project_environments"][0]["workspace_root_path"],
-        "/work"
-    );
+    assert_eq!(body["project_environments"][0]["workspace_root"], "/work");
     let harness = body["harnesses"]
         .as_array()
         .unwrap()

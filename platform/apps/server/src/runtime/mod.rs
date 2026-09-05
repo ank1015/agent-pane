@@ -15,6 +15,7 @@ mod receipts;
 mod session_state;
 mod stream;
 mod waits;
+mod work_available;
 mod worker_http;
 mod worker_model;
 mod workers;

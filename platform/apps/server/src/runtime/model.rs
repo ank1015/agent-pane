@@ -20,15 +20,6 @@ impl ValidateStartRun for StartRun {
                 "expected_session_revision must be nonnegative.",
             ));
         }
-        if serde_json::to_vec(&self.config_override)
-            .map_err(|_| RuntimeError::StoredData)?
-            .len()
-            > 64 * 1024
-        {
-            return Err(RuntimeError::Invalid(
-                "Configuration overrides must not exceed 64 KiB.",
-            ));
-        }
         Ok(())
     }
 }
@@ -38,6 +29,8 @@ impl ValidateStartRun for StartRun {
 pub struct CreateSession {
     pub harness_id: String,
     pub title: Option<String>,
+    #[serde(default)]
+    pub config_override: JsonObject,
     pub initial_run: Option<StartRun>,
 }
 
@@ -47,6 +40,8 @@ pub struct ForkSession {
     pub at_revision: i64,
     pub harness_id: Option<String>,
     pub title: Option<String>,
+    #[serde(default)]
+    pub config_override: JsonObject,
     pub initial_run: Option<StartRun>,
 }
 
@@ -166,6 +161,7 @@ pub(super) struct SessionRow {
     pub id: Uuid,
     pub project_id: Uuid,
     pub harness_id: String,
+    pub config: Value,
     pub title: Option<String>,
     pub current_revision: i64,
     pub archived_at: Option<DateTime<Utc>>,

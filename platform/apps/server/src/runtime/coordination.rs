@@ -103,8 +103,16 @@ impl RuntimeService {
         }
         let harness = request.harness_id.as_deref().unwrap_or(&source.harness_id);
         mutations::enabled(&mut tx, harness).await?;
+        let config = super::configuration::resolve_from(
+            &mut tx,
+            harness,
+            &request.config_override,
+            (request.fork_at_revision.is_some() && harness == source.harness_id)
+                .then_some(&source.config),
+        )
+        .await?;
         let session = Uuid::now_v7();
-        sqlx::query("insert into sessions(id,project_id,harness_id,title,forked_from_session_id,forked_at_revision) values($1,$2,$3,$4,$5,$6)").bind(session).bind(p.project_id).bind(harness).bind(request.title).bind(request.fork_at_revision.map(|_|source.id)).bind(request.fork_at_revision).execute(&mut *tx).await?;
+        sqlx::query("insert into sessions(id,project_id,harness_id,title,forked_from_session_id,forked_at_revision,config) values($1,$2,$3,$4,$5,$6,$7)").bind(session).bind(p.project_id).bind(harness).bind(request.title).bind(request.fork_at_revision.map(|_|source.id)).bind(request.fork_at_revision).bind(config).execute(&mut *tx).await?;
         if let Some(revision) = request.fork_at_revision {
             sqlx::query("insert into session_messages(project_id,session_id,revision,message_id,run_id) select project_id,$1,revision,message_id,null from session_messages where session_id=$2 and revision<=$3 order by revision")
                 .bind(session).bind(source.id).bind(revision).execute(&mut *tx).await?;

@@ -20,7 +20,7 @@ Available tools: read, write, edit, bash.\n\
 - Bash calls use fresh shells. Use workdir to choose a directory; directory changes and shell variables do not persist between calls.\n\
 - Be concise and show file paths clearly.\n\n\
 Execution host OS: {:?}.\nWorkspace root: {}.\nDirectory relative to that root: {}.\n\
-The shell is the execution supervisor's default shell for this host.\n",
+On Windows, bash executes Windows PowerShell (powershell.exe, no profile, noninteractive). Use PowerShell syntax, not cmd.exe or Bash; do not assume PowerShell 7 features such as &&. On Unix, bash uses the execution supervisor's default shell.\n",
         host.operating_system,
         serde_json::to_string(&root.native_path).unwrap(),
         serde_json::to_string(&cwd.path).unwrap()

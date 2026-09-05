@@ -64,6 +64,8 @@ pub struct Session {
     pub id: Uuid,
     pub project_id: Uuid,
     pub harness_id: String,
+    /// Resolved at creation and immutable. Each run snapshots this configuration.
+    pub config: JsonObject,
     pub title: Option<String>,
     pub forked_from_session_id: Option<Uuid>,
     pub forked_at_revision: Option<i64>,
