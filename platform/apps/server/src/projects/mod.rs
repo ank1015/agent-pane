@@ -1,3 +1,4 @@
+pub mod bootstrap;
 mod database;
 pub mod environments;
 mod error;
