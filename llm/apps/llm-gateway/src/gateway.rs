@@ -103,6 +103,23 @@ impl Gateway {
         request: LlmRequest,
         requested_account_id: Option<Uuid>,
     ) -> Result<GatewayCompletion, GatewayError> {
+        self.complete_until_aborted(
+            request_id,
+            request,
+            requested_account_id,
+            std::future::pending(),
+        )
+        .await
+    }
+
+    pub(crate) async fn complete_until_aborted(
+        &self,
+        request_id: Uuid,
+        request: LlmRequest,
+        requested_account_id: Option<Uuid>,
+        aborted: impl std::future::Future<Output = ()>,
+    ) -> Result<GatewayCompletion, GatewayError> {
+        tokio::pin!(aborted);
         request
             .validate()
             .map_err(|error| GatewayError::invalid_request(error.to_string()))?;
@@ -118,8 +135,16 @@ impl Gateway {
                 request.model.id
             )));
         }
-        let _permit = self.concurrency.acquire().await?;
-        let account = self.resolve_account(provider, requested_account_id).await?;
+        let _permit = tokio::select! {
+            biased;
+            _ = &mut aborted => return Err(GatewayError::aborted()),
+            result = self.concurrency.acquire() => result?,
+        };
+        let account = tokio::select! {
+            biased;
+            _ = &mut aborted => return Err(GatewayError::aborted()),
+            result = self.resolve_account(provider, requested_account_id) => result?,
+        };
         let account_id = account.id;
         let requested_model = request.model.clone();
         let labels = Value::Object(
@@ -141,7 +166,13 @@ impl Gateway {
             .await
             .map_err(|error| GatewayError::database(error).with_account_id(account_id))?;
         let started = std::time::Instant::now();
-        let result = self.execute_completion(account, provider, request).await;
+        // Do not interrupt insertion or final accounting: once the request row
+        // exists, a cancellation must finalize it instead of leaving it running.
+        let result = tokio::select! {
+            biased;
+            _ = &mut aborted => Err(GatewayError::aborted().with_account_id(account_id)),
+            result = self.execute_completion(account, provider, request) => result,
+        };
         match result {
             Ok(message) => {
                 if let Err(error) = self
@@ -616,6 +647,7 @@ enum FactoryError {
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GatewayErrorKind {
+    Aborted,
     Unauthorized,
     AuthenticationRateLimited,
     InvalidRequest,
@@ -638,6 +670,7 @@ impl GatewayErrorKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Aborted => "aborted",
             Self::Unauthorized => "unauthorized",
             Self::AuthenticationRateLimited => "authentication_rate_limited",
             Self::InvalidRequest => "invalid_request",
@@ -672,6 +705,13 @@ pub struct GatewayError {
 }
 
 impl GatewayError {
+    fn aborted() -> Self {
+        Self::new(
+            GatewayErrorKind::Aborted,
+            "LLM run was aborted".to_owned(),
+            false,
+        )
+    }
     pub(crate) fn bad_json(message: String) -> Self {
         Self::invalid_request(message)
     }
@@ -863,6 +903,7 @@ impl GatewayError {
 
     fn accounting_status(&self) -> &'static str {
         match self.kind {
+            GatewayErrorKind::Aborted => "cancelled",
             GatewayErrorKind::Provider | GatewayErrorKind::AuthenticationRequired => {
                 "provider_error"
             }
