@@ -131,18 +131,10 @@ impl<'a> ReadTool<'a> {
     }
 
     pub fn input_schema(&self) -> Value {
-        json!({"type":"object","properties":{
-            "file_path":{"type":"string","minLength":1,"description":"Path to the file to read. Relative paths resolve against the current working directory; absolute paths refer to the execution host."},
-            "offset":{"type":"integer","minimum":1,"description":"The line number to start reading from, starting at 1. Defaults to 1."},
-            "limit":{"type":"integer","minimum":1,"description":format!("The maximum number of lines to return. Defaults to {}. Output is also subject to the tool's size limit.", self.config.max_lines)}
-        },"required":["file_path"],"additionalProperties":false})
+        input_schema(&self.config)
     }
-
     pub fn description(&self) -> String {
-        format!(
-            "Read a UTF-8 text file from the execution host. Returns numbered lines, up to {} lines and {} bytes including formatting. Use offset and limit to read a line window; follow the returned continuation offset when output is shortened. Empty files return an empty-file notice. Directories, binary files, images, PDFs, and notebooks rendered as cells are not supported; use bash for directory listings. Paths must resolve inside a registered execution root. Parent (..) path segments are not supported; use an absolute path instead. File content preserves indentation and line endings; do not include line-number prefixes when editing.",
-            self.config.max_lines, self.config.max_output_bytes
-        )
+        description(&self.config)
     }
 
     pub async fn execute(
@@ -175,4 +167,18 @@ impl<'a> ReadTool<'a> {
 
 fn error(code: ExecutionErrorCode, message: impl Into<String>) -> ExecutionError {
     ExecutionError::new(code, message).with_detail("source", "tool-read")
+}
+pub fn input_schema(config: &ReadConfig) -> Value {
+    json!({"type":"object","properties":{
+            "file_path":{"type":"string","minLength":1,"description":"Path to the file to read. Relative paths resolve against the current working directory; absolute paths refer to the execution host."},
+            "offset":{"type":"integer","minimum":1,"description":"The line number to start reading from, starting at 1. Defaults to 1."},
+            "limit":{"type":"integer","minimum":1,"description":format!("The maximum number of lines to return. Defaults to {}. Output is also subject to the tool's size limit.", config.max_lines)}
+        },"required":["file_path"],"additionalProperties":false})
+}
+
+pub fn description(config: &ReadConfig) -> String {
+    format!(
+        "Read a UTF-8 text file from the execution host. Returns numbered lines, up to {} lines and {} bytes including formatting. Use offset and limit to read a line window; follow the returned continuation offset when output is shortened. Empty files return an empty-file notice. Directories, binary files, images, PDFs, and notebooks rendered as cells are not supported; use bash for directory listings. Paths must resolve inside a registered execution root. Parent (..) path segments are not supported; use an absolute path instead. File content preserves indentation and line endings; do not include line-number prefixes when editing.",
+        config.max_lines, config.max_output_bytes
+    )
 }
