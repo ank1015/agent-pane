@@ -237,6 +237,53 @@ async fn account_host_snapshot_and_execution_flow() {
     let provider_snapshot_id = snapshot.e2b_snapshot_id.clone().unwrap();
     wait_for_host(&client, &base, host.id, ExecutionHostState::Paused).await;
 
+    // A lost creation response must be replayable after snapshotting paused the
+    // source. A different body must still conflict; a new snapshot needs ready.
+    let replay = client
+        .post(format!("{base}/hosts/{}/snapshots", host.id))
+        .bearer_auth("gateway-token")
+        .header("Idempotency-Key", "snapshot-base")
+        .json(&json!({"name":"installed"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::ACCEPTED);
+    assert_eq!(replay.json::<E2bSnapshot>().await.unwrap().id, snapshot.id);
+    for (key, name, code) in [
+        ("snapshot-base", "changed", "IDEMPOTENCY_KEY_REUSED"),
+        ("new-snapshot", "installed", "HOST_NOT_READY"),
+    ] {
+        let response = client
+            .post(format!("{base}/hosts/{}/snapshots", host.id))
+            .bearer_auth("gateway-token")
+            .header("Idempotency-Key", key)
+            .json(&json!({"name":name}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response.json::<Value>().await.unwrap()["error"]["code"],
+            code
+        );
+    }
+    // Describe is the SDK's connect operation. It transparently resumes a paused
+    // E2B host; no model-facing resume tool is needed. Concurrent calls coalesce.
+    let connect = || {
+        client
+            .post(format!("{base}/hosts/{}/operations", host.id))
+            .bearer_auth("gateway-token")
+            .json(&RequestEnvelope::new(
+                RequestId::generate(),
+                Operation::Describe,
+            ))
+            .send()
+    };
+    let (one, two) = tokio::join!(connect(), connect());
+    assert_eq!(one.unwrap().status(), StatusCode::OK);
+    assert_eq!(two.unwrap().status(), StatusCode::OK);
+    wait_for_host(&client, &base, host.id, ExecutionHostState::Ready).await;
+
     let snapshot_host = create_host(
         &client,
         &base,
@@ -276,6 +323,44 @@ async fn account_host_snapshot_and_execution_flow() {
     assert_eq!(deleting.desired_state, DesiredHostState::Deleted);
     assert_eq!(deleting.state, ExecutionHostState::Deleting);
     assert!(deleting.status_code.is_none());
+
+    let response = client
+        .post(format!("{base}/hosts/{}/operations", snapshot_host.id))
+        .bearer_auth("gateway-token")
+        .json(&RequestEnvelope::new(
+            RequestId::generate(),
+            Operation::Describe,
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        database
+            .host(snapshot_host.id, true)
+            .await
+            .unwrap()
+            .unwrap()
+            .desired_state,
+        DesiredHostState::Deleted
+    );
+
+    // Receipts are also independent of a deleted source host.
+    database
+        .request_host_state(host.id, "deleted", "deleting")
+        .await
+        .unwrap();
+    database.complete_host_deleted(host.id).await.unwrap();
+    let replay = client
+        .post(format!("{base}/hosts/{}/snapshots", host.id))
+        .bearer_auth("gateway-token")
+        .header("Idempotency-Key", "snapshot-base")
+        .json(&json!({"name":"installed"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::ACCEPTED);
+    assert_eq!(replay.json::<E2bSnapshot>().await.unwrap().id, snapshot.id);
 }
 
 async fn create_host(client: &Client, base: &str, key: &str, body: &Value) -> ExecutionHost {
@@ -288,7 +373,12 @@ async fn create_host(client: &Client, base: &str, key: &str, body: &Value) -> Ex
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-    response.json().await.unwrap()
+    let host: ExecutionHost = response.json().await.unwrap();
+    assert_eq!(host.roots.len(), 1);
+    assert_eq!(host.roots[0].id.as_str(), "workspace");
+    assert_eq!(host.roots[0].native_path, "/home/user");
+    assert!(!host.roots[0].read_only);
+    host
 }
 
 async fn wait_for_host(
