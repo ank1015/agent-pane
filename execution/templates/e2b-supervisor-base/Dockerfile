@@ -2,8 +2,8 @@ FROM e2bdev/base:latest
 
 USER root
 
-ARG EXECUTION_SUPERVISOR_URL=https://downloads.acentric.dev/execution-supervisor/0.1.0-dev-c3f64930/x86_64-unknown-linux-musl/execution-supervisor
-ARG EXECUTION_SUPERVISOR_SHA256=c3f64930a6a2888b0256e73d4815df01e5fdd46ac25cf37b5ba49591574de0c5
+ARG EXECUTION_SUPERVISOR_URL=https://downloads.acentric.dev/execution-supervisor/0.1.0-dev-cac77400/x86_64-unknown-linux-musl/execution-supervisor
+ARG EXECUTION_SUPERVISOR_SHA256=eaf4c9a9ab57e7ccf29c0fa30cab47d7fb34b182f9de6e435b40ceb5b56e9ab5
 
 RUN curl --fail --location --silent --show-error \
         "$EXECUTION_SUPERVISOR_URL" \

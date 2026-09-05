@@ -70,15 +70,23 @@ created from exactly one of these sources:
   "name": "clean-host",
   "source": {
     "type": "base",
-    "e2b_account_id": "019..."
+    "e2b_account_id": "019...",
+    "ram": 2048
   },
-  "timeout_seconds": 3600
+  "timeout_seconds": 3600,
+  "network_access": true
 }
 ```
 
-`e2b_account_id` may be omitted when a default account exists. `base` always
-uses `execution_e2b::EXECUTION_BASE_TEMPLATE_ID`, whose image contains
-`/usr/local/bin/execution-supervisor`.
+`e2b_account_id` may be omitted when a default account exists. `ram` is optional,
+defaults to `2048` MiB, and accepts `1024`, `2048`, `4096`, or `8192`. The
+gateway resolves these tiers to public E2B templates with 1, 2, 2, and 4 vCPUs,
+respectively. Every image contains `/usr/local/bin/execution-supervisor`.
+Snapshot creation does not accept `ram`; restored sandboxes retain the snapshot's
+hardware specification.
+
+`network_access` is optional for both base and snapshot sources and defaults to
+`true`. When false, the gateway sends E2B `allow_internet_access: false`.
 
 `POST /v1/hosts` returns `202 Accepted` with the host resource. Its top-level
 `roots` array is available immediately, including while `state` is `provisioning`
@@ -101,7 +109,8 @@ Or create from a snapshot known to this gateway:
   "source": {
     "type": "snapshot",
     "snapshot_id": "019..."
-  }
+  },
+  "network_access": false
 }
 ```
 

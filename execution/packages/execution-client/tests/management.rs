@@ -104,8 +104,10 @@ async fn typed_management_preserves_prefix_filters_keys_and_resource_states() {
         name: None,
         source: E2bHostSource::Base {
             e2b_account_id: Some(id),
+            ram: Some(8192),
         },
         timeout_seconds: Some(3600),
+        network_access: Some(false),
         metadata: json!({}),
     };
     assert_eq!(
@@ -146,6 +148,8 @@ async fn typed_management_preserves_prefix_filters_keys_and_resource_states() {
     assert!(requests[1].0.contains("kind=registered"));
     assert!(requests[5].0.contains("state=ready"));
     assert_eq!(requests[3].1["source"]["type"], "base");
+    assert_eq!(requests[3].1["source"]["ram"], 8192);
+    assert_eq!(requests[3].1["network_access"], false);
     assert_eq!(requests[7].1["name"], "snapshot");
 }
 

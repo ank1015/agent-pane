@@ -82,7 +82,28 @@ both after an ambiguous failure. No automatic retries or new keys are generated.
 Lifecycle mutations return the accepted resource state, not a ready guarantee:
 poll `get_host`/`get_snapshot` with a bounded caller-owned recovery policy.
 Restoring a logical gateway snapshot uses its account; base creation can select
-an account or use the gateway default. Listing metadata does not resume hosts.
+an account or use the gateway default. Base sources accept optional `ram` values
+of `1024`, `2048`, `4096`, or `8192` MiB and default to `2048`. The top-level
+optional `network_access` field applies to both base and snapshot creation and
+defaults to `true`. For example:
+
+```rust,no_run
+use execution_client::api::{CreateExecutionHostRequest, E2bHostSource};
+
+let request = CreateExecutionHostRequest {
+    name: Some("worker".into()),
+    source: E2bHostSource::Base {
+        e2b_account_id: None,
+        ram: Some(4096),
+    },
+    timeout_seconds: Some(3600),
+    network_access: Some(false),
+    metadata: serde_json::json!({}),
+};
+```
+
+Snapshot sources intentionally have no RAM field because they retain the
+source sandbox's hardware specification. Listing metadata does not resume hosts.
 
 ### Host execution
 
