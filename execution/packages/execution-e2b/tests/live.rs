@@ -21,7 +21,7 @@ async fn real_e2b_lifecycle_and_envd_smoke_test() -> E2bResult<()> {
     config.sandbox_timeout_seconds = 300;
     let control = E2bControlClient::new(config.clone())?;
 
-    let base_id = control.create_base_sandbox().await?;
+    let base_id = control.create_base_sandbox(None, None).await?;
     let mut clone_id = None;
     let mut snapshot_id = None;
 
@@ -58,7 +58,9 @@ async fn real_e2b_lifecycle_and_envd_smoke_test() -> E2bResult<()> {
 
         let created_snapshot = control.snapshot_sandbox(&base_id).await?;
         snapshot_id = Some(created_snapshot.clone());
-        let created_clone = control.create_snapshot_sandbox(&created_snapshot).await?;
+        let created_clone = control
+            .create_snapshot_sandbox(&created_snapshot, None)
+            .await?;
         clone_id = Some(created_clone.clone());
 
         let clone_connection = control.ensure_connected(&created_clone).await?;

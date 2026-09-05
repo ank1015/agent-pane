@@ -14,7 +14,9 @@ use axum::{
     routing::post,
 };
 use execution_e2b::{
-    E2bApiKey, E2bConfig, E2bControlClient, E2bErrorKind, EXECUTION_BASE_TEMPLATE_ID,
+    E2bApiKey, E2bConfig, E2bControlClient, E2bErrorKind, EXECUTION_BASE_TEMPLATE_1024_MB_ID,
+    EXECUTION_BASE_TEMPLATE_2048_MB_ID, EXECUTION_BASE_TEMPLATE_4096_MB_ID,
+    EXECUTION_BASE_TEMPLATE_8192_MB_ID, EXECUTION_BASE_TEMPLATE_ID,
 };
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -29,6 +31,8 @@ async fn creates_base_and_snapshot_sandboxes_with_the_expected_template_ids() {
         assert_eq!(body["autoPauseMemory"], true);
         assert_eq!(body["timeout"], 300);
         let template = body["templateID"].as_str().unwrap();
+        let expected_network_access = template != "snapshot-42";
+        assert_eq!(body["allow_internet_access"], expected_network_access);
         Json(json!({
             "sandboxID": format!("from-{template}"),
             "envdAccessToken": "token",
@@ -40,11 +44,28 @@ async fn creates_base_and_snapshot_sandboxes_with_the_expected_template_ids() {
     let client = client(base_url);
 
     assert_eq!(
-        client.create_base_sandbox().await.unwrap(),
+        client.create_base_sandbox(None, None).await.unwrap(),
         format!("from-{EXECUTION_BASE_TEMPLATE_ID}")
     );
+    for (ram_mb, template_id) in [
+        (1024, EXECUTION_BASE_TEMPLATE_1024_MB_ID),
+        (2048, EXECUTION_BASE_TEMPLATE_2048_MB_ID),
+        (4096, EXECUTION_BASE_TEMPLATE_4096_MB_ID),
+        (8192, EXECUTION_BASE_TEMPLATE_8192_MB_ID),
+    ] {
+        assert_eq!(
+            client
+                .create_base_sandbox(None, Some(ram_mb))
+                .await
+                .unwrap(),
+            format!("from-{template_id}")
+        );
+    }
     assert_eq!(
-        client.create_snapshot_sandbox("snapshot-42").await.unwrap(),
+        client
+            .create_snapshot_sandbox("snapshot-42", Some(false))
+            .await
+            .unwrap(),
         "from-snapshot-42"
     );
 }
@@ -155,11 +176,22 @@ async fn does_not_replay_ambiguous_create_requests() {
         .with_state(attempts.clone());
     let client = client(serve(app).await);
 
-    let error = client.create_base_sandbox().await.unwrap_err();
+    let error = client.create_base_sandbox(None, None).await.unwrap_err();
     assert_eq!(attempts.0.load(Ordering::SeqCst), 1);
     assert_eq!(error.kind, E2bErrorKind::Unavailable);
     assert!(error.outcome_ambiguous);
     assert!(!error.retryable);
+}
+
+#[tokio::test]
+async fn rejects_an_unsupported_base_ram_tier_before_sending_a_request() {
+    let client = client(Url::parse("http://127.0.0.1:1/").unwrap());
+    let error = client
+        .create_base_sandbox(None, Some(4098))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, E2bErrorKind::Configuration);
+    assert!(error.message.contains("1024, 2048, 4096, or 8192"));
 }
 
 fn client(base_url: Url) -> E2bControlClient {
