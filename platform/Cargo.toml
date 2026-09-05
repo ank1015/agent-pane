@@ -1,0 +1,49 @@
+[workspace]
+members = ["apps/*", "packages/cc-harness-support", "packages/harness-runtime", "packages/platform-runtime-client", "packages/platform-runtime-contracts", "packages/tools/*", "packages/harnesses/*"]
+exclude = ["apps/dashboard"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+
+[workspace.dependencies]
+tool-filesystem = { path = "packages/tools/filesystem" }
+harness-runtime = { path = "packages/harness-runtime" }
+platform-runtime-contracts = { path = "packages/platform-runtime-contracts" }
+platform-runtime-client = { path = "packages/platform-runtime-client" }
+axum = "0.8"
+base64 = "0.22"
+rand = "0.8"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["chrono", "derive", "json", "macros", "migrate", "postgres", "runtime-tokio-rustls", "uuid"] }
+futures-util = "0.3"
+jsonschema = { version = "0.50", default-features = false }
+llm-contracts = { path = "../llm/packages/llm-contracts" }
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+execution-api = { path = "../execution/packages/execution-api" }
+execution-core = { path = "../execution/packages/execution-core" }
+execution-client = { path = "../execution/packages/execution-client" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2.5"
+uuid = { version = "1.0", features = ["serde", "v4", "v7"] }
+zeroize = { version = "1.8", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

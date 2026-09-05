@@ -1,0 +1,38 @@
+[package]
+name = "llm-gateway"
+description = "Encrypted multi-provider LLM execution and accounting gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+base64.workspace = true
+chacha20poly1305.workspace = true
+chrono.workspace = true
+dotenvy.workspace = true
+llm-contracts.workspace = true
+provider-chatgpt.workspace = true
+provider-fireworks.workspace = true
+provider-openai.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+sqlx.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+llm-client.workspace = true
+
+[lints]
+workspace = true

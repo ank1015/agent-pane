@@ -1,0 +1,39 @@
+[package]
+name = "platform-server"
+description = "Platform API for the Agent Pane dashboard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+platform-runtime-contracts.workspace = true
+axum.workspace = true
+base64.workspace = true
+rand.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+chrono.workspace = true
+dotenvy.workspace = true
+execution-api.workspace = true
+execution-core.workspace = true
+futures-util.workspace = true
+jsonschema.workspace = true
+llm-contracts.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+platform-runtime-client.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,157 @@
+/* Shared controls and dialog styling ported from the previous dashboard. */
+:root {
+  --cursor-text-tertiary: color-mix(in oklab, #f0f0f0 60%, transparent);
+  --cursor-border-faint: color-mix(in oklab, #f0f0f0 4%, transparent);
+  --cursor-border-control: color-mix(in oklab, #f0f0f0 12%, transparent);
+  --cursor-overlay-06: color-mix(in oklab, #f0f0f0 6%, transparent);
+}
+
+.cursor-button {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  color: #181818;
+  background: var(--cursor-text-primary);
+  font: inherit;
+  letter-spacing: -0.08px;
+  cursor: pointer;
+  transition: color var(--dashboard-transition), background-color var(--dashboard-transition), border-color var(--dashboard-transition);
+}
+
+.cursor-button:hover { background: color-mix(in oklab, #141414 10%, #f0f0f0); }
+.cursor-button--ghost { color: var(--cursor-text-secondary); background: transparent; }
+.cursor-button--ghost:hover { color: var(--cursor-text-primary); background: var(--cursor-overlay-06); }
+.cursor-button:disabled { opacity: 0.36; cursor: not-allowed; }
+.cursor-button:focus-visible { outline: 1px solid var(--cursor-border-strong); outline-offset: 1px; }
+.cursor-icon-button { width: 28px; height: 28px; padding: 0; }
+
+.provider-add-button {
+  height: 28px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 18px;
+  letter-spacing: normal;
+}
+
+.cursor-input {
+  height: 34px;
+  width: 100%;
+  padding: 0 10px;
+  border: 1px solid var(--cursor-border-control);
+  border-radius: 6px;
+  outline: 0;
+  color: var(--cursor-text-primary);
+  background: #181818;
+  font: inherit;
+  letter-spacing: inherit;
+  transition: background 150ms, border-color 150ms;
+}
+
+.cursor-input::placeholder { color: var(--cursor-text-quaternary); }
+.cursor-input:hover, .cursor-input:focus-visible { border-color: var(--cursor-border-strong); }
+.cursor-input:focus-visible { box-shadow: none; }
+
+.app-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(680px, calc(100dvh - 32px));
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 12px;
+  color: var(--cursor-text-primary);
+  background: #181818;
+  letter-spacing: -0.08px;
+  box-shadow: 0 0 0 1px var(--dashboard-border), 0 0 4px #0000001f, 0 8px 24px -2px #0000001f, 0 24px 80px #0008;
+}
+
+.app-dialog::backdrop { background: #08080899; backdrop-filter: blur(3px); }
+.app-dialog-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: min(680px, calc(100dvh - 32px));
+}
+
+.app-dialog-header {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 17px 20px 16px 24px;
+  border-bottom: 1px solid var(--cursor-border-faint);
+}
+
+.app-dialog-title { flex: 1; }
+.app-dialog-close {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  color: var(--cursor-text-tertiary);
+  font-size: 20px;
+  font-weight: 300;
+  line-height: 1;
+}
+.app-dialog-close span { transform: translateY(-1px); }
+.app-dialog-body { min-height: 0; padding: 24px; overflow-y: auto; }
+.app-dialog-footer {
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 15px 24px 16px;
+  border-top: 1px solid var(--cursor-border-faint);
+}
+
+.add-provider-next-button { min-width: 64px; }
+.add-provider-back-button { min-width: 64px; margin-right: auto; }
+.provider-account-step, .provider-credentials-step { min-height: 176px; padding-top: 4px; }
+.provider-account-name-field, .provider-api-key-field {
+  display: grid;
+  gap: 8px;
+  color: var(--cursor-text-secondary);
+  font-size: 12px;
+  line-height: 16px;
+}
+.provider-api-key-input-wrap { position: relative; }
+.provider-api-key-field .cursor-input { padding-right: 42px; }
+.provider-api-key-visibility {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  transform: translateY(-50%);
+  color: var(--cursor-text-tertiary);
+}
+.provider-api-key-visibility svg { display: block; }
+.provider-create-error { margin: 10px 0 0; color: #fc6b83; font-size: 12px; line-height: 16px; }
+
+.provider-selection-spacer { height: 4px; }
+.provider-option-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; border: 0; }
+.provider-option { min-width: 0; cursor: pointer; }
+.provider-option input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.provider-option-card { min-height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 14px; border: 1px solid var(--cursor-border-faint); border-radius: 8px; color: var(--cursor-text-secondary); background: var(--cursor-overlay-04); transition: color var(--dashboard-transition), border-color var(--dashboard-transition), background-color var(--dashboard-transition); }
+.provider-option:hover .provider-option-card { color: var(--cursor-text-primary); background: var(--cursor-overlay-06); }
+.provider-option input:checked + .provider-option-card { color: var(--cursor-text-primary); border-color: var(--cursor-border-strong); background: var(--cursor-overlay-08); }
+.provider-option input:focus-visible + .provider-option-card { outline: 1px solid var(--cursor-border-strong); outline-offset: 2px; }
+.provider-option-icon { width: 18px; height: 18px; flex: 0 0 18px; display: grid; place-items: center; }
+.provider-credentials-step--chatgpt { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.chatgpt-sign-in-button { min-height: 36px; padding-inline: 14px; }
+.chatgpt-sign-in-button svg { flex: 0 0 18px; }
+.cursor-button--secondary { color: var(--cursor-text-primary); background: var(--cursor-overlay-08); }
+.cursor-button--secondary:hover { background: var(--cursor-overlay-06); }
+
+@media (max-width: 720px) {
+  .provider-option-grid { grid-template-columns: 1fr; }
+  .app-dialog { width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }
+  .app-dialog-panel { max-height: calc(100dvh - 20px); }
+  .app-dialog-header, .app-dialog-body, .app-dialog-footer { padding-inline: 16px; }
+}

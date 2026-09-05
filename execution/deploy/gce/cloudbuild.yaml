@@ -1,0 +1,14 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file
+      - apps/execution-gateway/Dockerfile
+      - --tag
+      - asia-south1-docker.pkg.dev/$PROJECT_ID/execution/execution-gateway:${_TAG}
+      - .
+images:
+  - asia-south1-docker.pkg.dev/$PROJECT_ID/execution/execution-gateway:${_TAG}
+options:
+  logging: CLOUD_LOGGING_ONLY
+serviceAccount: projects/$PROJECT_ID/serviceAccounts/execution-cloud-build@$PROJECT_ID.iam.gserviceaccount.com

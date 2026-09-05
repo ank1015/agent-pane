@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: execution_gateway
+      POSTGRES_USER: execution_gateway
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U execution_gateway -d execution_gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    security_opt:
+      - no-new-privileges:true
+
+  gateway:
+    image: ${EXECUTION_GATEWAY_IMAGE:?EXECUTION_GATEWAY_IMAGE is required}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      EXECUTION_GATEWAY_BIND_ADDRESS: 0.0.0.0:8790
+      EXECUTION_GATEWAY_DATABASE_URL: postgres://execution_gateway:${POSTGRES_PASSWORD}@postgres:5432/execution_gateway
+      EXECUTION_GATEWAY_DATABASE_MAX_CONNECTIONS: 5
+      EXECUTION_GATEWAY_API_TOKEN: ${EXECUTION_GATEWAY_API_TOKEN:?EXECUTION_GATEWAY_API_TOKEN is required}
+      EXECUTION_GATEWAY_PUBLIC_URL: https://${GATEWAY_PUBLIC_HOST}/
+      EXECUTION_GATEWAY_VAULT_KEY: ${EXECUTION_GATEWAY_VAULT_KEY:?EXECUTION_GATEWAY_VAULT_KEY is required}
+      EXECUTION_GATEWAY_DEFAULT_HOST_TIMEOUT_SECONDS: 3600
+      EXECUTION_GATEWAY_REGISTRATION_TOKEN_TTL_SECONDS: 900
+      EXECUTION_GATEWAY_REGISTERED_HEARTBEAT_SECONDS: 15
+      EXECUTION_GATEWAY_REGISTERED_OPERATION_TIMEOUT_SECONDS: 60
+      EXECUTION_GATEWAY_REGISTERED_MAX_IN_FLIGHT: 16
+      EXECUTION_GATEWAY_MAX_OPERATIONS_IN_FLIGHT: 32
+      EXECUTION_GATEWAY_MAX_AUTH_FAILURES_PER_MINUTE: 30
+      EXECUTION_GATEWAY_MAX_MACHINE_ENTRY_ATTEMPTS_PER_MINUTE: 60
+      EXECUTION_GATEWAY_E2B_REQUEST_TIMEOUT_SECONDS: 60
+      EXECUTION_GATEWAY_RECONCILE_INTERVAL_MS: 1000
+      EXECUTION_GATEWAY_MAX_REQUEST_BYTES: 16777216
+      RUST_LOG: execution_gateway=info
+    expose:
+      - "8790"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+  caddy:
+    image: caddy:2.11.2-alpine
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+      GATEWAY_PUBLIC_HOST: ${GATEWAY_PUBLIC_HOST:?GATEWAY_PUBLIC_HOST is required}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

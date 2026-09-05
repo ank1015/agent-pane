@@ -1,0 +1,25 @@
+[package]
+name = "cc-harness-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+llm-contracts.workspace = true
+provider-openai = { path = "../../../llm/packages/provider-openai" }
+provider-chatgpt = { path = "../../../llm/packages/provider-chatgpt" }
+provider-fireworks = { path = "../../../llm/packages/provider-fireworks" }
+execution-core.workspace = true
+tool-read = { path = "../tools/read" }
+tool-write = { path = "../tools/write" }
+tool-edit = { path = "../tools/edit" }
+tool-bash-minimal = { path = "../tools/bash-minimal" }
+serde.workspace = true
+serde_json.workspace = true
+jsonschema.workspace = true
+uuid.workspace = true
+
+
+[lints]
+workspace = true

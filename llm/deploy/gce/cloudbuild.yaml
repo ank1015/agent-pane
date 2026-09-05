@@ -1,0 +1,14 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file
+      - apps/llm-gateway/Dockerfile
+      - --tag
+      - asia-south1-docker.pkg.dev/$PROJECT_ID/llm/llm-gateway:${_TAG}
+      - .
+images:
+  - asia-south1-docker.pkg.dev/$PROJECT_ID/llm/llm-gateway:${_TAG}
+options:
+  logging: CLOUD_LOGGING_ONLY
+serviceAccount: projects/$PROJECT_ID/serviceAccounts/llm-cloud-build@$PROJECT_ID.iam.gserviceaccount.com

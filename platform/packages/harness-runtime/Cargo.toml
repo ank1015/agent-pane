@@ -1,0 +1,18 @@
+[package]
+name = "harness-runtime"
+description = "Shared execution interface for trusted Rust harness libraries"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+platform-runtime-client.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+uuid.workspace = true
+
+[lints]
+workspace = true

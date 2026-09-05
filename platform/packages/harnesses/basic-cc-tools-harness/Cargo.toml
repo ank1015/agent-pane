@@ -1,0 +1,42 @@
+[package]
+name = "basic-cc-tools-harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cc-harness-support = { path = "../../cc-harness-support" }
+harness-runtime.workspace = true
+platform-runtime-client.workspace = true
+llm-contracts.workspace = true
+llm-client = { path = "../../../../llm/packages/llm-client" }
+provider-openai = { path = "../../../../llm/packages/provider-openai" }
+provider-chatgpt = { path = "../../../../llm/packages/provider-chatgpt" }
+provider-fireworks = { path = "../../../../llm/packages/provider-fireworks" }
+execution-client.workspace = true
+execution-api.workspace = true
+execution-core.workspace = true
+tool-read = { path = "../../tools/read" }
+tool-write = { path = "../../tools/write" }
+tool-edit = { path = "../../tools/edit" }
+tool-bash-minimal = { path = "../../tools/bash-minimal" }
+serde.workspace = true
+serde_json.workspace = true
+jsonschema.workspace = true
+futures-util.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+platform-server = { path = "../../../apps/server" }
+execution-supervisor-core = { path = "../../../../execution/packages/execution-supervisor-core" }
+execution-wire = { path = "../../../../execution/packages/execution-wire" }
+axum.workspace = true
+reqwest.workspace = true
+sqlx.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

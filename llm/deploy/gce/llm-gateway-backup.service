@@ -1,0 +1,10 @@
+[Unit]
+Description=Back up the LLM Gateway PostgreSQL database
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/llm-gateway/backup.env
+ExecStart=/opt/llm-gateway/backup.sh
+User=root
