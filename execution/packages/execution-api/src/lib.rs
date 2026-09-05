@@ -94,6 +94,10 @@ pub enum E2bHostSource {
     Base {
         #[serde(default)]
         e2b_account_id: Option<Uuid>,
+        /// Base-sandbox memory in MiB. Supported values are 1024, 2048, 4096,
+        /// and 8192; omitted values default to 2048.
+        #[serde(default)]
+        ram: Option<u32>,
     },
     Snapshot {
         snapshot_id: Uuid,
@@ -106,6 +110,10 @@ pub struct CreateExecutionHostRequest {
     pub name: Option<String>,
     pub source: E2bHostSource,
     pub timeout_seconds: Option<u64>,
+    /// Whether the sandbox can make outbound internet requests. Defaults to
+    /// `true` when omitted.
+    #[serde(default)]
+    pub network_access: Option<bool>,
     #[serde(default = "empty_object")]
     pub metadata: Value,
 }
@@ -164,6 +172,7 @@ pub struct E2bHostBinding {
     pub e2b_sandbox_id: Option<String>,
     pub source: E2bHostSource,
     pub timeout_seconds: u64,
+    pub network_access: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -329,5 +338,51 @@ mod tests {
         }))
         .expect("snapshot source");
         assert_eq!(source, E2bHostSource::Snapshot { snapshot_id });
+    }
+
+    #[test]
+    fn network_access_is_optional_in_host_creation_requests() {
+        let omitted = serde_json::from_value::<CreateExecutionHostRequest>(serde_json::json!({
+            "source": {"type": "base"}
+        }))
+        .expect("request without network access");
+        assert_eq!(omitted.network_access, None);
+
+        let disabled = serde_json::from_value::<CreateExecutionHostRequest>(serde_json::json!({
+            "source": {"type": "base"},
+            "network_access": false
+        }))
+        .expect("request with disabled network access");
+        assert_eq!(disabled.network_access, Some(false));
+    }
+
+    #[test]
+    fn ram_is_optional_and_only_available_for_base_sources() {
+        let omitted = serde_json::from_value::<E2bHostSource>(serde_json::json!({
+            "type": "base"
+        }))
+        .expect("base source without RAM");
+        assert!(matches!(omitted, E2bHostSource::Base { ram: None, .. }));
+
+        let configured = serde_json::from_value::<E2bHostSource>(serde_json::json!({
+            "type": "base",
+            "ram": 8192
+        }))
+        .expect("base source with RAM");
+        assert!(matches!(
+            configured,
+            E2bHostSource::Base {
+                ram: Some(8192),
+                ..
+            }
+        ));
+
+        let error = serde_json::from_value::<E2bHostSource>(serde_json::json!({
+            "type": "snapshot",
+            "snapshot_id": Uuid::now_v7(),
+            "ram": 2048
+        }))
+        .expect_err("snapshot sources must not accept RAM");
+        assert!(error.to_string().contains("unknown field"));
     }
 }
