@@ -189,11 +189,13 @@ fn schema_has_only_command_timeout_workdir() {
     assert_eq!(schema["properties"].as_object().unwrap().len(), 3);
     assert_eq!(schema["required"], serde_json::json!(["command"]));
     assert!(validator.is_valid(&serde_json::json!({"command":"pwd"})));
+    assert!(validator.is_valid(&serde_json::json!({"command":"pwd","timeout":1_800_000})));
+    assert_eq!(MAX_TIMEOUT_MS, 30 * 60 * 1000);
     for invalid in [
         serde_json::json!({}),
         serde_json::json!({"command":""}),
         serde_json::json!({"command":"pwd","timeout":0}),
-        serde_json::json!({"command":"pwd","timeout":600001}),
+        serde_json::json!({"command":"pwd","timeout":1800001}),
         serde_json::json!({"command":"pwd","timeout":1.2}),
         serde_json::json!({"command":"pwd","run_in_background":true}),
     ] {
@@ -252,6 +254,19 @@ async fn closed_stdin_and_empty_success() {
 }
 
 #[tokio::test]
+async fn thirty_minute_timeout_is_accepted_by_the_execution_runtime() {
+    let host = Host::new("").await;
+    let result = host
+        .run(BashInput {
+            timeout: Some(1_800_000),
+            ..input("printf accepted")
+        })
+        .await;
+    assert!(!result.is_error());
+    assert_eq!(result.output, "accepted");
+}
+
+#[tokio::test]
 async fn validates_before_dispatch() {
     let host = Host::new("").await;
     for invalid in [
@@ -262,7 +277,7 @@ async fn validates_before_dispatch() {
             ..input("pwd")
         },
         BashInput {
-            timeout: Some(600001),
+            timeout: Some(1800001),
             ..input("pwd")
         },
         BashInput {
@@ -278,6 +293,17 @@ async fn validates_before_dispatch() {
     }
     let prepared = host.tool().prepare(input("true"), ids()).unwrap();
     assert_eq!(prepared.request().timeout_ms, Some(120000));
+    let longest = host
+        .tool()
+        .prepare(
+            BashInput {
+                timeout: Some(MAX_TIMEOUT_MS),
+                ..input("true")
+            },
+            ids(),
+        )
+        .unwrap();
+    assert_eq!(longest.request().timeout_ms, Some(1_800_000));
     let cancelled = context();
     cancelled.cancel();
     assert!(host.tool().start(&cancelled, &prepared).await.is_err());

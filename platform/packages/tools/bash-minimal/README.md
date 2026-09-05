@@ -2,7 +2,7 @@
 
 `tool-bash-minimal` registers `bash-minimal` using `NAME`, `DESCRIPTION`, and
 `input_schema()`. The only model arguments are required `command` and optional
-`timeout` (positive integer milliseconds, default 120000, maximum 600000) and
+`timeout` (positive integer milliseconds, default 120000 / 2 minutes, maximum 1800000 / 30 minutes) and
 `workdir`. Unknown arguments are rejected. There is no background flag,
 description argument, PTY, interactive stdin, or persistent shell session.
 

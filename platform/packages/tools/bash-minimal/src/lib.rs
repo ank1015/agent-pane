@@ -13,8 +13,8 @@ use output::Tail;
 
 pub const NAME: &str = "bash-minimal";
 pub const DEFAULT_TIMEOUT_MS: u64 = 120_000;
-pub const MAX_TIMEOUT_MS: u64 = 600_000;
-pub const DESCRIPTION: &str = "Execute a shell command on the execution host and wait for completion. Each call uses a fresh shell with closed stdin and no PTY. Shell variables, functions, and directory changes do not persist between calls; filesystem changes do. Use workdir to select a directory; it defaults to the environment directory. Relative workdir paths resolve against that directory; absolute paths must be within a registered root. Parent (..) segments are unsupported; use an absolute path instead. Timeout is in milliseconds (default 120000, maximum 600000) and terminates the remote command. Returns combined stdout/stderr and exit status. Output is bounded; truncated output is explicitly marked. No background or interactive-input mode is provided. Use read, write, and edit for file operations.";
+pub const MAX_TIMEOUT_MS: u64 = 1_800_000;
+pub const DESCRIPTION: &str = "Execute a shell command on the execution host and wait for completion. Each call uses a fresh shell with closed stdin and no PTY. Shell variables, functions, and directory changes do not persist between calls; filesystem changes do. Use workdir to select a directory; it defaults to the environment directory. Relative workdir paths resolve against that directory; absolute paths must be within a registered root. Parent (..) segments are unsupported; use an absolute path instead. Timeout is in milliseconds (default 120000, maximum 1800000) and terminates the remote command. Returns combined stdout/stderr and exit status. Output is bounded; truncated output is explicitly marked. No background or interactive-input mode is provided. Use read, write, and edit for file operations.";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -27,7 +27,7 @@ pub struct BashInput {
 pub fn input_schema() -> Value {
     json!({"type":"object","properties":{
         "command":{"type":"string","minLength":1,"description":"Shell command to execute."},
-        "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"description":"Timeout in milliseconds. Defaults to 120000; maximum 600000."},
+        "timeout":{"type":"integer","minimum":1,"maximum":MAX_TIMEOUT_MS,"description":"Timeout in milliseconds. Defaults to 120000; maximum 1800000."},
         "workdir":{"type":"string","minLength":1,"description":"Working directory on the execution host. Defaults to the environment directory; relative paths resolve against it. Use this instead of cd."}
     },"required":["command"],"additionalProperties":false})
 }
@@ -77,6 +77,13 @@ pub struct PreparedBash {
 }
 
 impl PreparedBash {
+    /// Generation captured before dispatch, for reconciling an uncertain start.
+    pub fn generation(&self) -> &SupervisorGenerationId {
+        &self.generation
+    }
+    pub fn terminate_operation_id(&self) -> &OperationId {
+        &self.terminate_operation_id
+    }
     pub fn request(&self) -> &StartExecutionRequest {
         &self.request
     }
@@ -160,7 +167,7 @@ impl<'a> BashTool<'a> {
         if timeout == 0 || timeout > MAX_TIMEOUT_MS {
             return Err(error(
                 ExecutionErrorCode::InvalidRequest,
-                "timeout must be between 1 and 600000 milliseconds",
+                "timeout must be between 1 and 1800000 milliseconds",
             ));
         }
         if ids.operation_id == ids.terminate_operation_id {
