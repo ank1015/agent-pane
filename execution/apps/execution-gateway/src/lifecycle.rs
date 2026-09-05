@@ -223,7 +223,13 @@ impl LifecycleReconciler {
         let sandbox_id = match work.source_type.as_str() {
             "base" => {
                 self.provider
-                    .create_base(api_key, work.timeout_seconds)
+                    .create_base(
+                        api_key,
+                        work.timeout_seconds,
+                        work.network_access,
+                        work.ram_mb
+                            .ok_or_else(|| invalid_configuration("base host has no RAM tier"))?,
+                    )
                     .await?
             }
             "snapshot" => {
@@ -231,7 +237,12 @@ impl LifecycleReconciler {
                     invalid_configuration("the source snapshot has no E2B snapshot ID")
                 })?;
                 self.provider
-                    .create_from_snapshot(api_key, snapshot_id, work.timeout_seconds)
+                    .create_from_snapshot(
+                        api_key,
+                        snapshot_id,
+                        work.timeout_seconds,
+                        work.network_access,
+                    )
                     .await?
             }
             value => {

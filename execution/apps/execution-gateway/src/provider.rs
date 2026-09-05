@@ -37,12 +37,19 @@ pub struct ProviderExecutionResponse {
 #[async_trait]
 pub trait E2bProvider: Send + Sync {
     async fn verify_credentials(&self, api_key: &str) -> Result<(), E2bError>;
-    async fn create_base(&self, api_key: &str, timeout_seconds: u64) -> Result<String, E2bError>;
+    async fn create_base(
+        &self,
+        api_key: &str,
+        timeout_seconds: u64,
+        network_access: bool,
+        ram_mb: u32,
+    ) -> Result<String, E2bError>;
     async fn create_from_snapshot(
         &self,
         api_key: &str,
         snapshot_id: &str,
         timeout_seconds: u64,
+        network_access: bool,
     ) -> Result<String, E2bError>;
     async fn get_host(
         &self,
@@ -113,9 +120,15 @@ impl E2bProvider for RealE2bProvider {
             .await
     }
 
-    async fn create_base(&self, api_key: &str, timeout_seconds: u64) -> Result<String, E2bError> {
+    async fn create_base(
+        &self,
+        api_key: &str,
+        timeout_seconds: u64,
+        network_access: bool,
+        ram_mb: u32,
+    ) -> Result<String, E2bError> {
         E2bControlClient::new(self.config(api_key, timeout_seconds)?)?
-            .create_base_sandbox()
+            .create_base_sandbox(Some(network_access), Some(ram_mb))
             .await
     }
 
@@ -124,9 +137,10 @@ impl E2bProvider for RealE2bProvider {
         api_key: &str,
         snapshot_id: &str,
         timeout_seconds: u64,
+        network_access: bool,
     ) -> Result<String, E2bError> {
         E2bControlClient::new(self.config(api_key, timeout_seconds)?)?
-            .create_snapshot_sandbox(snapshot_id)
+            .create_snapshot_sandbox(snapshot_id, Some(network_access))
             .await
     }
 
