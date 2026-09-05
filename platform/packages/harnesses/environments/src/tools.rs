@@ -136,8 +136,9 @@ pub fn definitions(web: bool) -> Vec<ToolDefinition> {
         definition("list_snapshots", "List ready, non-deleted logical gateway snapshots. Optionally filter by account or source host. Snapshot restoration inherits its account.", json!({"e2b_account_id":uuid,"source_host_id":uuid}), json!([])),
         definition("create_sandbox", "Create an E2B builder from the gateway's supervisor-enabled base or a logical gateway snapshot. Returns a ready host ID and roots. Snapshot sources inherit their account; base uses the specified account or gateway default. timeout_seconds is sandbox lifetime, not command timeout (gateway default if omitted).", json!({
             "name":name,"timeout_seconds":{"type":"integer","minimum":1,"maximum":86400},
+            "network_access":{"type":"boolean","default":true,"description":"Allow outbound internet access. Applies to base and snapshot sources; defaults to true."},
             "source":{"oneOf":[
-                {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"base"},"e2b_account_id":uuid}},
+                {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"base"},"e2b_account_id":uuid,"ram":{"type":"integer","enum":[1024,2048,4096,8192],"default":2048,"description":"Memory in MiB for base creation only. vCPU is selected automatically."}}},
                 {"type":"object","additionalProperties":false,"required":["type","snapshot_id"],"properties":{"type":{"const":"snapshot"},"snapshot_id":uuid}}
             ]}
         }), json!(["source"])),

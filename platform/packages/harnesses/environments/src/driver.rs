@@ -63,7 +63,7 @@ pub(crate) async fn run(harness: EnvironmentsHarness, execution: Execution) -> R
             execution.client.commit(&command(commit)?).await?;
             return Ok(());
         }
-        if config.web_search_enabled && harness.web.is_none() {
+        if harness.web.is_none() {
             return initial_failure(
                 &execution.client,
                 &context,
@@ -71,13 +71,10 @@ pub(crate) async fn run(harness: EnvironmentsHarness, execution: Execution) -> R
             )
             .await;
         }
-        let definitions = crate::tools::definitions(config.web_search_enabled);
+        let definitions = crate::tools::definitions(true);
         State {
             version: 1,
-            instructions: prompt::generate(
-                config.web_search_enabled,
-                config.system_prompt_append.as_deref(),
-            ),
+            instructions: prompt::generate(true, config.system_prompt_append.as_deref()),
             provider_options: config
                 .provider_options(context.session.id)
                 .map_err(|_| Error::Invalid("invalid provider policy"))?,
@@ -513,11 +510,7 @@ impl Driver {
         let tools = Tools {
             gateway: &self.harness.execution,
             platform: &self.client,
-            web: self
-                .harness
-                .web
-                .as_ref()
-                .filter(|_| self.config.web_search_enabled),
+            web: self.harness.web.as_ref(),
             project_id: self.project_id,
             session_id: self.session_id,
             run_id: self.run_id,
