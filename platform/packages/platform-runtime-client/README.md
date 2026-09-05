@@ -56,7 +56,7 @@ Bootstrap credentials are only sent for registration and are not retained.
 | Caller | Operations |
 | --- | --- |
 | Worker supervisor | `register`, `heartbeat`, `claim`, `assignments`, `patch_worker` |
-| Harness, through `RunClient` | `context`, `inputs`, `commit`, `append_events`, `create_child`, `send_message`, `request_abort` |
+| Harness, through `RunClient` | `context`, `inputs`, `session_state`, `commit`, `append_events`, `create_child`, `send_message`, `request_abort` |
 | Harness reads, through `RunClient::queries()` / `QueryClient` | Harnesses, sessions, session history/runs, run state, children, waits, inputs, event replay pages |
 
 Requests, records, statuses, response pages and conflict codes are typed.
@@ -84,6 +84,53 @@ same transport, retries and explicit pagination, without introducing caching or
 background work. Existing `PlatformClient` read methods remain available.
 Harness IDs are checked using `types::is_valid_harness_id`, shared with the server
 and worker registry; the grammar remains `[a-z][a-z0-9_-]{0,127}`.
+
+## Session-scoped tool state
+
+Private namespaced JSON state persists across follow-up runs in the same session.
+It is not conversation history, not a run checkpoint, and not copied into forks.
+Read through the active `RunClient`, not the shared/public `QueryClient`:
+
+```rust,no_run
+# async fn save(run: platform_runtime_client::RunClient, key: platform_runtime_client::RequestKey) -> platform_runtime_client::Result<()> {
+use platform_runtime_client::{Command, types::*};
+let context = run.context(&ContextQuery::default()).await?;
+let page = run.session_state(&SessionStateQuery {
+    namespace: "codex.code-mode".into(),
+    key: Some("values".into()),
+    ..Default::default()
+}).await?;
+let previous = page.items.first();
+let expected_version = previous.map_or(0, |entry| entry.version);
+let mut values = previous.and_then(|entry| entry.value.clone()).unwrap_or_default();
+values.insert("answer".into(), serde_json::json!(42));
+
+let mut commit = Commit::new(context.run.run.version, context.session.current_revision);
+commit.session_state.push(SessionStateWrite {
+    namespace: "codex.code-mode".into(),
+    key: "values".into(),
+    expected_version,
+    mutation: SessionStateMutation::Set { value: values },
+});
+// Include related checkpoint/messages/input outcomes in this same commit.
+// The caller supplies a stable key for this logical write; retry the same body.
+run.commit(&Command::new(key, commit)).await?;
+# Ok(())
+# }
+```
+
+For deletion use `SessionStateMutation::Delete {}`. Deletions retain an entry with
+`value: None` and an incremented version; recreation must use that version.
+Missing keys alone use version zero. `Set` replaces the object; callers explicitly
+merge when desired. `SESSION_STATE_VERSION_CONFLICT` requires reloading and
+reconciling, like other optimistic conflicts. Reads require current ownership;
+returned state does not refresh the context versions or renew the lease.
+
+Omit `key` to list a namespace using `after_key` / `next_after_key`. Pages include
+tombstones, default to 25 entries, and allow at most 50. Values are capped at
+256 KiB, commits at 200 unique state writes and 1 MiB total body. No hidden cache,
+pagination loop, direct database connection, or worker affinity is introduced.
+Commit responses return only changed entries; receipt replays remain historical.
 
 ## Request identity and recovery
 
@@ -117,6 +164,7 @@ future codes are retained. **No 409 is automatically retried or rebased.**
 | `RUN_VERSION_CONFLICT` | Reload context; harness decides how newer state affects the commit |
 | `SESSION_REVISION_CONFLICT` | History changed or the requested fork revision does not exist |
 | `CHECKPOINT_VERSION_CONFLICT` | Reload checkpoint; do not overwrite newer recovery state |
+| `SESSION_STATE_VERSION_CONFLICT` | Reload the private session-state entry and reconcile its version, including tombstones |
 | `IDEMPOTENCY_KEY_CONFLICT` | Same key with different payload; fix request identity handling |
 | `WORKER_IDENTITY_CONFLICT` | Registration identity differs; use a fresh process identity |
 | `WORKER_STATE_CONFLICT` | Lifecycle state prevents this operation |

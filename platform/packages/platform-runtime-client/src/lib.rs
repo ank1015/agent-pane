@@ -252,6 +252,19 @@ impl RunClient {
             .send(self.request(Method::GET, "/context")?.query(query), true)
             .await
     }
+    /// Private storage for this run's session. Requires current ownership, unlike
+    /// public history reads. Explicit pagination includes versioned tombstones.
+    pub async fn session_state(&self, query: &SessionStateQuery) -> Result<SessionStatePage> {
+        query.validate().map_err(Error::Invalid)?;
+        self.client
+            .inner
+            .transport
+            .send(
+                self.request(Method::GET, "/session-state")?.query(query),
+                true,
+            )
+            .await
+    }
     /// Defaults to pending. Reading does not acknowledge inputs. Re-scan from
     /// sequence zero after recovery; acknowledge only in an atomic commit.
     pub async fn inputs(&self, query: &SequenceQuery) -> Result<SequencePage<RunInput>> {

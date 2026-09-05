@@ -439,6 +439,56 @@ async fn harness_queries_reject_invalid_shared_ids_before_http() {
 }
 
 #[tokio::test]
+async fn session_state_reads_are_lease_scoped_retry_safe_and_explicitly_paginated() {
+    let mock = Mock::new(vec![
+        Reply::json(503, json!({})),
+        Reply::json(
+            200,
+            json!({"session_id":Uuid::nil(),"items":[],"next_after_key":"b"}),
+        ),
+    ])
+    .await;
+    let run = mock
+        .client()
+        .run(Lease {
+            run_id: Uuid::nil(),
+            lease_epoch: 9,
+        })
+        .unwrap();
+    let page = run
+        .session_state(&SessionStateQuery {
+            namespace: "codex.exec".into(),
+            after_key: Some("a".into()),
+            limit: Some(2),
+            key: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.next_after_key.as_deref(), Some("b"));
+    let seen = mock.seen();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].uri, seen[1].uri);
+    assert_eq!(
+        seen[0].uri.path(),
+        format!("/prefix/internal/runs/{}/session-state", Uuid::nil())
+    );
+    assert_eq!(seen[0].headers["x-lease-epoch"], "9");
+    assert!(seen[0].headers.contains_key("x-worker-id"));
+    assert!(!seen[0].headers.contains_key("idempotency-key"));
+    assert_eq!(seen[0].method, Method::GET);
+    assert!(seen[0].body.is_empty());
+    assert!(matches!(
+        run.session_state(&SessionStateQuery {
+            namespace: "Bad".into(),
+            ..Default::default()
+        })
+        .await,
+        Err(Error::Invalid(_))
+    ));
+    assert_eq!(mock.seen().len(), 2);
+}
+
+#[tokio::test]
 async fn oversized_requests_fail_before_network_io() {
     let mock = Mock::new(vec![]).await;
     let run = mock
