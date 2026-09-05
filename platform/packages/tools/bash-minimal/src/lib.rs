@@ -1,6 +1,7 @@
 #![doc = include_str!("../README.md")]
 
 mod output;
+mod shell;
 
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ use output::Tail;
 pub const NAME: &str = "bash-minimal";
 pub const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 pub const MAX_TIMEOUT_MS: u64 = 1_800_000;
-pub const DESCRIPTION: &str = "Execute a shell command on the execution host and wait for completion. Each call uses a fresh shell with closed stdin and no PTY. Shell variables, functions, and directory changes do not persist between calls; filesystem changes do. Use workdir to select a directory; it defaults to the environment directory. Relative workdir paths resolve against that directory; absolute paths must be within a registered root. Parent (..) segments are unsupported; use an absolute path instead. Timeout is in milliseconds (default 120000, maximum 1800000) and terminates the remote command. Returns combined stdout/stderr and exit status. Output is bounded; truncated output is explicitly marked. No background or interactive-input mode is provided. Use read, write, and edit for file operations.";
+pub const DESCRIPTION: &str = "Execute a shell command on the execution host and wait for completion. Unless the harness specifies an override, Windows uses Windows PowerShell (powershell.exe, no profile, noninteractive); Unix uses the supervisor's default shell. Use PowerShell syntax on Windows, not cmd.exe or Bash syntax; do not assume PowerShell 7 features such as &&. Each call uses a fresh shell with closed stdin and no PTY. Shell variables, functions, and directory changes do not persist between calls; filesystem changes do. Use workdir to select a directory; it defaults to the environment directory. Relative workdir paths resolve against that directory; absolute paths must be within a registered root. Parent (..) segments are unsupported; use an absolute path instead. Timeout is in milliseconds (default 120000, maximum 1800000) and terminates the remote command. Returns combined stdout/stderr and exit status. Output is bounded; truncated output is explicitly marked. No background or interactive-input mode is provided. Use read, write, and edit for file operations.";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -163,6 +164,12 @@ impl<'a> BashTool<'a> {
     }
 
     pub fn prepare(&self, input: BashInput, ids: BashIds) -> ExecutionResult<PreparedBash> {
+        if input.command.trim().is_empty() {
+            return Err(error(
+                ExecutionErrorCode::InvalidRequest,
+                "command must be nonempty",
+            ));
+        }
         let timeout = input.timeout.unwrap_or(DEFAULT_TIMEOUT_MS);
         if timeout == 0 || timeout > MAX_TIMEOUT_MS {
             return Err(error(
@@ -185,11 +192,11 @@ impl<'a> BashTool<'a> {
         let request = StartExecutionRequest {
             operation_id: ids.operation_id,
             execution_id: ids.execution_id,
-            command: CommandSpec::Shell {
-                command: input.command,
-                shell: self.config.shell.clone(),
-                login: self.config.login,
-            },
+            command: shell::command(
+                self.runtime.descriptor().operating_system.clone(),
+                &self.config,
+                input.command,
+            ),
             cwd,
             environment: self.config.environment.clone(),
             stdin: StdinMode::Closed,

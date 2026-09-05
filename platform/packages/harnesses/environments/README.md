@@ -37,7 +37,7 @@ Account discovery returns metadata only, never credentials. Lists return up to
 200 items with explicit total/truncated fields and bounded rendered output.
 
 Environment creation uses Platform's fenced, idempotent run command. Types are
-`machine` (machine_id) or `sandbox` (snapshot_id), plus name, workspace_root ID and
+`machine` (machine_id) or `sandbox` (snapshot_id), plus name, absolute workspace_root path and
 root-relative path. No setup scripts, environment update/delete, or automatic
 cleanup are included. Reference validity does not prove setup correctness: the
 agent must inspect and verify the directory before publishing it.

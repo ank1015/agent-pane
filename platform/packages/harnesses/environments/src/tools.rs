@@ -146,8 +146,8 @@ pub fn definitions(web: bool) -> Vec<ToolDefinition> {
     ]);
     let mut create = definition(
         "create_environment",
-        "Register a prepared directory in this run's project. Machine requires only machine_id; sandbox requires only a ready snapshot_id. workspace_root is the root ID returned by discovery, path is root-relative (use '.' for the root). Does not provision anything or clean up builders. Verify the directory before registration/snapshotting.",
-        json!({"name":name,"type":{"enum":["machine","sandbox"]},"machine_id":uuid,"snapshot_id":uuid,"workspace_root":{"type":"string","minLength":1,"maxLength":128},"path":{"type":"string","minLength":1,"maxLength":4096}}),
+        "Register a prepared directory in this run's project. Machine requires only machine_id; sandbox requires only a ready snapshot_id. workspace_root is the absolute native path returned by discovery (e.g. /home/user or C:\\), never an ID or label. path is relative to workspace_root (use '.' for the root). Does not provision anything or clean up builders. Verify the directory before registration/snapshotting.",
+        json!({"name":name,"type":{"enum":["machine","sandbox"]},"machine_id":uuid,"snapshot_id":uuid,"workspace_root":{"type":"string","minLength":1,"maxLength":4096,"pattern":r"^(/|[A-Za-z]:[/\\]|\\\\)"},"path":{"type":"string","minLength":1,"maxLength":4096}}),
         json!(["name", "type", "workspace_root", "path"]),
     );
     if let ToolDefinition::Function(tool) = &mut create {
@@ -367,7 +367,7 @@ impl Tools<'_> {
                             .connect_host(ctx, ExecutionHostId::new(id.to_string())?)
                             .await?;
                         return Ok(Progress::done(Output::json(
-                            json!({"host_id":id,"name":record.name,"state":"ready","e2b_account_id":record.e2b.map(|e| e.e2b_account_id),"roots":connected.descriptor().roots,"operating_system":connected.descriptor().operating_system,"path_convention":connected.descriptor().path_convention}),
+                            json!({"host_id":id,"name":record.name,"state":"ready","e2b_account_id":record.e2b.map(|e| e.e2b_account_id),"workspace_roots":workspace_roots(&connected.descriptor().roots),"operating_system":connected.descriptor().operating_system,"path_convention":connected.descriptor().path_convention}),
                         )?));
                     }
                     if matches!(
@@ -466,7 +466,7 @@ impl Tools<'_> {
                     .await?;
                 let accounts = self.gateway.list_accounts(ctx).await?;
                 Output::json(
-                    json!({"machines":inventory(machines.into_iter().map(|h| json!({"host_id":h.id,"name":h.name,"state":h.state,"last_seen_at":h.last_seen_at,"roots":h.roots,"operating_system":h.descriptor.map(|d|d.operating_system)})).collect()),"sandbox_accounts":inventory(accounts.into_iter().map(|a| json!({"e2b_account_id":a.id,"name":a.name,"status":a.status,"is_default":a.is_default})).collect())}),
+                    json!({"machines":inventory(machines.into_iter().map(|h| json!({"host_id":h.id,"name":h.name,"state":h.state,"last_seen_at":h.last_seen_at,"workspace_roots":workspace_roots(&h.roots),"operating_system":h.descriptor.map(|d|d.operating_system)})).collect()),"sandbox_accounts":inventory(accounts.into_iter().map(|a| json!({"e2b_account_id":a.id,"name":a.name,"status":a.status,"is_default":a.is_default})).collect())}),
                 )
             }
             "list_snapshots" => {
@@ -534,6 +534,13 @@ fn web_output(content: Vec<ContentPart>, details: Option<Value>) -> Output {
         ..Output::text(text)
     }
 }
+fn workspace_roots(roots: &[execution_core::ExecutionRoot]) -> Vec<Value> {
+    roots
+        .iter()
+        .map(|root| json!({"workspace_root":root.native_path,"read_only":root.read_only}))
+        .collect()
+}
+
 fn inventory(mut items: Vec<Value>) -> Value {
     let total = items.len();
     items.truncate(200);
@@ -663,6 +670,31 @@ mod tests {
             limits: ExecutionLimits::default(),
         }
     }
+    #[test]
+    fn windows_canonical_roots_select_the_correct_drive_for_all_filesystem_tools() {
+        let mut h = host();
+        h.operating_system = OperatingSystem::Windows;
+        h.path_convention = PathConvention::Windows;
+        h.roots[0].native_path = r"\\?\C:\".into();
+        h.roots[1].native_path = r"\\?\E:\".into();
+        for (name, field) in [
+            ("bash", "workdir"),
+            ("read", "file_path"),
+            ("write", "file_path"),
+            ("edit", "file_path"),
+        ] {
+            for path in [
+                r"\\?\E:\Users\Ank\Desktop",
+                r"E:\Users\Ank\Desktop",
+                "E:/Users/Ank/Desktop",
+            ] {
+                let args = json!({field: path});
+                assert_eq!(target_cwd(&h, name, &args).unwrap().root_id.as_str(), "two");
+            }
+        }
+        assert!(target_cwd(&h, "bash", &json!({"command":"Get-Location"})).is_err());
+    }
+
     #[test]
     fn sole_roots_resolve_but_multiple_roots_are_never_guessed() {
         let mut h = host();

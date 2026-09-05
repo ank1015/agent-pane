@@ -306,10 +306,10 @@ impl App {
             .post(
                 &format!("/api/projects/{}/sessions", self.project),
                 json!({"harness_id":ID,"initial_run":{
-                    "expected_session_revision":0,"input":user("Do the work"),"config_override":{
+                    "expected_session_revision":0,"input":user("Do the work")},"config_override":{
                         "model":{"provider":"openai","id":"gpt-5.6-terra"},"reasoning_level":"high"
                     }
-                }}),
+                }),
             )
             .await;
         serde_json::from_value(response["run"]["id"].clone()).unwrap()
@@ -817,7 +817,7 @@ async fn followup_run_requires_a_new_read_despite_old_history(pool: PgPool) {
     .await;
     let first = app.create().await;
     app.activate(app.claim().await).await.unwrap();
-    let (session, config): (Uuid, Value) =
+    let (session, _config): (Uuid, Value) =
         sqlx::query_as("select session_id,config from runs where id=$1")
             .bind(first)
             .fetch_one(&app.pool)
@@ -828,7 +828,12 @@ async fn followup_run_requires_a_new_read_despite_old_history(pool: PgPool) {
         .fetch_one(&app.pool)
         .await
         .unwrap();
-    let response = app.post(&format!("/api/sessions/{session}/runs"), json!({"expected_session_revision":revision,"input":user("Edit the file"),"config_override":config})).await;
+    let response = app
+        .post(
+            &format!("/api/sessions/{session}/runs"),
+            json!({"expected_session_revision":revision,"input":user("Edit the file")}),
+        )
+        .await;
     let second: Uuid = serde_json::from_value(response["run"]["id"].clone()).unwrap();
     app.activate(app.claim().await).await.unwrap();
     assert_eq!(app.status(second).await, "completed");
@@ -901,14 +906,14 @@ async fn machine_environment_is_created_and_visible_in_project(pool: PgPool) {
     let app = App::new(pool, vec![]).await;
     app.script.lock().await.responses.extend([
         tools(vec![call("list_environments", json!({})), call("bash", json!({"command":"mkdir -p benchmark && printf ready > benchmark/setup.txt"}))]),
-        tools(vec![call("read", json!({"file_path":"benchmark/setup.txt"})), call("create_environment", json!({"name":"Machine benchmark","type":"machine","machine_id":app.host,"workspace_root":"work","path":"benchmark"}))]),
+        tools(vec![call("read", json!({"file_path":"benchmark/setup.txt"})), call("create_environment", json!({"name":"Machine benchmark","type":"machine","machine_id":app.host,"workspace_root":app.temp.path().join("workspace").canonicalize().unwrap(),"path":"benchmark"}))]),
         tools(vec![call("list_environments", json!({}))]), final_answer(),
     ]);
     let id = app.create().await;
     app.activate(app.claim().await).await.unwrap();
     assert_eq!(app.status(id).await, "completed");
     let row: (String, String, String) = sqlx::query_as(
-        "select name,path,workspace_root_path from project_environments where project_id=$1",
+        "select name,path,workspace_root from project_environments where project_id=$1",
     )
     .bind(app.project)
     .fetch_one(&app.pool)
@@ -1014,7 +1019,7 @@ async fn sandbox_snapshot_and_environment_survive_lost_lifecycle_replies(pool: P
         tools(vec![call("list_execution_resources", json!({})), call("list_snapshots", json!({})), call("create_sandbox", json!({"source":{"type":"base","e2b_account_id":account,"ram":4096},"network_access":false}))]),
         tools(vec![call("write", json!({"file_path":"prepared.txt","content":"ready"})), call("read", json!({"file_path":"prepared.txt"}))]),
         tools(vec![call("snapshot_sandbox", json!({"host_id":host,"name":"Prepared"}))]),
-        tools(vec![call("create_environment", json!({"name":"Sandbox benchmark","type":"sandbox","snapshot_id":snapshot,"workspace_root":"work","path":"."}))]), final_answer(),
+        tools(vec![call("create_environment", json!({"name":"Sandbox benchmark","type":"sandbox","snapshot_id":snapshot,"workspace_root":app.temp.path().join("workspace").canonicalize().unwrap(),"path":"."}))]), final_answer(),
     ]);
     let id = app.create().await;
     for attempt in 0..3 {
@@ -1054,6 +1059,26 @@ async fn sandbox_snapshot_and_environment_survive_lost_lifecycle_replies(pool: P
     );
     for message in app.messages(id).await {
         if let Message::ToolResult(result) = message {
+            if result.tool_name == "create_sandbox" {
+                let ContentPart::Text(text) = &result.content[0] else {
+                    panic!("expected JSON output")
+                };
+                let payload: Value = serde_json::from_str(&text.content).unwrap();
+                assert!(payload.get("roots").is_none());
+                let root = &payload["workspace_roots"][0];
+                assert!(root.get("id").is_none());
+                assert!(root.get("name").is_none());
+                assert_eq!(
+                    root["workspace_root"],
+                    app.temp
+                        .path()
+                        .join("workspace")
+                        .canonicalize()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                );
+            }
             assert!(
                 matches!(result.outcome, ToolResultOutcome::Success),
                 "{}",

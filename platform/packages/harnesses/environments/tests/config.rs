@@ -122,7 +122,7 @@ fn schemas_have_only_host_targeting_and_valid_environment_variants() {
             assert!(schema["properties"].get("workspace_root").is_none());
         }
         if tool.name == "create_environment" {
-            let mut args = json!({"name":"Test","type":"machine","machine_id":Uuid::new_v4(),"workspace_root":"work","path":"."});
+            let mut args = json!({"name":"Test","type":"machine","machine_id":Uuid::new_v4(),"workspace_root":"/work","path":"."});
             assert!(validator.is_valid(&args));
             args["snapshot_id"] = json!(Uuid::new_v4());
             assert!(!validator.is_valid(&args));

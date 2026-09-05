@@ -320,17 +320,18 @@ impl Driver {
                 }
                 let message = message.filter(|_| size <= 512 * 1024);
                 let accepted = message.is_some();
+                let message_id = accepted.then(Uuid::now_v7);
                 if accepted {
                     message_bytes += size;
                 }
                 if let Some(message) = message {
                     messages.push(AppendMessage {
-                        message_id: Uuid::now_v7(),
+                        message_id: message_id.unwrap(),
                         message,
                     });
                 }
                 results.push(InputResult { id: input.id, status: if accepted { InputStatus::Handled } else { InputStatus::Rejected },
-                    handling: object(json!({"reason": if accepted { "appended_to_history" } else { "unsupported input kind or user message exceeds 512 KiB" }})) });
+                    handling: object(json!({"message_id":message_id,"reason": if accepted { "appended_to_history" } else { "unsupported input kind or user message exceeds 512 KiB" }})) });
             }
             if !messages.is_empty() {
                 self.state.phase = Phase::Boundary {

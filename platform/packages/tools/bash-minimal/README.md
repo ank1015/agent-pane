@@ -11,9 +11,13 @@ the environment directory, shell/environment configuration, and operation IDs.
 Each invocation starts a fresh shell with closed stdin. `cd`, exported variables,
 and shell functions do not affect later calls. Filesystem changes persist.
 The configured shell runs on the remote host, never on the worker. With no shell
-override, the supervisor selects its default (`SHELL` or `/bin/sh` on POSIX,
-`COMSPEC` or `cmd.exe` on Windows). Shell overrides must be compatible with the
-supervisor's `-c`/`-lc` POSIX or `/C` Windows invocation. Login mode defaults off.
+override, Windows uses `powershell.exe -NoLogo -NoProfile -NonInteractive -Command`
+through the execution protocol's argv variant, while POSIX uses the supervisor's
+default (`SHELL` or `/bin/sh`). Use Windows PowerShell syntax, not cmd/Bash or
+PowerShell 7-only syntax such as `&&`. Explicit shell overrides retain the
+supervisor's `-c`/`-lc` POSIX or `/C` Windows invocation contract; harnesses using
+an override must also update their model instructions. Login mode defaults off
+and does not apply to the default Windows PowerShell invocation.
 The model-facing name does not guarantee GNU Bash on every host; harnesses should
 tell the model the selected host OS and shell.
 
@@ -123,3 +127,9 @@ cargo clippy -p tool-bash-minimal --all-targets -- -D warnings
 
 Integration tests run the real execution client against an authenticated local
 HTTP fixture backed by the real supervisor, using temporary directories.
+
+An opt-in Windows probe runs harmless discovery commands through the real tool
+and gateway, using both advertised canonical and ordinary drive paths. Set
+`EXECUTION_GATEWAY_URL`, `EXECUTION_GATEWAY_TOKEN`, and `WINDOWS_HOST_ID`, then run
+`cargo test -p tool-bash-minimal --test windows_live -- --ignored --nocapture`.
+It does not create files or change host configuration.
