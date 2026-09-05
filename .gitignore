@@ -1,5 +1,4 @@
-# Rust build and profiling output
-/target/
+# Rust profiling output
 **/*.rs.bk
 *.profraw
 *.profdata
@@ -8,10 +7,6 @@
 .env
 .env.*
 !.env.example
-
-# Local machine-daemon identity, credentials, and device configuration
-/.machine-daemon/
-/apps/machine-daemon/machine-daemon.local.json
 
 # Editor and operating-system files
 .DS_Store
@@ -22,3 +17,4 @@
 *.swp
 *.swo
 *~
+.wrangler
