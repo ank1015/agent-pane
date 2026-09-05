@@ -2,6 +2,38 @@ use llm_contracts::{JsonObject, ModelRef};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
+
+/// Explicit capabilities from the same provider catalogs used by the loop.
+pub fn supported_models() -> std::collections::BTreeMap<String, Vec<String>> {
+    std::collections::BTreeMap::from([
+        (
+            "openai".into(),
+            provider_openai::OPENAI_MODELS
+                .iter()
+                .map(|m| m.id.to_owned())
+                .collect(),
+        ),
+        (
+            "chatgpt".into(),
+            provider_chatgpt::CHATGPT_MODELS
+                .iter()
+                .map(|m| m.id.to_owned())
+                .collect(),
+        ),
+        (
+            "fireworks".into(),
+            provider_fireworks::FIREWORKS_MODELS
+                .iter()
+                .filter(|m| {
+                    ["low", "medium", "high", "xhigh", "max"]
+                        .iter()
+                        .all(|level| provider_fireworks::reasoning_effort(m.id, level).is_some())
+                })
+                .map(|m| m.id.to_owned())
+                .collect(),
+        ),
+    ])
+}
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningLevel {

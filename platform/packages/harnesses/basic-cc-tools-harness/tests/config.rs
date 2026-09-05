@@ -2,6 +2,24 @@ use basic_cc_tools_harness::{Config, config_schema};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+#[test]
+fn registered_models_match_compiled_capabilities() {
+    let migration = include_str!(
+        "../../../../apps/server/migrations/20260905040000_basic_harness_supported_models.sql"
+    );
+    let stored = migration
+        .split("supported_models = '")
+        .nth(1)
+        .unwrap()
+        .split("'::jsonb")
+        .next()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(stored).unwrap(),
+        serde_json::to_value(basic_cc_tools_harness::supported_models()).unwrap()
+    );
+}
+
 fn value(provider: &str, model: &str, effort: &str) -> Value {
     json!({"model":{"provider":provider,"id":model},"reasoning_level":effort,
         "execution":{"host_id":Uuid::new_v4().to_string(),"workspace_root":"work","path":"."}})
