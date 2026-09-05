@@ -240,6 +240,9 @@ pub struct CommitResponse {
     pub run: OwnedRun,
     pub session_revision: i64,
     pub checkpoint: Option<SavedCheckpoint>,
+    /// Updated entries only. Older idempotent receipts predate this field.
+    #[serde(default)]
+    pub session_state: Vec<crate::SessionStateEntry>,
     pub message_ids: Vec<Uuid>,
     pub wait_ids: Vec<Uuid>,
     pub events: Vec<RunEvent>,

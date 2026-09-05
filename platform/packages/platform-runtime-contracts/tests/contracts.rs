@@ -38,6 +38,7 @@ fn conflict_codes_have_one_stable_wire_spelling() {
         ConflictCode::RunVersionConflict,
         ConflictCode::SessionRevisionConflict,
         ConflictCode::CheckpointVersionConflict,
+        ConflictCode::SessionStateVersionConflict,
         ConflictCode::IdempotencyKeyConflict,
         ConflictCode::WorkerIdentityConflict,
         ConflictCode::WorkerStateConflict,
@@ -70,6 +71,14 @@ fn requests_keep_defaults_and_reject_unknown_fields() {
     assert!(matches!(commit.disposition, Disposition::Running));
     assert!(commit.messages.is_empty());
     assert!(commit.checkpoint.is_none());
+    assert!(commit.session_state.is_empty());
+    assert!(
+        serde_json::to_value(&commit)
+            .unwrap()
+            .get("session_state")
+            .is_none(),
+        "empty new fields must not change historical commit hashes"
+    );
     assert!(
         serde_json::from_value::<Commit>(
             json!({"expected_run_version":2,"expected_session_revision":0,"unknown":true})
@@ -77,4 +86,55 @@ fn requests_keep_defaults_and_reject_unknown_fields() {
         .is_err()
     );
     assert!(serde_json::from_value::<Claim>(json!({"limit":1,"unknown":true})).is_err());
+}
+
+#[test]
+fn session_state_contracts_validate_names_and_require_explicit_mutations() {
+    assert!(valid_state_namespace("codex.code-mode"));
+    assert!(valid_state_key("process/12:cursor"));
+    for value in ["", "Upper", "a/b", "aé", &"a".repeat(129)] {
+        assert!(!valid_state_namespace(value));
+    }
+    for value in ["", "has space", "\n", "é", &"a".repeat(257)] {
+        assert!(!valid_state_key(value));
+    }
+    for mutation in [json!({"op":"set","value":{}}), json!({"op":"delete"})] {
+        let write: SessionStateWrite = serde_json::from_value(
+            json!({"namespace":"tool","key":"a","expected_version":0,"mutation":mutation}),
+        )
+        .unwrap();
+        assert_eq!(write.expected_version, 0);
+    }
+    for mutation in [
+        json!({"op":"set"}),
+        json!({"op":"set","value":null}),
+        json!({"op":"set","value":[]}),
+        json!({"op":"delete","value":{}}),
+    ] {
+        assert!(
+            serde_json::from_value::<SessionStateWrite>(
+                json!({"namespace":"tool","key":"a","expected_version":0,"mutation":mutation})
+            )
+            .is_err()
+        );
+    }
+    assert!(
+        SessionStateQuery {
+            namespace: "tool".into(),
+            key: Some("a".into()),
+            after_key: Some("b".into()),
+            limit: None
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        SessionStateQuery {
+            namespace: "tool".into(),
+            limit: Some(51),
+            ..Default::default()
+        }
+        .validate()
+        .is_err()
+    );
 }

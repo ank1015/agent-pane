@@ -154,6 +154,9 @@ pub struct Commit {
     pub expected_run_version: i64,
     pub expected_session_revision: i64,
     pub checkpoint: Option<Checkpoint>,
+    /// Omitted when empty to preserve pre-storage idempotency request hashes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_state: Vec<crate::SessionStateWrite>,
     #[serde(default)]
     pub messages: Vec<AppendMessage>,
     #[serde(default)]
@@ -174,6 +177,7 @@ impl Commit {
             expected_run_version,
             expected_session_revision,
             checkpoint: None,
+            session_state: Vec::new(),
             messages: Vec::new(),
             input_results: Vec::new(),
             events: Vec::new(),
