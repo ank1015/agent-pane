@@ -947,6 +947,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
+name = "llm-client"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "futures-util",
+ "llm-contracts",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "llm-contracts"
 version = "0.1.0"
 dependencies = [
@@ -966,6 +984,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "dotenvy",
+ "llm-client",
  "llm-contracts",
  "provider-chatgpt",
  "provider-fireworks",
