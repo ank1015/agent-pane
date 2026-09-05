@@ -162,7 +162,7 @@ async fn typed_submission_and_resumed_wait_use_gateway_contract() {
 
 #[tokio::test]
 async fn complete_uses_immediate_success_failure_and_expiry_without_retrieving() {
-    for status in ["succeeded", "failed", "expired"] {
+    for status in ["succeeded", "failed", "aborted", "expired"] {
         let id = Uuid::now_v7();
         let server = Server::new(Router::new().route(
             "/v1/llm/runs",
@@ -204,6 +204,10 @@ async fn complete_uses_immediate_success_failure_and_expiry_without_retrieving()
                     Some("quota")
                 );
             }
+            Err(ClientError::RunAborted { run_id }) => {
+                assert_eq!(status, "aborted");
+                assert_eq!(run_id, id);
+            }
             Err(ClientError::RunExpired { run_id }) => {
                 assert_eq!(status, "expired");
                 assert_eq!(run_id, id);
@@ -215,7 +219,7 @@ async fn complete_uses_immediate_success_failure_and_expiry_without_retrieving()
 
 #[tokio::test]
 async fn awaiting_reports_terminal_failure_and_expiration() {
-    for status in ["failed", "expired"] {
+    for status in ["failed", "aborted", "expired"] {
         let id = Uuid::now_v7();
         let server = Server::new(Router::new().route(
             "/v1/llm/runs/{id}",
@@ -238,7 +242,9 @@ async fn awaiting_reports_terminal_failure_and_expiration() {
             .unwrap_err();
         assert!(matches!(
             (status, error),
-            ("failed", ClientError::RunFailed { .. }) | ("expired", ClientError::RunExpired { .. })
+            ("failed", ClientError::RunFailed { .. })
+                | ("aborted", ClientError::RunAborted { .. })
+                | ("expired", ClientError::RunExpired { .. })
         ));
     }
 }
@@ -518,4 +524,32 @@ fn keys_configuration_and_credentials_are_validated() {
     ))
     .unwrap();
     assert!(!format!("{client:?}").contains(TOKEN));
+}
+
+#[tokio::test]
+async fn abort_posts_authenticated_request_and_returns_actual_terminal_state() {
+    for status in ["aborted", "succeeded", "failed", "expired"] {
+        let id = Uuid::now_v7();
+        let server = Server::new(Router::new().route(
+            "/v1/llm/runs/{id}/abort",
+            post(
+                move |Path(actual): Path<Uuid>, headers: HeaderMap| async move {
+                    assert_eq!(actual, id);
+                    assert_eq!(headers["authorization"], format!("Bearer {TOKEN}"));
+                    (
+                        if status == "expired" {
+                            StatusCode::GONE
+                        } else {
+                            StatusCode::OK
+                        },
+                        Json(snapshot(id, status)),
+                    )
+                },
+            ),
+        ))
+        .await;
+        let run = server.client().abort(id).await.unwrap();
+        assert_eq!(run.run_id, id);
+        assert_eq!(serde_json::to_value(run).unwrap()["status"], status);
+    }
 }

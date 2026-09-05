@@ -213,6 +213,8 @@ async fn llm_call_is_authenticated_executed_and_accounted() {
 
     verify_client_runs(&gateway_url, &database, &provider_calls, &provider_release).await;
 
+    verify_abort_runs(&gateway_url, &database, &provider_calls, &provider_release).await;
+
     provider_task.abort();
     gateway_task.abort();
     reset_database(&database).await;
@@ -575,4 +577,137 @@ async fn verify_runs(
         .unwrap();
     assert_eq!(completed["status"], "succeeded");
     assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+async fn verify_abort_runs(
+    url: &str,
+    database: &Database,
+    calls: &AtomicUsize,
+    release: &Semaphore,
+) {
+    use llm_client::{
+        ClientError, CompletionRequest, IdempotencyKey, LlmClient, LlmClientConfig, RunState,
+        WaitOptions,
+    };
+    let mut config = LlmClientConfig::new(url.parse().unwrap(), API_TOKEN);
+    config.allow_insecure_http = true;
+    let client = LlmClient::new(config).unwrap();
+    let input: CompletionRequest = serde_json::from_value(llm_request()).unwrap();
+    let before = calls.load(Ordering::SeqCst);
+    let mut active = Vec::new();
+    for index in 0..4 {
+        let run = client
+            .submit(
+                &IdempotencyKey::new(format!("abort-active-{index}")).unwrap(),
+                &input,
+            )
+            .await
+            .unwrap();
+        active.push(run.run_id);
+    }
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while calls.load(Ordering::SeqCst) != before + 4 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let queued_key = IdempotencyKey::new("abort-queued").unwrap();
+    let queued = client.submit(&queued_key, &input).await.unwrap();
+    let unauthorized = Client::new()
+        .post(format!("{url}/v1/llm/runs/{}/abort", queued.run_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert!(matches!(
+        client.get_run(queued.run_id).await.unwrap().state,
+        RunState::Running
+    ));
+    assert!(matches!(
+        client.abort(uuid::Uuid::now_v7()).await.unwrap_err(),
+        ClientError::Gateway { status: 404, .. }
+    ));
+
+    // Waiters on another connection observe the terminal transition.
+    let waiter_client = client.clone();
+    let waiter = tokio::spawn(async move {
+        waiter_client
+            .wait(queued.run_id, WaitOptions::new(Duration::from_secs(3)))
+            .await
+    });
+    let aborted = client.abort(queued.run_id).await.unwrap();
+    assert!(matches!(aborted.state, RunState::Aborted));
+    assert!(aborted.completed_at.is_some() && aborted.expires_at.is_some());
+    assert_eq!(client.abort(queued.run_id).await.unwrap(), aborted);
+    assert_eq!(client.submit(&queued_key, &input).await.unwrap(), aborted);
+    assert!(matches!(
+        waiter.await.unwrap().unwrap_err(),
+        ClientError::RunAborted { .. }
+    ));
+    // Allow the owning worker's DB poll to release the queued admission before
+    // active slots are released. The queued request must never reach the provider.
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    for id in &active {
+        assert!(matches!(
+            client.abort(*id).await.unwrap().state,
+            RunState::Aborted
+        ));
+    }
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let cancelled: i64 = sqlx::query_scalar("select count(*) from llm_requests where id = any($1) and status = 'cancelled' and error_kind = 'aborted'")
+                .bind(&active).fetch_one(database.pool()).await.unwrap();
+            if cancelled == 4 { break; }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.expect("abort stops provider futures and finalizes accounting");
+    assert_eq!(calls.load(Ordering::SeqCst), before + 4);
+    let queued_accounting: i64 =
+        sqlx::query_scalar("select count(*) from llm_requests where id = $1")
+            .bind(queued.run_id)
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+    assert_eq!(queued_accounting, 0);
+
+    // New work gets capacity even though the aborted mock upstreams never replied.
+    let survivor = client
+        .submit(&IdempotencyKey::new("after-abort").unwrap(), &input)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while calls.load(Ordering::SeqCst) != before + 5 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("abort releases active concurrency permits");
+    release.add_permits(5);
+    client
+        .wait(survivor.run_id, WaitOptions::new(Duration::from_secs(3)))
+        .await
+        .unwrap();
+    let completed = client.get_run(survivor.run_id).await.unwrap();
+    assert_eq!(client.abort(survivor.run_id).await.unwrap(), completed);
+    for id in active {
+        assert!(matches!(
+            client.get_run(id).await.unwrap().state,
+            RunState::Aborted
+        ));
+    }
+    assert!(matches!(
+        client.get_run(queued.run_id).await.unwrap().state,
+        RunState::Aborted
+    ));
+    // Expiry still applies to aborted runs.
+    sqlx::query("update llm_runs set expires_at = now() - interval '1 second' where id = $1")
+        .bind(queued.run_id)
+        .execute(database.pool())
+        .await
+        .unwrap();
+    assert!(matches!(
+        client.abort(queued.run_id).await.unwrap().state,
+        RunState::Expired
+    ));
 }
