@@ -26,6 +26,8 @@ use uuid::Uuid;
 #[derive(Default)]
 struct FakeProvider {
     snapshot_sources: Mutex<Vec<String>>,
+    network_access: Mutex<Vec<bool>>,
+    ram_mb: Mutex<Vec<u32>>,
 }
 
 #[async_trait]
@@ -35,7 +37,15 @@ impl E2bProvider for FakeProvider {
         Ok(())
     }
 
-    async fn create_base(&self, _api_key: &str, _timeout_seconds: u64) -> Result<String, E2bError> {
+    async fn create_base(
+        &self,
+        _api_key: &str,
+        _timeout_seconds: u64,
+        network_access: bool,
+        ram_mb: u32,
+    ) -> Result<String, E2bError> {
+        self.network_access.lock().unwrap().push(network_access);
+        self.ram_mb.lock().unwrap().push(ram_mb);
         Ok(format!("sandbox-{}", Uuid::now_v7()))
     }
 
@@ -44,7 +54,9 @@ impl E2bProvider for FakeProvider {
         _api_key: &str,
         snapshot_id: &str,
         _timeout_seconds: u64,
+        network_access: bool,
     ) -> Result<String, E2bError> {
+        self.network_access.lock().unwrap().push(network_access);
         self.snapshot_sources
             .lock()
             .unwrap()
@@ -200,6 +212,20 @@ async fn account_host_snapshot_and_execution_flow() {
         StatusCode::UNPROCESSABLE_ENTITY
     );
 
+    let invalid_ram = client
+        .post(format!("{base}/hosts"))
+        .bearer_auth("gateway-token")
+        .header("Idempotency-Key", "bad-ram")
+        .json(&json!({"source":{"type":"base", "ram":4098}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(invalid_ram.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        invalid_ram.json::<Value>().await.unwrap()["error"]["code"],
+        "INVALID_RAM"
+    );
+
     let create_body = json!({
         "name": "base-host",
         "source": {"type": "base", "e2b_account_id": account.id},
@@ -210,6 +236,11 @@ async fn account_host_snapshot_and_execution_flow() {
     assert_eq!(first.id, replay.id);
     let host = wait_for_host(&client, &base, first.id, ExecutionHostState::Ready).await;
     assert!(host.descriptor.is_some());
+    assert!(host.e2b.as_ref().unwrap().network_access);
+    assert_eq!(
+        serde_json::to_value(&host.e2b.as_ref().unwrap().source).unwrap()["ram"],
+        2048
+    );
 
     let operation = RequestEnvelope::new(RequestId::generate(), Operation::Describe);
     let operation_response = client
@@ -288,14 +319,24 @@ async fn account_host_snapshot_and_execution_flow() {
         &client,
         &base,
         "create-from-snapshot",
-        &json!({"source":{"type":"snapshot", "snapshot_id":snapshot.id}}),
+        &json!({
+            "source":{"type":"snapshot", "snapshot_id":snapshot.id},
+            "network_access": false
+        }),
     )
     .await;
-    wait_for_host(&client, &base, snapshot_host.id, ExecutionHostState::Ready).await;
+    let snapshot_host =
+        wait_for_host(&client, &base, snapshot_host.id, ExecutionHostState::Ready).await;
+    assert!(!snapshot_host.e2b.as_ref().unwrap().network_access);
     assert_eq!(
         fake.snapshot_sources.lock().unwrap().as_slice(),
         &[provider_snapshot_id]
     );
+    assert_eq!(
+        fake.network_access.lock().unwrap().as_slice(),
+        &[true, false]
+    );
+    assert_eq!(fake.ram_mb.lock().unwrap().as_slice(), &[2048]);
 
     database
         .request_host_state(snapshot_host.id, "deleted", "deleting")
