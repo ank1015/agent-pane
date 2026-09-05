@@ -240,3 +240,18 @@ cargo clippy -p platform-runtime-client -p platform-runtime-contracts -p platfor
 
 SQLx integration tests create isolated databases, do not touch development data,
 and do not require live gateways.
+## Environment integration
+
+`RunClient::environments()` lists the run's project environments under its current
+lease. `create_environment(&Command<CreateEnvironment>)` creates a machine or
+sandbox reference in that same project; neither accepts a model-supplied project
+ID. `Environment`, `EnvironmentType`, and `CreateEnvironment` are exported in
+`types` alongside other runtime contracts.
+
+Persist the command key before calling. Environment insertion and the response
+receipt commit in one transaction. Same-key/same-body retries return the original
+record even if gateway reference validation would now fail, including after
+worker takeover. A different body conflicts. As with other runtime commands,
+the original authenticated issuer may read its receipt after losing ownership,
+but cannot perform a new mutation. Reference validation does not hold database
+locks, and lease ownership is checked again before committing.

@@ -23,6 +23,12 @@ impl Drop for App {
 }
 impl App {
     async fn new(pool: PgPool) -> Self {
+        Self::with_environment_gateway(pool, None).await
+    }
+    async fn with_environment_gateway(
+        pool: PgPool,
+        gateway: Option<platform_server::projects::environments::EnvironmentGateway>,
+    ) -> Self {
         let project = Uuid::now_v7();
         sqlx::query("insert into projects(project_id,name) values($1,'SDK tests')")
             .bind(project)
@@ -33,7 +39,12 @@ impl App {
             .execute(&pool)
             .await
             .unwrap();
-        let service = RuntimeService::new(pool);
+        let mut service = RuntimeService::new(pool.clone());
+        if let Some(gateway) = gateway {
+            service = service.with_environments(
+                platform_server::projects::environments::EnvironmentService::new(pool, gateway),
+            );
+        }
         let app = router(service.clone()).merge(worker_router(service, BOOT));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -85,6 +96,123 @@ fn assistant() -> Message {
 }
 fn base(ctx: &RunContext) -> Commit {
     Commit::new(ctx.run.run.version, ctx.session.current_revision)
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL with CREATEDB"]
+async fn sdk_environment_creation_is_project_scoped_fenced_and_replayable(pool: PgPool) {
+    use axum::{Json, Router, extract::Path, routing::get};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+    let available = Arc::new(AtomicBool::new(true));
+    let expire_run = Arc::new(tokio::sync::Mutex::new(None::<Uuid>));
+    let flag = available.clone();
+    let expires = expire_run.clone();
+    let db = pool.clone();
+    let gateway_app = Router::new().route("/v1/hosts/{id}", get(move |Path(id): Path<Uuid>| {
+        let flag = flag.clone(); let expires = expires.clone(); let db = db.clone();
+        async move {
+            if let Some(run) = *expires.lock().await {
+                sqlx::query("update runs set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1").bind(run).execute(&db).await.unwrap();
+            }
+            if flag.load(Ordering::SeqCst) {
+                (axum::http::StatusCode::OK, Json(json!({"id":id,"kind":"registered","desired_state":"ready","deleted_at":null,"descriptor":{"roots":[{"id":"workspace","native_path":"/home/user"}]}})))
+            } else { (axum::http::StatusCode::NOT_FOUND, Json(json!({}))) }
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway = platform_server::projects::environments::EnvironmentGateway::new(
+        format!("http://{}", listener.local_addr().unwrap())
+            .parse()
+            .unwrap(),
+        "test-token",
+        Duration::from_secs(3),
+    )
+    .unwrap();
+    let gateway_task = tokio::spawn(async move {
+        axum::serve(listener, gateway_app).await.unwrap();
+    });
+    let app = App::with_environment_gateway(pool.clone(), Some(gateway)).await;
+    let (created, run, _) = app.start().await;
+    let body = CreateEnvironment {
+        name: "Test environment".into(),
+        kind: EnvironmentType::Machine,
+        machine_id: Some(Uuid::new_v4()),
+        snapshot_id: None,
+        workspace_root: "workspace".into(),
+        path: "test".into(),
+    };
+    let cmd = command("environment-create", body.clone());
+    let (a, b) = tokio::join!(run.create_environment(&cmd), run.create_environment(&cmd));
+    let saved = a.unwrap();
+    assert_eq!(saved.id, b.unwrap().id);
+    assert_eq!(saved.project_id, app.project);
+    assert_eq!(saved.workspace_root_path.as_deref(), Some("/home/user"));
+    let mut changed = body.clone();
+    changed.path = "other".into();
+    conflict(
+        run.create_environment(&command("environment-create", changed))
+            .await,
+        ConflictCode::IdempotencyKeyConflict,
+    );
+    let other_project = Uuid::new_v4();
+    sqlx::query("insert into projects(project_id,name) values($1,'Other')")
+        .bind(other_project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("insert into project_environments(id,project_id,name,type,machine_id,workspace_root,path) values($1,$2,'Hidden','machine',$3,'workspace','.')").bind(Uuid::new_v4()).bind(other_project).bind(body.machine_id).execute(&pool).await.unwrap();
+    let listed = run.environments().await.unwrap();
+    assert_eq!(listed.items.len(), 1);
+    assert_eq!(listed.items[0].id, saved.id);
+
+    // Lease expiry during the external validation must roll back the new write.
+    *expire_run.lock().await = Some(created.run.id);
+    conflict(
+        run.create_environment(&command("expires-during-validation", body.clone()))
+            .await,
+        ConflictCode::LeaseLost,
+    );
+    *expire_run.lock().await = None;
+    conflict(run.environments().await, ConflictCode::LeaseLost);
+    available.store(false, Ordering::SeqCst);
+    let replacement = PlatformClient::new(
+        &app.url,
+        Uuid::new_v4(),
+        "replacement-token-01234567890123456789",
+        ClientConfig::default(),
+    )
+    .unwrap();
+    replacement.register(BOOT, &registration()).await.unwrap();
+    let claim = replacement
+        .claim(&command("takeover-environment", Claim { limit: 1 }))
+        .await
+        .unwrap();
+    let recovered = replacement.run(claim.items[0].lease()).unwrap();
+    // Neither a vanished reference nor a new worker invalidates the receipt.
+    assert_eq!(
+        recovered.create_environment(&cmd).await.unwrap().id,
+        saved.id
+    );
+    assert_eq!(run.create_environment(&cmd).await.unwrap().id, saved.id);
+    conflict(
+        run.create_environment(&command("stale-environment", body))
+            .await,
+        ConflictCode::LeaseLost,
+    );
+    let count: i64 =
+        sqlx::query_scalar("select count(*) from project_environments where project_id=$1")
+            .bind(app.project)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+    gateway_task.abort();
 }
 fn conflict<T>(result: Result<T, Error>, expected: ConflictCode) {
     assert_eq!(
@@ -243,7 +371,16 @@ async fn sdk_worker_recovery_coordination_and_history_round_trip(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(heartbeat.renewed.len(), 1);
-    assert_eq!(client.harnesses().await.unwrap().items.len(), 1);
+    // Migrations may seed built-in harnesses in addition to this test fixture.
+    assert!(
+        client
+            .harnesses()
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .any(|h| h.id == "test")
+    );
     assert_eq!(client.harness("test").await.unwrap().id, "test");
     assert_eq!(
         client
