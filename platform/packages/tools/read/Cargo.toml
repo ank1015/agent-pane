@@ -1,0 +1,25 @@
+[package]
+name = "tool-read"
+description = "Shared line-oriented remote filesystem read tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tool-filesystem.workspace = true
+execution-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+execution-client.workspace = true
+execution-supervisor-core = { path = "../../../../execution/packages/execution-supervisor-core" }
+execution-wire = { path = "../../../../execution/packages/execution-wire" }
+axum.workspace = true
+tokio.workspace = true
+jsonschema.workspace = true
+tempfile = "3.0"
+
+[lints]
+workspace = true
