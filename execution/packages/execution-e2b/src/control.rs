@@ -5,8 +5,17 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{E2bConfig, E2bError, E2bErrorKind, E2bResult, config::validate_identifier};
 
-/// Public E2B template containing the compatible execution-supervisor binary.
-pub const EXECUTION_BASE_TEMPLATE_ID: &str = "uybwrhggvlhkmlbr27qw";
+/// Supported base-sandbox memory tiers, in MiB.
+pub const EXECUTION_BASE_RAM_OPTIONS_MB: [u32; 4] = [1024, 2048, 4096, 8192];
+/// Default base-sandbox memory tier, in MiB.
+pub const DEFAULT_EXECUTION_BASE_RAM_MB: u32 = 2048;
+/// Public E2B template IDs containing the compatible execution-supervisor binary.
+pub const EXECUTION_BASE_TEMPLATE_1024_MB_ID: &str = "h5178y3chdmnimc6bk78";
+pub const EXECUTION_BASE_TEMPLATE_2048_MB_ID: &str = "gls86opr20ek0ijjzvn7";
+pub const EXECUTION_BASE_TEMPLATE_4096_MB_ID: &str = "ujcvzqxszftbr47tx76e";
+pub const EXECUTION_BASE_TEMPLATE_8192_MB_ID: &str = "0zce89ggh7g74rred802";
+/// Backwards-compatible name for the default base template.
+pub const EXECUTION_BASE_TEMPLATE_ID: &str = EXECUTION_BASE_TEMPLATE_2048_MB_ID;
 
 /// Current state reported by the E2B control plane.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -130,19 +139,31 @@ impl E2bControlClient {
         .await
     }
 
-    /// Creates the standard E2B base environment.
+    /// Creates the standard E2B base environment. Network access defaults to
+    /// enabled and RAM defaults to 2048 MiB when omitted.
     ///
     /// Creation is deliberately attempted once. A disconnected POST has an
     /// ambiguous result and replaying it could leak a second billable sandbox.
-    pub async fn create_base_sandbox(&self) -> E2bResult<String> {
-        self.create_sandbox_from_template(EXECUTION_BASE_TEMPLATE_ID)
+    pub async fn create_base_sandbox(
+        &self,
+        network_access: Option<bool>,
+        ram_mb: Option<u32>,
+    ) -> E2bResult<String> {
+        let template_id = execution_base_template_id(ram_mb)?;
+        self.create_sandbox_from_template(template_id, network_access)
             .await
     }
 
     /// Creates an E2B sandbox using a persistent snapshot as its template.
-    pub async fn create_snapshot_sandbox(&self, snapshot_id: &str) -> E2bResult<String> {
+    /// Network access defaults to enabled when `network_access` is `None`.
+    pub async fn create_snapshot_sandbox(
+        &self,
+        snapshot_id: &str,
+        network_access: Option<bool>,
+    ) -> E2bResult<String> {
         validate_identifier(snapshot_id, "snapshot ID")?;
-        self.create_sandbox_from_template(snapshot_id).await
+        self.create_sandbox_from_template(snapshot_id, network_access)
+            .await
     }
 
     /// Creates a persistent snapshot after first connecting to (and therefore
@@ -233,7 +254,11 @@ impl E2bControlClient {
         })
     }
 
-    async fn create_sandbox_from_template(&self, template_id: &str) -> E2bResult<String> {
+    async fn create_sandbox_from_template(
+        &self,
+        template_id: &str,
+        network_access: Option<bool>,
+    ) -> E2bResult<String> {
         let response = self
             .client
             .post(self.endpoint("sandboxes")?)
@@ -244,6 +269,7 @@ impl E2bControlClient {
                 auto_pause: true,
                 auto_pause_memory: true,
                 secure: true,
+                allow_internet_access: network_access.unwrap_or(true),
             })
             .send()
             .await
@@ -314,17 +340,36 @@ impl E2bControlClient {
     }
 }
 
-/// Zero-argument gateway convenience API using `E2B_API_KEY`.
-pub async fn create_base_sandbox() -> E2bResult<String> {
+/// Gateway convenience API using `E2B_API_KEY`.
+pub async fn create_base_sandbox(
+    network_access: Option<bool>,
+    ram_mb: Option<u32>,
+) -> E2bResult<String> {
     E2bControlClient::new(E2bConfig::from_env()?)?
-        .create_base_sandbox()
+        .create_base_sandbox(network_access, ram_mb)
         .await
 }
 
+/// Resolves a supported RAM tier to its public E2B template ID.
+pub fn execution_base_template_id(ram_mb: Option<u32>) -> E2bResult<&'static str> {
+    match ram_mb.unwrap_or(DEFAULT_EXECUTION_BASE_RAM_MB) {
+        1024 => Ok(EXECUTION_BASE_TEMPLATE_1024_MB_ID),
+        2048 => Ok(EXECUTION_BASE_TEMPLATE_2048_MB_ID),
+        4096 => Ok(EXECUTION_BASE_TEMPLATE_4096_MB_ID),
+        8192 => Ok(EXECUTION_BASE_TEMPLATE_8192_MB_ID),
+        value => Err(E2bError::configuration(format!(
+            "unsupported base sandbox RAM {value} MiB; expected one of 1024, 2048, 4096, or 8192"
+        ))),
+    }
+}
+
 /// Gateway convenience API using `E2B_API_KEY`.
-pub async fn create_snapshot_sandbox(e2b_snapshot_id: &str) -> E2bResult<String> {
+pub async fn create_snapshot_sandbox(
+    e2b_snapshot_id: &str,
+    network_access: Option<bool>,
+) -> E2bResult<String> {
     E2bControlClient::new(E2bConfig::from_env()?)?
-        .create_snapshot_sandbox(e2b_snapshot_id)
+        .create_snapshot_sandbox(e2b_snapshot_id, network_access)
         .await
 }
 
@@ -388,6 +433,7 @@ struct CreateSandboxRequest<'a> {
     #[serde(rename = "autoPauseMemory")]
     auto_pause_memory: bool,
     secure: bool,
+    allow_internet_access: bool,
 }
 
 #[derive(Serialize)]
