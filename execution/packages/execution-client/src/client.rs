@@ -22,15 +22,15 @@ use crate::{
 /// Cheaply cloneable, authenticated connection to one gateway deployment.
 #[derive(Clone, Debug)]
 pub struct ExecutionClient {
-    inner: Arc<ClientInner>,
+    pub(crate) inner: Arc<ClientInner>,
 }
 
 #[derive(Debug)]
-struct ClientInner {
-    http: Client,
-    base_url: Url,
-    authorization: HeaderValue,
-    max_response_bytes: usize,
+pub(crate) struct ClientInner {
+    pub(crate) http: Client,
+    pub(crate) base_url: Url,
+    pub(crate) authorization: HeaderValue,
+    pub(crate) max_response_bytes: usize,
 }
 
 impl ExecutionClient {
@@ -52,9 +52,10 @@ impl ExecutionClient {
         })
     }
 
-    /// Describes a ready host through the gateway and validates its identity.
+    /// Describes a host through the gateway and validates its identity.
     ///
-    /// Hosted IDs are UUIDs. No host is provisioned or resumed by this method.
+    /// Hosted IDs are UUIDs. The gateway resumes paused E2B hosts on use;
+    /// this method never provisions a new host.
     /// The runtime's descriptor remains a snapshot; connect again to refresh it.
     pub async fn connect_host(
         &self,
@@ -155,7 +156,7 @@ impl ExecutionClient {
     }
 }
 
-fn response_too_large() -> ExecutionError {
+pub(crate) fn response_too_large() -> ExecutionError {
     ExecutionError::new(
         ExecutionErrorCode::ResourceExhausted,
         "gateway response exceeded the configured byte limit",
@@ -163,7 +164,7 @@ fn response_too_large() -> ExecutionError {
     .with_detail("source", "client")
 }
 
-async fn within_context<T>(
+pub(crate) async fn within_context<T>(
     context: &OperationContext,
     operation: impl Future<Output = ExecutionResult<T>>,
 ) -> ExecutionResult<T> {
