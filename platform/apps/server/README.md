@@ -320,3 +320,14 @@ cargo clippy -p platform-server --all-targets -- -D warnings
 
 All routes are intended for local development. Add application
 authentication and authorization before exposing this server publicly.
+## Harness environment integration
+
+Workers can GET/POST `/internal/runs/{id}/environments` using their normal worker
+token, `X-Worker-ID`, and `X-Lease-Epoch`. POST also requires `Idempotency-Key`
+and the same environment fields as project environment creation; the project is
+derived from the run. GET returns `{ "items": [...] }`; POST returns the created
+environment with status 201. Records and receipts are committed atomically in
+the existing database, with no additional migration required. The public
+dashboard POST remains unchanged; harnesses must use the fenced internal route
+for recoverable creation. Runtime construction must inject the existing
+`EnvironmentService` with `RuntimeService::with_environments` (wired in main).
