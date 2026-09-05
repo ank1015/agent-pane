@@ -158,6 +158,36 @@ Execution remains process-local: gateway restart/crash recovery is not provided.
 Saving a completed result is retried independently without repeating the provider
 call. The synchronous `/v1/llm` endpoint retains its existing behavior.
 
+### Abort an asynchronous run
+
+```http
+POST /v1/llm/runs/{run_id}/abort
+Authorization: Bearer LLM_GATEWAY_API_TOKEN
+```
+
+Atomically changes a running run to `aborted`, with `result: null`, a completion
+timestamp, and the usual 48-hour expiry. Returns the run snapshot with HTTP 200.
+Repeated aborts return the same snapshot. Completed or failed runs remain
+unchanged; expired runs return 410, and unknown IDs return 404. The original
+idempotency key continues to resolve to the aborted run. Use a new key for an
+intentional new execution.
+
+Abort and completion both update only running rows: the first committed terminal
+transition wins. An abort response confirms the durable state transition, not
+that upstream work has already stopped. The owning worker checks PostgreSQL at
+250 ms intervals (plus database latency), drops queued admission or the active
+provider future, and releases concurrency capacity. Existing accounting rows are
+finalized as `cancelled` with error kind `aborted` when interruption wins. If a
+provider response already arrived, its actual usage can still be accounted for;
+it cannot overwrite an aborted run result.
+
+Because the abort signal is persisted, it works across gateway replicas and
+does not depend on the caller remaining connected. It does not add recovery for
+in-flight execution after a gateway crash. A provider may still complete or bill
+work already received; there is no provider-independent upstream cancellation
+guarantee. This endpoint applies to asynchronous runs, not the synchronous
+`POST /v1/llm` route.
+
 ### Execute provider-backed search
 
 ```http
