@@ -31,6 +31,8 @@ pub enum ClientError {
     },
     #[error("LLM run {run_id} has expired")]
     RunExpired { run_id: Uuid },
+    #[error("LLM run {run_id} was aborted")]
+    RunAborted { run_id: Uuid },
     #[error("timed out waiting for LLM run {run_id}; the run may still be executing")]
     WaitTimeout { run_id: Uuid },
     #[error("could not continue waiting for LLM run {run_id}: {source}")]

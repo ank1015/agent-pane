@@ -76,7 +76,12 @@ async fn accept(
         tokio::spawn(async move {
             let result = worker
                 .gateway
-                .complete(id, payload.request, payload.account_id)
+                .complete_until_aborted(
+                    id,
+                    payload.request,
+                    payload.account_id,
+                    wait_for_abort(worker.database.clone(), id),
+                )
                 .await;
             let (status, value) = match result {
                 Ok(completion) => (
@@ -99,7 +104,7 @@ async fn accept(
             let value = value.unwrap_or_else(|_| serde_json::json!({"error": {"kind": "internal", "message": "result serialization failed", "can_retry": false}}));
             // Retry saving the existing output, never the billable provider call.
             loop {
-                match sqlx::query("update llm_runs set status = $2, result = $3, completed_at = now(), expires_at = now() + interval '48 hours' where id = $1")
+                match sqlx::query("update llm_runs set status = $2, result = $3, completed_at = now(), expires_at = now() + interval '48 hours' where id = $1 and status = 'running'")
                     .bind(id).bind(status).bind(&value).execute(worker.database.pool()).await {
                     Ok(_) => break,
                     Err(error) => tracing::error!(%error, run_id = %id, "could not persist run result; retrying"),
@@ -120,6 +125,39 @@ async fn accept(
         ));
     }
     load(&state.database, existing_id).await
+}
+
+/// Abort intent is the terminal DB transition, so it survives a dropped caller
+/// and works even when the HTTP request reaches a different gateway replica.
+pub(super) async fn abort(State(state): State<AppState>, Path(id): Path<Uuid>) -> Response {
+    match tokio::spawn(async move {
+        sqlx::query("update llm_runs set status = 'aborted', result = null, completed_at = now(), expires_at = now() + interval '48 hours' where id = $1 and status = 'running'")
+            .bind(id).execute(state.database.pool()).await.map_err(database_error)?;
+        load(&state.database, id).await
+    }).await {
+        Ok(Ok(run)) => run_response(run, false),
+        Ok(Err(error)) => error_response(id, error),
+        Err(error) => {
+            tracing::error!(%error, run_id = %id, "run abort task failed");
+            error_response(id, GatewayError::internal_error())
+        }
+    }
+}
+
+async fn wait_for_abort(database: Database, id: Uuid) {
+    loop {
+        match sqlx::query_scalar::<_, String>("select status from llm_runs where id = $1")
+            .bind(id)
+            .fetch_optional(database.pool())
+            .await
+        {
+            Ok(Some(status)) if status == "running" => {}
+            // A deleted or expired run must not continue consuming provider work.
+            Ok(_) => return,
+            Err(error) => tracing::error!(%error, run_id = %id, "could not check run abort state"),
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
 }
 
 #[derive(Default, Deserialize)]

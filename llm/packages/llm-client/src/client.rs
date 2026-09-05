@@ -78,6 +78,16 @@ impl LlmClient {
         self.retrieve(run_id, 0).await
     }
 
+    /// Explicitly abort queued or active work. Repeated calls are safe. If the
+    /// run already finished, returns its existing terminal state unchanged.
+    pub async fn abort(&self, run_id: Uuid) -> ClientResult<Run> {
+        let mut url = self.inner.runs_url.clone();
+        url.path_segments_mut()
+            .expect("validated gateway URL")
+            .extend([run_id.to_string().as_str(), "abort"]);
+        self.send_run(self.inner.http.post(url), Some(run_id)).await
+    }
+
     /// Wait for a previously submitted run, including after a caller restart.
     /// Dropping this future or reaching its timeout does not cancel the remote run.
     pub async fn wait(
@@ -221,6 +231,7 @@ impl LlmClient {
 fn terminal_result(run: Run) -> ClientResult<Option<CompletionResponse>> {
     match run.state {
         RunState::Running => Ok(None),
+        RunState::Aborted => Err(ClientError::RunAborted { run_id: run.run_id }),
         RunState::Succeeded(result) => Ok(Some(*result)),
         RunState::Failed(failure) => Err(ClientError::RunFailed {
             run_id: run.run_id,

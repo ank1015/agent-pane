@@ -83,6 +83,7 @@ pub struct Run {
 #[serde(tag = "status", content = "result", rename_all = "snake_case")]
 pub enum RunState {
     Running,
+    Aborted,
     Succeeded(Box<CompletionResponse>),
     Failed(GatewayFailure),
     Expired,
@@ -110,6 +111,7 @@ pub struct GatewayError {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GatewayErrorKind {
+    Aborted,
     Unauthorized,
     AuthenticationRateLimited,
     InvalidRequest,

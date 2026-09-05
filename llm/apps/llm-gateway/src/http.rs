@@ -58,6 +58,7 @@ pub fn router(
         .route("/v1/llm", post(complete))
         .route("/v1/llm/runs", post(runs::submit))
         .route("/v1/llm/runs/{run_id}", get(runs::retrieve))
+        .route("/v1/llm/runs/{run_id}/abort", post(runs::abort))
         .route("/v1/search", post(search))
         .layer(DefaultBodyLimit::max(max_request_bytes));
     let admin_routes = Router::new()
@@ -479,7 +480,7 @@ impl GatewayError {
             GatewayErrorKind::Unauthorized => StatusCode::UNAUTHORIZED,
             GatewayErrorKind::AuthenticationRateLimited => StatusCode::TOO_MANY_REQUESTS,
             GatewayErrorKind::InvalidRequest => StatusCode::BAD_REQUEST,
-            GatewayErrorKind::Conflict => StatusCode::CONFLICT,
+            GatewayErrorKind::Conflict | GatewayErrorKind::Aborted => StatusCode::CONFLICT,
             GatewayErrorKind::UnsupportedCapability
             | GatewayErrorKind::UnknownModel
             | GatewayErrorKind::AccountDisabled
