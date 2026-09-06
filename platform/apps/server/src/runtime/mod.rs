@@ -10,6 +10,7 @@ mod error;
 mod http;
 mod model;
 mod mutations;
+mod project_harnesses;
 mod queries;
 mod receipts;
 mod session_state;

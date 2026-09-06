@@ -14,7 +14,7 @@ use axum::{
     http::{HeaderMap, HeaderValue},
     middleware::{self, Next},
     response::Response,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -24,6 +24,11 @@ pub fn router(service: RuntimeService) -> Router {
     Router::new()
         .route("/api/harnesses", get(harnesses))
         .route("/api/harnesses/{id}", get(harness))
+        .route("/api/projects/{id}/harnesses", get(project_harnesses))
+        .route(
+            "/api/projects/{project_id}/harnesses/{harness_id}",
+            put(set_project_harness),
+        )
         .route(
             "/api/projects/{id}/sessions",
             get(sessions).post(create_session),
@@ -95,6 +100,20 @@ async fn harnesses(State(s): State<RuntimeService>) -> Result<Json<Value>> {
 }
 async fn harness(State(s): State<RuntimeService>, Path(id): Path<String>) -> Result<Json<Value>> {
     Ok(Json(s.harness(&id).await?))
+}
+async fn project_harnesses(State(s): State<RuntimeService>, p: Id) -> Result<Json<Value>> {
+    Ok(Json(s.project_harnesses(id(p)?).await?))
+}
+async fn set_project_harness(
+    State(s): State<RuntimeService>,
+    p: std::result::Result<Path<(Uuid, String)>, PathRejection>,
+    b: Body<super::project_harnesses::SetProjectHarness>,
+) -> Result<Json<Value>> {
+    let Path((project, harness)) =
+        p.map_err(|_| RuntimeError::Invalid("Provide a valid project UUID and harness ID."))?;
+    Ok(Json(
+        s.set_project_harness(project, &harness, body(b)?).await?,
+    ))
 }
 async fn sessions(
     State(s): State<RuntimeService>,
