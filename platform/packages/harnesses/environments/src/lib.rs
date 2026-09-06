@@ -3,16 +3,18 @@
 
 mod config;
 mod driver;
+mod filesystem;
+mod model;
 mod prompt;
 mod state;
 mod tools;
 
-pub use cc_harness_support::model::supported_models;
 pub use config::{Config, ReasoningLevel, config_schema};
 use execution_client::ExecutionClient;
 use futures_util::future::BoxFuture;
 use harness_runtime::{Execution, Harness};
 use llm_client::LlmClient;
+pub use model::supported_models;
 use platform_runtime_client::Result;
 pub use tools::{WebTools, definitions as tool_definitions};
 
