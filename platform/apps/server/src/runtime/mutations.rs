@@ -16,20 +16,8 @@ pub(super) async fn session(tx: &mut Tx<'_>, id: Uuid) -> Result<SessionRow> {
 pub(super) async fn run(tx: &mut Tx<'_>, id: Uuid) -> Result<RunRow> {
     sqlx::query_as("select id,project_id,session_id,status,abort_requested_at from runs where id=$1 for update").bind(id).fetch_optional(&mut **tx).await?.ok_or(RuntimeError::NotFound)
 }
-pub(super) async fn enabled(tx: &mut Tx<'_>, id: &str) -> Result<()> {
-    nonempty(id, 128, "Provide a valid harness ID.")?;
-    match sqlx::query_scalar::<_, bool>("select enabled from harnesses where id=$1 for share")
-        .bind(id)
-        .fetch_optional(&mut **tx)
-        .await?
-    {
-        Some(true) => Ok(()),
-        Some(false) => Err(RuntimeError::CodedConflict(
-            platform_runtime_contracts::ConflictCode::HarnessDisabled,
-            "The harness is disabled for new work.",
-        )),
-        None => Err(RuntimeError::NotFound),
-    }
+pub(super) async fn enabled(tx: &mut Tx<'_>, project: Uuid, id: &str) -> Result<()> {
+    super::project_harnesses::require_enabled(tx, project, id).await
 }
 pub(super) async fn event(tx: &mut Tx<'_>, id: Uuid, kind: &str, payload: Value) -> Result<()> {
     sqlx::query(
@@ -122,7 +110,7 @@ pub(super) async fn start_with_parent(
             "This session already has an active run. Submit input to that run instead.",
         ));
     }
-    enabled(tx, &s.harness_id).await?;
+    enabled(tx, s.project_id, &s.harness_id).await?;
     let config = &s.config;
     let id = Uuid::now_v7();
     sqlx::query(
@@ -200,7 +188,7 @@ impl RuntimeService {
                 .fetch_optional(&mut *tx)
                 .await?;
         exists.ok_or(RuntimeError::NotFound)?;
-        enabled(&mut tx, &request.harness_id).await?;
+        enabled(&mut tx, project, &request.harness_id).await?;
         let config =
             configuration::resolve(&mut tx, &request.harness_id, &request.config_override).await?;
         let id = Uuid::now_v7();
@@ -259,7 +247,7 @@ impl RuntimeService {
             ));
         }
         let harness = request.harness_id.as_deref().unwrap_or(&source.harness_id);
-        enabled(&mut tx, harness).await?;
+        enabled(&mut tx, source.project_id, harness).await?;
         let config = configuration::resolve_from(
             &mut tx,
             harness,

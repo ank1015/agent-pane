@@ -142,6 +142,42 @@ async fn bootstrap_returns_safe_catalog_accounts_and_project_scoped_environments
         assert!(!body.to_string().contains(forbidden));
     }
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(body["harnesses"].as_array().unwrap().len(), 1);
+    assert_eq!(body["harnesses"][0]["project_policy"], "required");
+    sqlx::query("insert into project_harnesses(project_id,harness_id,enabled) values($1,'basic-cc-tools-harness',true)")
+        .bind(id).execute(&pool).await.unwrap();
+    let enabled = request(&app, &id.to_string(), 200).await;
+    assert_eq!(enabled["harnesses"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        request(&app, &other.to_string(), 200).await["harnesses"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    sqlx::query("update project_harnesses set enabled=false where project_id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        request(&app, &id.to_string(), 200).await["harnesses"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // Even a required harness can be taken offline by the platform globally.
+    sqlx::query("update harnesses set enabled=false where id='environments'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        request(&app, &id.to_string(), 200).await["harnesses"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

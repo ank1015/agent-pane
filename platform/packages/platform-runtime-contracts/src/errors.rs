@@ -17,6 +17,9 @@ pub enum ConflictCode {
     RunStateConflict,
     SessionStateConflict,
     HarnessDisabled,
+    ProjectHarnessDisabled,
+    ProjectHarnessRequired,
+    ProjectHarnessActiveRuns,
     RuntimeConstraintConflict,
     RuntimeConflict,
 }
@@ -37,6 +40,9 @@ impl ConflictCode {
             Self::RunStateConflict => "RUN_STATE_CONFLICT",
             Self::SessionStateConflict => "SESSION_STATE_CONFLICT",
             Self::HarnessDisabled => "HARNESS_DISABLED",
+            Self::ProjectHarnessDisabled => "PROJECT_HARNESS_DISABLED",
+            Self::ProjectHarnessRequired => "PROJECT_HARNESS_REQUIRED",
+            Self::ProjectHarnessActiveRuns => "PROJECT_HARNESS_ACTIVE_RUNS",
             Self::RuntimeConstraintConflict => "RUNTIME_CONSTRAINT_CONFLICT",
             Self::RuntimeConflict => "RUNTIME_CONFLICT",
         }

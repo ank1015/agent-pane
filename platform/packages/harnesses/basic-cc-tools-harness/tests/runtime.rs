@@ -76,6 +76,8 @@ impl App {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::query("insert into project_harnesses(project_id,harness_id,enabled) values($1,'basic-cc-tools-harness',true)")
+            .bind(project).execute(&pool).await.unwrap();
         let schema: Value = sqlx::query_scalar("select config_schema from harnesses where id=$1")
             .bind(ID)
             .fetch_one(&pool)

@@ -224,6 +224,8 @@ impl App {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::query("insert into project_harnesses(project_id,harness_id,enabled) values($1,'fixture',true)")
+            .bind(project).execute(&pool).await.unwrap();
         let runtime = RuntimeService::new(pool.clone());
         let reconciler = runtime.spawn_reconciler();
         let faults = Arc::new(Faults::default());

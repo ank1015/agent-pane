@@ -41,6 +41,16 @@ export async function patchJson<T>(path: string, body: unknown): Promise<T> {
   return parseResponse<T>(response)
 }
 
+export async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: 'PUT',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(30_000),
+    body: JSON.stringify(body),
+  })
+  return parseResponse<T>(response)
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const body = await readJson(response)

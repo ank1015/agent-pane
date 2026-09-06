@@ -39,6 +39,13 @@ impl App {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::query(
+            "insert into project_harnesses(project_id,harness_id,enabled) values($1,'test',true)",
+        )
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
         let mut service = RuntimeService::new(pool.clone());
         if let Some(gateway) = gateway {
             service = service.with_environments(

@@ -30,6 +30,13 @@ impl App {
         sqlx::query("insert into harnesses(id,name,default_config,config_schema) values('test','Test',$1,$2)")
             .bind(json!({"model":"test-model","nested":{"keep":true,"change":1},"remove":true}))
             .bind(json!({"type":"object","required":["model"],"properties":{"model":{"type":"string"},"nested":{"type":"object"}}})).execute(&pool).await.unwrap();
+        sqlx::query(
+            "insert into project_harnesses(project_id,harness_id,enabled) values($1,'test',true)",
+        )
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let service = RuntimeService::new(pool.clone());
@@ -101,6 +108,255 @@ impl App {
 }
 fn user(text: &str) -> Value {
     json!({"role":"user","id":Uuid::now_v7(),"timestamp":0,"content":[{"type":"text","content":text}]})
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn project_harness_defaults_scope_required_policy_and_validation(pool: PgPool) {
+    let app = App::new(pool).await;
+    let other = Uuid::now_v7();
+    sqlx::query("insert into projects(project_id,name) values($1,'Fresh project')")
+        .bind(other)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let list = app.get(&format!("/api/projects/{other}/harnesses")).await;
+    let items = list["items"].as_array().unwrap();
+    let env = items.iter().find(|h| h["id"] == "environments").unwrap();
+    assert_eq!(env["project_policy"], "required");
+    assert_eq!(env["project_enabled"], true);
+    assert_eq!(env["available"], true);
+    let optional = items.iter().find(|h| h["id"] == "test").unwrap();
+    assert_eq!(optional["project_policy"], "opt_in");
+    assert_eq!(optional["globally_enabled"], true);
+    assert_eq!(optional["project_enabled"], false);
+    assert_eq!(optional["available"], false);
+    for initial in [false, true] {
+        let mut body = json!({"harness_id":"test"});
+        if initial {
+            body["initial_run"] = start(0);
+        }
+        let denied = app
+            .post(
+                &format!("/api/projects/{other}/sessions"),
+                &format!("denied-{initial}"),
+                body,
+                409,
+            )
+            .await;
+        assert_eq!(denied["error"]["code"], "PROJECT_HARNESS_DISABLED");
+    }
+    let path = format!("/api/projects/{other}/harnesses/test");
+    for invalid in [
+        json!({}),
+        json!({"enabled":null}),
+        json!({"enabled":"true"}),
+        json!({"enabled":true,"project_policy":"required"}),
+    ] {
+        app.check(Method::PUT, &path, None, Some(invalid), 422)
+            .await;
+    }
+    let enabled = app
+        .check(Method::PUT, &path, None, Some(json!({"enabled":true})), 200)
+        .await;
+    assert_eq!(enabled["available"], true);
+    assert_eq!(
+        app.check(Method::PUT, &path, None, Some(json!({"enabled":true})), 200)
+            .await,
+        enabled
+    );
+    // Project grants cannot override the global switch.
+    sqlx::query("update harnesses set enabled=false where id='test'")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let disabled = app
+        .check(Method::PUT, &path, None, Some(json!({"enabled":true})), 200)
+        .await;
+    assert_eq!(disabled["project_enabled"], true);
+    assert_eq!(disabled["available"], false);
+    assert_eq!(
+        app.post(
+            &format!("/api/projects/{other}/sessions"),
+            "global-disabled",
+            json!({"harness_id":"test"}),
+            409
+        )
+        .await["error"]["code"],
+        "HARNESS_DISABLED"
+    );
+    let required = format!("/api/projects/{other}/harnesses/environments");
+    assert_eq!(
+        app.check(
+            Method::PUT,
+            &required,
+            None,
+            Some(json!({"enabled":false})),
+            409
+        )
+        .await["error"]["code"],
+        "PROJECT_HARNESS_REQUIRED"
+    );
+    app.check(
+        Method::PUT,
+        &required,
+        None,
+        Some(json!({"enabled":true})),
+        200,
+    )
+    .await;
+    let count: i64 = sqlx::query_scalar(
+        "select count(*) from project_harnesses where harness_id='environments'",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0);
+    for path in [
+        format!("/api/projects/{}/harnesses/test", Uuid::now_v7()),
+        format!("/api/projects/{other}/harnesses/missing"),
+    ] {
+        app.check(Method::PUT, &path, None, Some(json!({"enabled":true})), 404)
+            .await;
+    }
+    app.check(
+        Method::GET,
+        &format!("/api/projects/{}/harnesses", Uuid::now_v7()),
+        None,
+        None,
+        404,
+    )
+    .await;
+    app.check(
+        Method::PUT,
+        "/api/projects/not-a-uuid/harnesses/test",
+        None,
+        Some(json!({"enabled":true})),
+        400,
+    )
+    .await;
+    app.check(
+        Method::PUT,
+        &format!("/api/projects/{other}/harnesses/Bad"),
+        None,
+        Some(json!({"enabled":true})),
+        400,
+    )
+    .await;
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn disabling_preserves_history_blocks_new_work_and_reenabling_preserves_config(pool: PgPool) {
+    let app = App::new(pool).await;
+    let created = app.create("old-session", false).await;
+    let session = uuid(&created["session"]["id"]);
+    let path = format!("/api/projects/{}/harnesses/test", app.project);
+    app.check(
+        Method::PUT,
+        &path,
+        None,
+        Some(json!({"enabled":false})),
+        200,
+    )
+    .await;
+    assert_eq!(
+        app.get(&format!("/api/sessions/{session}")).await["config"],
+        created["session"]["config"]
+    );
+    assert_eq!(
+        app.get(&format!("/api/projects/{}/sessions", app.project))
+            .await["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // Replaying accepted work remains valid; it does not create another session.
+    assert_eq!(app.create("old-session", false).await, created);
+    for (url, body) in [
+        (format!("/api/sessions/{session}/runs"), start(0)),
+        (
+            format!("/api/sessions/{session}/forks"),
+            json!({"at_revision":0}),
+        ),
+        (
+            format!("/api/projects/{}/sessions", app.project),
+            json!({"harness_id":"test"}),
+        ),
+    ] {
+        assert_eq!(
+            app.post(&url, &Uuid::now_v7().to_string(), body, 409).await["error"]["code"],
+            "PROJECT_HARNESS_DISABLED"
+        );
+    }
+    app.check(Method::PUT, &path, None, Some(json!({"enabled":true})), 200)
+        .await;
+    let started = app
+        .post(
+            &format!("/api/sessions/{session}/runs"),
+            "start",
+            start(0),
+            201,
+        )
+        .await;
+    assert_eq!(started["run"]["config"], created["session"]["config"]);
+    assert_eq!(
+        app.check(
+            Method::PUT,
+            &path,
+            None,
+            Some(json!({"enabled":false})),
+            409
+        )
+        .await["error"]["code"],
+        "PROJECT_HARNESS_ACTIVE_RUNS"
+    );
+    fail(&app, uuid(&started["run"]["id"])).await;
+    app.check(
+        Method::PUT,
+        &path,
+        None,
+        Some(json!({"enabled":false})),
+        200,
+    )
+    .await;
+    assert!(
+        app.get(&format!("/api/runs/{}", uuid(&started["run"]["id"])))
+            .await
+            .is_object()
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn disabling_racing_run_creation_never_leaves_disabled_active_work(pool: PgPool) {
+    let app = App::new(pool).await;
+    let path = format!("/api/projects/{}/harnesses/test", app.project);
+    for index in 0..12 {
+        app.check(Method::PUT, &path, None, Some(json!({"enabled":true})), 200)
+            .await;
+        let url = format!("/api/projects/{}/sessions", app.project);
+        let key = format!("race-{index}");
+        let (creation, disable) = tokio::join!(
+            app.raw(
+                Method::POST,
+                &url,
+                Some(&key),
+                Some(json!({"harness_id":"test","initial_run":start(0)}))
+            ),
+            app.raw(Method::PUT, &path, None, Some(json!({"enabled":false})))
+        );
+        let statuses = (creation.status().as_u16(), disable.status().as_u16());
+        assert!(
+            matches!(statuses, (201, 409) | (409, 200)),
+            "unexpected race result: {statuses:?}"
+        );
+        let body: Value = creation.json().await.unwrap();
+        if statuses.0 == 201 {
+            fail(&app, uuid(&body["run"]["id"])).await;
+        }
+    }
 }
 fn start(revision: i64) -> Value {
     json!({"input":user("Start"),"expected_session_revision":revision})

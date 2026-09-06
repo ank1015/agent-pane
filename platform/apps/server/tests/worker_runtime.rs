@@ -231,6 +231,8 @@ impl App {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::query("insert into project_harnesses(project_id,harness_id,enabled) values($1,'test',true),($1,'other',true)")
+            .bind(project).execute(&pool).await.unwrap();
         let runtime = RuntimeService::new(pool.clone());
         let app = router(runtime.clone()).merge(worker_router(runtime.clone(), BOOT));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1161,6 +1163,105 @@ async fn children_forks_messages_abort_and_completion_wake(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn project_harness_policy_fences_children_followups_and_live_disabling(pool: PgPool) {
+    let app = App::new(pool).await;
+    let w = app.register(3).await;
+    let created = app.create().await;
+    let parent = id(&created["run"]["id"]);
+    app.claim(&w, "parent", 1).await;
+    app.ack(&w, parent, 1).await;
+    let policy = format!("/api/projects/{}/harnesses/test", app.project);
+    let rejected = app
+        .request(
+            Method::PUT,
+            &policy,
+            None,
+            0,
+            None,
+            Some(json!({"enabled":false})),
+            409,
+        )
+        .await;
+    assert_eq!(rejected["error"]["code"], "PROJECT_HARNESS_ACTIVE_RUNS");
+    let target = app
+        .request(
+            Method::POST,
+            &format!("/api/projects/{}/sessions", app.project),
+            None,
+            0,
+            Some("other-session"),
+            Some(json!({"harness_id":"other"})),
+            201,
+        )
+        .await;
+    app.request(
+        Method::PUT,
+        &format!("/api/projects/{}/harnesses/other", app.project),
+        None,
+        0,
+        None,
+        Some(json!({"enabled":false})),
+        200,
+    )
+    .await;
+    let child_body =
+        json!({"harness_id":"other","initial_run":{"input":user(),"expected_session_revision":0}});
+    let rejected = app
+        .request(
+            Method::POST,
+            &format!("/internal/runs/{parent}/children"),
+            Some(&w),
+            1,
+            Some("disabled-child"),
+            Some(child_body.clone()),
+            409,
+        )
+        .await;
+    assert_eq!(rejected["error"]["code"], "PROJECT_HARNESS_DISABLED");
+    let rejected=app.request(Method::POST,&format!("/internal/runs/{parent}/follow-ups"),Some(&w),1,Some("disabled-followup"),Some(json!({"target_session_id":target["session"]["id"],"run":{"input":user(),"expected_session_revision":0}})),409).await;
+    assert_eq!(rejected["error"]["code"], "PROJECT_HARNESS_DISABLED");
+    app.request(
+        Method::PUT,
+        &format!("/api/projects/{}/harnesses/other", app.project),
+        None,
+        0,
+        None,
+        Some(json!({"enabled":true})),
+        200,
+    )
+    .await;
+    let child = app
+        .request(
+            Method::POST,
+            &format!("/internal/runs/{parent}/children"),
+            Some(&w),
+            1,
+            Some("disabled-child"),
+            Some(child_body),
+            201,
+        )
+        .await;
+    let child_id = id(&child["run"]["id"]);
+    let mut body = base(&app.context(&w, parent, 1).await);
+    body["waits"] = json!([{"wait_key":"join","mode":"all","dependencies":[{"kind":"run_completion","target_run_id":child_id}]}]);
+    body["disposition"] = json!({"status":"waiting"});
+    app.commit(&w, parent, 1, "park", body, 200).await;
+    let rejected = app
+        .request(
+            Method::PUT,
+            &policy,
+            None,
+            0,
+            None,
+            Some(json!({"enabled":false})),
+            409,
+        )
+        .await;
+    assert_eq!(rejected["error"]["code"], "PROJECT_HARNESS_ACTIVE_RUNS");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
 async fn events_scope_and_failed_completion_are_atomic(pool: PgPool) {
     let app = App::new(pool).await;
     let w = app.register(2).await;
@@ -1219,6 +1320,16 @@ async fn events_scope_and_failed_completion_are_atomic(pool: PgPool) {
         .execute(&app.pool)
         .await
         .unwrap();
+    app.request(
+        Method::PUT,
+        &format!("/api/projects/{other_project}/harnesses/test"),
+        None,
+        0,
+        None,
+        Some(json!({"enabled":true})),
+        200,
+    )
+    .await;
     let other=app.request(Method::POST,&format!("/api/projects/{other_project}/sessions"),None,0,Some("other"),Some(json!({"harness_id":"test","initial_run":{"input":user(),"expected_session_revision":0}})),201).await;
     let target = id(&other["run"]["id"]);
     app.request(

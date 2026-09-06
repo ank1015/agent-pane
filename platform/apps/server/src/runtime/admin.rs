@@ -23,6 +23,9 @@ pub(super) struct Harness {
     pub supported_models: std::collections::BTreeMap<String, Vec<String>>,
     #[serde(default = "enabled")]
     pub enabled: bool,
+    /// Omitted on update preserves platform policy; new harnesses opt in.
+    #[serde(default)]
+    pub project_policy: Option<platform_runtime_contracts::HarnessProjectPolicy>,
 }
 fn enabled() -> bool {
     true
@@ -125,9 +128,9 @@ impl RuntimeService {
         validate_id(id)?;
         request.validate()?;
         let mut tx = self.transaction().await?;
-        let result = sqlx::query_scalar("insert into harnesses as h(id,name,description,default_config,config_schema,enabled,supported_models) values($1,$2,$3,$4,$5,$6,$7) on conflict(id) do update set name=excluded.name,description=excluded.description,default_config=excluded.default_config,config_schema=excluded.config_schema,enabled=excluded.enabled,supported_models=excluded.supported_models,updated_at=clock_timestamp() returning to_jsonb(h)")
+        let result = sqlx::query_scalar("insert into harnesses as h(id,name,description,default_config,config_schema,enabled,supported_models,project_policy) values($1,$2,$3,$4,$5,$6,$7,coalesce($8,'opt_in')) on conflict(id) do update set name=excluded.name,description=excluded.description,default_config=excluded.default_config,config_schema=excluded.config_schema,enabled=excluded.enabled,supported_models=excluded.supported_models,project_policy=coalesce($8,h.project_policy),updated_at=clock_timestamp() returning to_jsonb(h)")
             .bind(id).bind(request.name).bind(request.description).bind(Value::Object(request.default_config))
-            .bind(request.config_schema.map(Value::Object)).bind(request.enabled).bind(serde_json::to_value(request.supported_models).map_err(|_| RuntimeError::StoredData)?).fetch_one(&mut *tx).await?;
+            .bind(request.config_schema.map(Value::Object)).bind(request.enabled).bind(serde_json::to_value(request.supported_models).map_err(|_| RuntimeError::StoredData)?).bind(request.project_policy.map(|p|p.as_str())).fetch_one(&mut *tx).await?;
         tx.commit().await?;
         Ok(result)
     }
@@ -144,6 +147,7 @@ impl RuntimeService {
                         | "config_schema"
                         | "enabled"
                         | "supported_models"
+                        | "project_policy"
                 )
             })
         {
@@ -152,7 +156,12 @@ impl RuntimeService {
             ));
         }
         let mut tx = self.transaction().await?;
-        let mut current: Value = sqlx::query_scalar("select jsonb_build_object('name',name,'description',description,'default_config',default_config,'config_schema',config_schema,'enabled',enabled,'supported_models',supported_models) from harnesses where id=$1 for update")
+        if patch.get("project_policy").is_some_and(Value::is_null) {
+            return Err(RuntimeError::Invalid(
+                "project_policy must be required or opt_in.",
+            ));
+        }
+        let mut current: Value = sqlx::query_scalar("select jsonb_build_object('name',name,'description',description,'default_config',default_config,'config_schema',config_schema,'enabled',enabled,'supported_models',supported_models,'project_policy',project_policy) from harnesses where id=$1 for update")
             .bind(id).fetch_optional(&mut *tx).await?.ok_or(RuntimeError::NotFound)?;
         current
             .as_object_mut()
@@ -161,9 +170,9 @@ impl RuntimeService {
         let request: Harness = serde_json::from_value(current)
             .map_err(|_| RuntimeError::Invalid("Invalid harness field type."))?;
         request.validate()?;
-        let result = sqlx::query_scalar("update harnesses as h set name=$2,description=$3,default_config=$4,config_schema=$5,enabled=$6,supported_models=$7,updated_at=clock_timestamp() where id=$1 returning to_jsonb(h)")
+        let result = sqlx::query_scalar("update harnesses as h set name=$2,description=$3,default_config=$4,config_schema=$5,enabled=$6,supported_models=$7,project_policy=$8,updated_at=clock_timestamp() where id=$1 returning to_jsonb(h)")
             .bind(id).bind(request.name).bind(request.description).bind(Value::Object(request.default_config))
-            .bind(request.config_schema.map(Value::Object)).bind(request.enabled).bind(serde_json::to_value(request.supported_models).map_err(|_| RuntimeError::StoredData)?).fetch_one(&mut *tx).await?;
+            .bind(request.config_schema.map(Value::Object)).bind(request.enabled).bind(serde_json::to_value(request.supported_models).map_err(|_| RuntimeError::StoredData)?).bind(request.project_policy.unwrap_or_default().as_str()).fetch_one(&mut *tx).await?;
         tx.commit().await?;
         Ok(result)
     }
