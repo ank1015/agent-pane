@@ -20,6 +20,15 @@ pub enum CommandSpec {
         #[serde(default)]
         login: bool,
     },
+    /// Shell-type-aware launch with host-side shell discovery. Unlike legacy
+    /// `Shell`, accepts an empty script (a successful no-op).
+    ShellScript {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shell: Option<String>,
+        #[serde(default)]
+        login: bool,
+    },
     Argv {
         program: String,
         #[serde(default)]
@@ -31,8 +40,10 @@ impl Validate for CommandSpec {
     fn validate(&self) -> Result<(), ValidationError> {
         let mut issues = Vec::new();
         match self {
-            Self::Shell { command, shell, .. } => {
-                require_non_empty(&mut issues, "command", command);
+            Self::Shell { command, shell, .. } | Self::ShellScript { command, shell, .. } => {
+                if matches!(self, Self::Shell { .. }) {
+                    require_non_empty(&mut issues, "command", command);
+                }
                 if command.contains('\0') {
                     issue(&mut issues, "command", "must not contain a null byte");
                 }
@@ -132,6 +143,13 @@ pub enum StdinMode {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartExecutionRequest {
+    /// Reject a prepared start on a different supervisor before spawning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_generation: Option<SupervisorGenerationId>,
+    /// Publish child exit immediately and bound output draining after exit.
+    /// Omitted preserves the legacy wait-until-streams-close behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_drain_timeout_ms: Option<u64>,
     pub operation_id: OperationId,
     pub execution_id: ExecutionId,
     pub command: CommandSpec,
@@ -386,6 +404,8 @@ mod tests {
 
     fn request() -> StartExecutionRequest {
         StartExecutionRequest {
+            expected_generation: None,
+            output_drain_timeout_ms: None,
             operation_id: OperationId::generate(),
             execution_id: ExecutionId::generate(),
             command: CommandSpec::Argv {
@@ -397,6 +417,41 @@ mod tests {
             stdin: StdinMode::Closed,
             timeout_ms: None,
         }
+    }
+
+    #[test]
+    fn shell_script_empty_command_does_not_change_legacy_validation() {
+        CommandSpec::ShellScript {
+            command: String::new(),
+            shell: None,
+            login: false,
+        }
+        .validate()
+        .unwrap();
+        assert!(
+            CommandSpec::Shell {
+                command: String::new(),
+                shell: None,
+                login: false
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            CommandSpec::ShellScript {
+                command: "bad\0script".into(),
+                shell: None,
+                login: false
+            }
+            .validate()
+            .is_err()
+        );
+        let encoded = serde_json::to_value(request()).unwrap();
+        assert!(encoded.get("expected_generation").is_none());
+        assert!(encoded.get("output_drain_timeout_ms").is_none());
+        let decoded: StartExecutionRequest = serde_json::from_value(encoded).unwrap();
+        assert!(decoded.expected_generation.is_none());
+        assert!(decoded.output_drain_timeout_ms.is_none());
     }
 
     #[test]
