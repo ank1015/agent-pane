@@ -51,9 +51,8 @@ jobs may continue; interrupted resource IDs/keys are retained in tool results.
 Web calls have no provider-side deduplication guarantee and can consume credits
 again if their response was lost before a checkpoint.
 
-The loop intentionally remains owned by this harness. Only filesystem adapters
-and provider policy are shared through `cc-harness-support`; future experimental
-harnesses are not forced into this loop's semantics.
+The loop, filesystem adapters, and provider policy are owned by this harness;
+future experimental harnesses are not forced into this loop's semantics.
 
 Enable in the worker with `ENVIRONMENTS_ENABLED=true`, gateway URL/token settings,
 and `FIRECRAWL_API_KEY` for web-enabled runs. Platform migration registers the
