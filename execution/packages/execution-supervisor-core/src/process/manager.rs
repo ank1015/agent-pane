@@ -66,6 +66,7 @@ struct ProcessSession {
     input_records: Mutex<HashMap<WriteId, InputRecord>>,
     control_records: Mutex<HashMap<OperationId, ControlRecord>>,
     completion: AtomicU8,
+    output_stop: CancellationToken,
 }
 
 struct InputRecord {
@@ -215,6 +216,7 @@ impl SupervisorProcessRuntime {
             input_records: Mutex::new(HashMap::new()),
             control_records: Mutex::new(HashMap::new()),
             completion: AtomicU8::new(COMPLETION_NORMAL),
+            output_stop: CancellationToken::new(),
         });
         self.install_session(&session).await?;
 
@@ -313,13 +315,28 @@ impl SupervisorProcessRuntime {
             input_records: Mutex::new(HashMap::new()),
             control_records: Mutex::new(HashMap::new()),
             completion: AtomicU8::new(COMPLETION_NORMAL),
+            output_stop: CancellationToken::new(),
         });
+        #[cfg(unix)]
+        let readiness = if request.output_drain_timeout_ms.is_some() {
+            match PtyReadiness::new(&session.control) {
+                Ok(readiness) => Some(readiness),
+                Err(error) => {
+                    let _ = session.control.signal(ProcessSignal::Kill).await;
+                    let _ = tokio::task::spawn_blocking(move || child.wait()).await;
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         self.install_session(&session).await?;
-
         let output_task = spawn_pty_output(
             Arc::clone(&session),
             reader,
             self.inner.limits.process_output_chunk_bytes,
+            #[cfg(unix)]
+            readiness,
         );
         let wait_task = tokio::task::spawn_blocking(move || child.wait());
         spawn_pty_completion(
@@ -392,6 +409,9 @@ impl ProcessRuntime for SupervisorProcessRuntime {
     ) -> ExecutionResult<ExecutionHandle> {
         context.checkpoint()?;
         request.validate()?;
+        if let Some(generation) = &request.expected_generation {
+            self.validate_generation(generation)?;
+        }
         let _gate = self.inner.start_gate.lock().await;
         if let Some(existing) = self.inner.sessions.read().await.get(&request.execution_id) {
             if existing.request != request {
@@ -900,9 +920,13 @@ fn spawn_piped_completion(
 ) {
     tokio::spawn(async move {
         let exit = wait_for_piped_child(&session).await;
+        let drain_timer = begin_output_drain(&session, &exit).await;
         let stdout = join_output_task(stdout_task, "stdout reader task failed").await;
         let stderr = join_output_task(stderr_task, "stderr reader task failed").await;
         complete_session(&manager, &session, exit, [stdout, stderr]).await;
+        if let Some(timer) = drain_timer {
+            timer.abort();
+        }
     });
 }
 
@@ -921,13 +945,45 @@ fn spawn_pty_completion(
             )),
             Err(source) => Err(join_error("PTY wait task failed", source)),
         };
-        let close = session.control.close_pty_after_child_exit();
+        let drain_timer = begin_output_drain(&session, &exit).await;
+        let keep_master = cfg!(unix) && session.request.output_drain_timeout_ms.is_some();
+        let close = if keep_master {
+            Ok(())
+        } else {
+            session.control.close_pty_after_child_exit()
+        };
         let output = output_task
             .await
             .map_err(|source| join_error("PTY output task failed", source))
             .and_then(|result| result);
-        complete_session(&manager, &session, exit, [close, output]).await;
+        let final_close = session.control.close_pty_after_child_exit();
+        complete_session(&manager, &session, exit, [close, output, final_close]).await;
+        if let Some(timer) = drain_timer {
+            timer.abort();
+        }
     });
+}
+
+// Existing callers omit the drain timeout and retain the original completion
+// contract. Unified exec opts into separate child-exit and stream-close events.
+async fn begin_output_drain(
+    session: &ProcessSession,
+    exit: &ExecutionResult<i32>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let timeout_ms = session.request.output_drain_timeout_ms?;
+    if let Ok(exit_code) = exit {
+        let state = match session.completion.load(Ordering::SeqCst) {
+            COMPLETION_TERMINATED => ExecutionState::Cancelled,
+            COMPLETION_TIMED_OUT => ExecutionState::Failed,
+            _ => ExecutionState::Exited,
+        };
+        let _ = session.journal.mark_exited(*exit_code, state).await;
+    }
+    let stop = session.output_stop.clone();
+    Some(tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(timeout_ms)).await;
+        stop.cancel();
+    }))
 }
 
 async fn complete_session<const N: usize>(
@@ -956,6 +1012,7 @@ async fn complete_session<const N: usize>(
             .finish_failed("failed to finalize process journal".to_string())
             .await;
     }
+    let _ = session.journal.close().await;
     manager.active_processes.fetch_sub(1, Ordering::SeqCst);
 }
 
@@ -1004,7 +1061,12 @@ where
 {
     let mut buffer = vec![0_u8; chunk_size];
     loop {
-        let read = reader.read(&mut buffer).await.map_err(|source| {
+        let read = tokio::select! {
+            biased;
+            _ = session.output_stop.cancelled() => return Ok(()),
+            read = reader.read(&mut buffer) => read,
+        }
+        .map_err(|source| {
             error(
                 ExecutionErrorCode::Io,
                 format!("failed to read process output: {source}"),
@@ -1020,11 +1082,65 @@ where
     }
 }
 
+#[cfg(unix)]
+struct PtyReadiness {
+    poll: mio::Poll,
+    events: mio::Events,
+    fd: std::os::fd::RawFd,
+}
+
+#[cfg(unix)]
+impl PtyReadiness {
+    fn new(control: &ProcessControl) -> ExecutionResult<Self> {
+        let ProcessControl::Pty { master, .. } = control else {
+            unreachable!()
+        };
+        let master = master
+            .lock()
+            .map_err(|_| error(ExecutionErrorCode::Internal, "PTY master lock is poisoned"))?;
+        let fd = master
+            .as_ref()
+            .and_then(|pty| pty.as_raw_fd())
+            .ok_or_else(|| {
+                error(
+                    ExecutionErrorCode::Unsupported,
+                    "PTY output readiness is unavailable",
+                )
+            })?;
+        let poll = mio::Poll::new().map_err(|e| error(ExecutionErrorCode::Io, e.to_string()))?;
+        poll.registry()
+            .register(
+                &mut mio::unix::SourceFd(&fd),
+                mio::Token(0),
+                mio::Interest::READABLE,
+            )
+            .map_err(|e| error(ExecutionErrorCode::Io, e.to_string()))?;
+        Ok(Self {
+            poll,
+            events: mio::Events::with_capacity(4),
+            fd,
+        })
+    }
+
+    fn ready(&mut self) -> std::io::Result<bool> {
+        self.poll.registry().reregister(
+            &mut mio::unix::SourceFd(&self.fd),
+            mio::Token(0),
+            mio::Interest::READABLE,
+        )?;
+        self.poll
+            .poll(&mut self.events, Some(Duration::from_millis(20)))?;
+        Ok(!self.events.is_empty())
+    }
+}
+
 fn spawn_pty_output(
     session: Arc<ProcessSession>,
     mut reader: Box<dyn Read + Send>,
     chunk_size: usize,
+    #[cfg(unix)] mut readiness: Option<PtyReadiness>,
 ) -> tokio::task::JoinHandle<ExecutionResult<()>> {
+    let stop = session.output_stop.clone();
     let (sender, mut receiver) = mpsc::channel::<Result<Vec<u8>, std::io::Error>>(16);
     #[cfg(windows)]
     let control = Arc::clone(&session.control);
@@ -1033,6 +1149,20 @@ fn spawn_pty_output(
         #[cfg(windows)]
         let mut terminal_responder = WindowsTerminalResponder::default();
         loop {
+            if stop.is_cancelled() {
+                break;
+            }
+            #[cfg(unix)]
+            if let Some(readiness) = &mut readiness {
+                match readiness.ready() {
+                    Ok(false) => continue,
+                    Ok(true) => {}
+                    Err(source) => {
+                        let _ = sender.blocking_send(Err(source));
+                        break;
+                    }
+                }
+            }
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
@@ -1056,7 +1186,11 @@ fn spawn_pty_output(
         }
     });
     tokio::spawn(async move {
-        while let Some(chunk) = receiver.recv().await {
+        while let Some(chunk) = tokio::select! {
+            biased;
+            _ = session.output_stop.cancelled() => None,
+            chunk = receiver.recv() => chunk,
+        } {
             let chunk = chunk.map_err(|source| {
                 error(
                     ExecutionErrorCode::Io,
@@ -1068,6 +1202,7 @@ fn spawn_pty_output(
                 .append_output(ProcessOutputStream::Pty, chunk)
                 .await?;
         }
+        drop(receiver);
         reader_task
             .await
             .map_err(|source| join_error("PTY reader task failed", source))?;
@@ -1156,6 +1291,16 @@ impl WindowsPtyInputNormalizer {
 
 fn build_command(spec: &CommandSpec) -> Command {
     match spec {
+        CommandSpec::ShellScript {
+            command,
+            shell,
+            login,
+        } => {
+            let (program, arguments) = super::shell::resolve(shell.as_deref(), command, *login);
+            let mut command = Command::new(program);
+            command.args(arguments);
+            command
+        }
         CommandSpec::Argv { program, arguments } => {
             let mut command = Command::new(program);
             command.args(arguments);
@@ -1179,6 +1324,16 @@ fn build_command(spec: &CommandSpec) -> Command {
 
 fn build_pty_command(spec: &CommandSpec) -> CommandBuilder {
     match spec {
+        CommandSpec::ShellScript {
+            command,
+            shell,
+            login,
+        } => {
+            let (program, arguments) = super::shell::resolve(shell.as_deref(), command, *login);
+            let mut command = CommandBuilder::new(program);
+            command.args(arguments);
+            command
+        }
         CommandSpec::Argv { program, arguments } => {
             let mut command = CommandBuilder::new(program);
             command.args(arguments);
