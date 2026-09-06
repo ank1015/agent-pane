@@ -1,0 +1,37 @@
+[package]
+name = "platform-sites-service"
+description = "Site hosting and backend execution for Platform"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.87"
+license.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+axum.workspace = true
+base64.workspace = true
+hmac = "0.12"
+dotenvy.workspace = true
+fs2 = "0.4.3"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx = { workspace = true, features = ["sqlite"] }
+subtle = "2.6"
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process", "io-util"] }
+rusqlite = { version = "0.32.1", features = ["hooks", "limits", "backup", "modern_sqlite"] }
+rquickjs = "=0.12.2"
+tokio-util = { version = "0.7", features = ["io"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true
