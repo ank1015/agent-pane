@@ -1,0 +1,25 @@
+[package]
+name = "tool-apply-patch"
+description = "Codex-compatible freeform patch tool over the execution runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+execution-core.workspace = true
+llm-contracts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tool-filesystem.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+execution-client.workspace = true
+execution-wire = { path = "../../../../execution/packages/execution-wire" }
+execution-supervisor-core = { path = "../../../../execution/packages/execution-supervisor-core" }
+tokio.workspace = true
+tempfile = "3.0"
+
+[lints]
+workspace = true

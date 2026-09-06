@@ -415,6 +415,8 @@ async fn failed_mutation_is_sent_once_with_unchanged_identity_and_payload() {
     let count = Arc::new(AtomicUsize::new(0));
     let seen = count.clone();
     let mutation = WriteFileRequest {
+        expected_generation: None,
+        strategy: execution_core::WriteStrategy::AtomicReplace,
         operation_id: OperationId::generate(),
         path: stat().path,
         data: BinaryData::new(vec![0, 255, 1]),

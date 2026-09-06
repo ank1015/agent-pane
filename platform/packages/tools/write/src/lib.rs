@@ -167,6 +167,8 @@ impl<'a> WriteTool<'a> {
             WriteCondition::MustNotExist
         };
         let result = self.runtime.filesystem().write(context, WriteFileRequest {
+            expected_generation: None,
+            strategy: execution_core::WriteStrategy::AtomicReplace,
             operation_id: state.operation_id,
             path: path.clone(),
             data: BinaryData::new(input.content.into_bytes()),

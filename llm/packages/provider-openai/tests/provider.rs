@@ -426,3 +426,25 @@ fn failed_native_response_becomes_an_llm_error() {
     assert_eq!(error.provider_type.as_deref(), Some("provider_error"));
     assert_eq!(error.native_error, Some(Box::new(native)));
 }
+
+#[test]
+fn ordinary_responses_preserve_original_image_detail() {
+    let mut request = request("gpt-5.6-sol");
+    request.messages.push(Message::User(UserMessage {
+        id: MessageId::new("image-user").unwrap(),
+        timestamp: Timestamp(1),
+        content: vec![ContentPart::Image(ImageContent {
+            source: ImageSource::Url(llm_contracts::UrlImageSource {
+                url: "https://example.com/original.png".into(),
+            }),
+            detail: Some(ImageDetail::Original),
+            metadata: None,
+        })],
+    }));
+    let body = build_response_request(&request).unwrap();
+    assert_eq!(body["input"][0]["content"][0]["detail"], "original");
+    assert_eq!(
+        body["input"][0]["content"][0]["image_url"],
+        "https://example.com/original.png"
+    );
+}

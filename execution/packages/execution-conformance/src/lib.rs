@@ -292,6 +292,8 @@ async fn run_filesystem(
         .remove(
             &OperationContext::with_timeout(config.operation_timeout),
             RemovePathRequest {
+                target_kind: execution_core::RemoveTargetKind::Any,
+                expected_generation: None,
                 operation_id: OperationId::generate(),
                 path: path(config, &namespace)?,
                 recursive: true,
@@ -339,6 +341,8 @@ async fn run_filesystem_inner(
     let original = b"abc\0defghi".to_vec();
     let operation_id = OperationId::generate();
     let write = WriteFileRequest {
+        expected_generation: None,
+        strategy: execution_core::WriteStrategy::AtomicReplace,
         operation_id: operation_id.clone(),
         path: file.clone(),
         data: BinaryData::new(original.clone()),
@@ -435,6 +439,8 @@ async fn run_filesystem_inner(
         fs.write(
             &context(),
             WriteFileRequest {
+                expected_generation: None,
+                strategy: execution_core::WriteStrategy::AtomicReplace,
                 operation_id: OperationId::generate(),
                 path: file.clone(),
                 data: BinaryData::new(b"duplicate".to_vec()),
@@ -452,6 +458,8 @@ async fn run_filesystem_inner(
         fs.write(
             &context(),
             WriteFileRequest {
+                expected_generation: None,
+                strategy: execution_core::WriteStrategy::AtomicReplace,
                 operation_id: OperationId::generate(),
                 path: file.clone(),
                 data: BinaryData::new(b"stale".to_vec()),
@@ -472,6 +480,8 @@ async fn run_filesystem_inner(
         .write(
             &context(),
             WriteFileRequest {
+                expected_generation: None,
+                strategy: execution_core::WriteStrategy::AtomicReplace,
                 operation_id: OperationId::generate(),
                 path: file.clone(),
                 data: BinaryData::new(replacement.clone()),
@@ -505,6 +515,8 @@ async fn run_filesystem_inner(
         fs.write(
             &context(),
             WriteFileRequest {
+                expected_generation: None,
+                strategy: execution_core::WriteStrategy::AtomicReplace,
                 operation_id: OperationId::generate(),
                 path: path(config, &format!("{namespace}/{name}"))?,
                 data: BinaryData::new(bytes.to_vec()),
@@ -564,6 +576,8 @@ async fn run_filesystem_inner(
         fs.remove(
             &context(),
             RemovePathRequest {
+                target_kind: execution_core::RemoveTargetKind::Any,
+                expected_generation: None,
                 operation_id: OperationId::generate(),
                 path: file.clone(),
                 recursive: false,
@@ -581,6 +595,8 @@ async fn run_filesystem_inner(
         .remove(
             &context(),
             RemovePathRequest {
+                target_kind: execution_core::RemoveTargetKind::Any,
+                expected_generation: None,
                 operation_id: OperationId::generate(),
                 path: file.clone(),
                 recursive: false,
@@ -599,6 +615,8 @@ async fn run_filesystem_inner(
         .remove(
             &context(),
             RemovePathRequest {
+                target_kind: execution_core::RemoveTargetKind::Any,
+                expected_generation: None,
                 operation_id: OperationId::generate(),
                 path: file,
                 recursive: false,
@@ -1074,6 +1092,8 @@ fn start_request(
     timeout_ms: Option<u64>,
 ) -> StartExecutionRequest {
     StartExecutionRequest {
+        expected_generation: None,
+        output_drain_timeout_ms: None,
         operation_id: OperationId::generate(),
         execution_id: ExecutionId::generate(),
         command,

@@ -10,6 +10,7 @@ license.workspace = true
 async-trait.workspace = true
 execution-core = { path = "../execution-core" }
 portable-pty.workspace = true
+which = "8"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -19,7 +20,8 @@ tokio-util.workspace = true
 uuid.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.28", features = ["process", "signal"] }
+mio = { version = "1", features = ["os-poll", "os-ext"] }
+nix = { version = "0.28", features = ["process", "signal", "user"] }
 
 [dev-dependencies]
 execution-conformance = { path = "../execution-conformance" }

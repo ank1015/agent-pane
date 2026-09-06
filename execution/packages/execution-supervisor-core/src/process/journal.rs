@@ -28,6 +28,7 @@ struct JournalState {
     started_at: Option<TimestampMs>,
     exit_code: Option<i32>,
     finished_at: Option<Instant>,
+    closed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -67,6 +68,7 @@ impl EventJournal {
                 started_at: None,
                 exit_code: None,
                 finished_at: None,
+                closed: false,
             }),
             changed: Notify::new(),
         })
@@ -90,7 +92,7 @@ impl EventJournal {
         bytes: Vec<u8>,
     ) -> ExecutionResult<()> {
         let mut state = self.inner.lock().await;
-        if is_terminal(state.state) {
+        if state.closed {
             return Ok(());
         }
         self.append_locked(
@@ -113,32 +115,72 @@ impl EventJournal {
         final_state: ExecutionState,
     ) -> ExecutionResult<()> {
         let mut state = self.inner.lock().await;
-        if is_terminal(state.state) {
-            return Ok(());
-        }
-        state.state = final_state;
-        state.exit_code = Some(exit_code);
-        state.finished_at = Some(Instant::now());
-        self.append_locked(
-            &mut state,
-            TimestampMs::now(),
-            ProcessEventKind::Exited { exit_code },
-        )
-        .await?;
-        self.append_locked(&mut state, TimestampMs::now(), ProcessEventKind::Closed)
+        self.mark_exited_locked(&mut state, exit_code, final_state)
+            .await?;
+        self.close_locked(&mut state).await?;
+        drop(state);
+        self.changed.notify_waiters();
+        Ok(())
+    }
+
+    pub async fn mark_exited(
+        &self,
+        exit_code: i32,
+        final_state: ExecutionState,
+    ) -> ExecutionResult<()> {
+        let mut state = self.inner.lock().await;
+        self.mark_exited_locked(&mut state, exit_code, final_state)
             .await?;
         drop(state);
         self.changed.notify_waiters();
         Ok(())
     }
 
-    pub async fn finish_failed(&self, message: String) -> ExecutionResult<()> {
-        let mut state = self.inner.lock().await;
+    async fn mark_exited_locked(
+        &self,
+        state: &mut JournalState,
+        exit_code: i32,
+        final_state: ExecutionState,
+    ) -> ExecutionResult<()> {
         if is_terminal(state.state) {
             return Ok(());
         }
-        state.state = ExecutionState::Failed;
+        state.state = final_state;
+        state.exit_code = Some(exit_code);
+        self.append_locked(
+            state,
+            TimestampMs::now(),
+            ProcessEventKind::Exited { exit_code },
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn close(&self) -> ExecutionResult<()> {
+        let mut state = self.inner.lock().await;
+        self.close_locked(&mut state).await?;
+        drop(state);
+        self.changed.notify_waiters();
+        Ok(())
+    }
+
+    async fn close_locked(&self, state: &mut JournalState) -> ExecutionResult<()> {
+        if state.closed {
+            return Ok(());
+        }
+        self.append_locked(state, TimestampMs::now(), ProcessEventKind::Closed)
+            .await?;
+        state.closed = true;
         state.finished_at = Some(Instant::now());
+        Ok(())
+    }
+
+    pub async fn finish_failed(&self, message: String) -> ExecutionResult<()> {
+        let mut state = self.inner.lock().await;
+        if state.closed {
+            return Ok(());
+        }
+        state.state = ExecutionState::Failed;
         self.append_locked(
             &mut state,
             TimestampMs::now(),
@@ -147,6 +189,8 @@ impl EventJournal {
         .await?;
         self.append_locked(&mut state, TimestampMs::now(), ProcessEventKind::Closed)
             .await?;
+        state.closed = true;
+        state.finished_at = Some(Instant::now());
         drop(state);
         self.changed.notify_waiters();
         Ok(())
@@ -194,7 +238,7 @@ impl EventJournal {
         tokio::pin!(notified);
         notified.as_mut().enable();
         let result = self.read_now(after_sequence, max_bytes).await?;
-        if !result.events.is_empty() || is_terminal(result.state) || wait.is_none() {
+        if !result.events.is_empty() || self.inner.lock().await.closed || wait.is_none() {
             return Ok(result);
         }
         if let Some(wait) = wait {

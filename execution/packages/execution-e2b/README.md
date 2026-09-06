@@ -49,14 +49,15 @@ workspace filesystem is not modified during this ownership handoff.
 
 | RAM (MiB) | vCPU | Template ID |
 | ---: | ---: | --- |
-| 1024 | 1 | `h5178y3chdmnimc6bk78` |
-| 2048 (default) | 2 | `gls86opr20ek0ijjzvn7` |
-| 4096 | 2 | `ujcvzqxszftbr47tx76e` |
-| 8192 | 4 | `0zce89ggh7g74rred802` |
+| 1024 | 1 | `gbiubfcth0yh0qke09xr` |
+| 2048 (default) | 2 | `rpffhldnk5j55ptiu283` |
+| 4096 | 2 | `0eslaqgop81dfuolq66a` |
+| 8192 | 4 | `11whj4oo5h2x55p3fzj1` |
 
 Each template contains the compatible supervisor at
-`/usr/local/bin/execution-supervisor`. `SupervisorBinary::Upload` remains
-available for testing locally built Linux binaries through envd.
+`/usr/local/bin/execution-supervisor` and `ripgrep` on `PATH` as `rg`.
+`SupervisorBinary::Upload` remains available for testing locally built Linux
+binaries through envd.
 
 An ignored live test exercises creation, envd, snapshot restore, and cleanup:
 

@@ -31,7 +31,11 @@ impl SupervisorRuntime {
         tokio::fs::create_dir_all(&generation_state_directory).await?;
 
         let resolver = Arc::new(PathResolver::new(config.roots).await?);
-        let filesystem = SupervisorFileSystem::new(Arc::clone(&resolver), config.limits.clone());
+        let filesystem = SupervisorFileSystem::new(
+            Arc::clone(&resolver),
+            config.limits.clone(),
+            generation_id.clone(),
+        );
         let descriptor = ExecutionHostDescriptor {
             host_id: config.host_id,
             supervisor_generation_id: generation_id.clone(),

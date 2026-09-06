@@ -327,7 +327,8 @@ const fn image_detail(detail: ImageDetail) -> &'static str {
     match detail {
         ImageDetail::Auto => "auto",
         ImageDetail::Low => "low",
-        ImageDetail::High | ImageDetail::Original => "high",
+        ImageDetail::High => "high",
+        ImageDetail::Original => "original",
     }
 }
 

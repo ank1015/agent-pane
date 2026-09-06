@@ -1,0 +1,31 @@
+[package]
+name = "tool-view-image"
+description = "Remote filesystem image viewing with Codex-compatible preparation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+base64.workspace = true
+llm-contracts.workspace = true
+sha2.workspace = true
+execution-core.workspace = true
+image = { workspace = true, features = ["gif", "jpeg", "png", "webp"] }
+serde.workspace = true
+serde_json.workspace = true
+tool-filesystem.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+provider-openai = { path = "../../../../llm/packages/provider-openai" }
+axum.workspace = true
+execution-client.workspace = true
+execution-supervisor-core = { path = "../../../../execution/packages/execution-supervisor-core" }
+execution-wire = { path = "../../../../execution/packages/execution-wire" }
+jsonschema.workspace = true
+tempfile = "3.0"
+tokio.workspace = true
+
+[lints]
+workspace = true

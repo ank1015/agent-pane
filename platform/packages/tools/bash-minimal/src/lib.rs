@@ -190,6 +190,8 @@ impl<'a> BashTool<'a> {
             None => self.cwd.clone(),
         };
         let request = StartExecutionRequest {
+            expected_generation: None,
+            output_drain_timeout_ms: None,
             operation_id: ids.operation_id,
             execution_id: ids.execution_id,
             command: shell::command(

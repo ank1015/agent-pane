@@ -7,11 +7,12 @@ use std::{
 
 use async_trait::async_trait;
 use execution_core::{
-    BinaryData, CreateDirectoryRequest, DirectoryCursor, DirectoryEntry, ExecutionErrorCode,
-    ExecutionLimits, ExecutionPath, ExecutionResult, FileKind, FileMetadata, FileRevision,
-    FileSystem, ListDirectoryRequest, ListDirectoryResult, OperationContext, OperationId,
-    ReadFileRequest, ReadFileResult, RemovePathRequest, RemovePathResult, StatRequest, TimestampMs,
-    Validate, WriteCondition, WriteFileRequest, WriteFileResult,
+    BinaryData, CreateDirectoryRequest, DirectoryCursor, DirectoryEntry, ExecutionError,
+    ExecutionErrorCode, ExecutionLimits, ExecutionPath, ExecutionResult, FileKind, FileMetadata,
+    FileRevision, FileSystem, ListDirectoryRequest, ListDirectoryResult, OperationContext,
+    OperationId, ReadFileRequest, ReadFileResult, RemovePathRequest, RemovePathResult, StatRequest,
+    SupervisorGenerationId, TimestampMs, Validate, WriteCondition, WriteFileRequest,
+    WriteFileResult, WriteStrategy,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -32,6 +33,7 @@ pub(crate) struct SupervisorFileSystem {
     resolver: Arc<PathResolver>,
     limits: SupervisorLimits,
     mutation_state: Arc<Mutex<MutationState>>,
+    generation: SupervisorGenerationId,
 }
 
 #[derive(Default)]
@@ -47,18 +49,34 @@ struct MutationRecord {
 
 #[derive(Clone)]
 enum MutationResult {
+    Failure(ExecutionError),
     Write(WriteFileResult),
     CreateDirectory,
     Remove(RemovePathResult),
 }
 
 impl SupervisorFileSystem {
-    pub fn new(resolver: Arc<PathResolver>, limits: SupervisorLimits) -> Self {
+    pub fn new(
+        resolver: Arc<PathResolver>,
+        limits: SupervisorLimits,
+        generation: SupervisorGenerationId,
+    ) -> Self {
         Self {
             resolver,
             limits,
+            generation,
             mutation_state: Arc::new(Mutex::new(MutationState::default())),
         }
+    }
+
+    fn check_generation(&self, expected: Option<&SupervisorGenerationId>) -> ExecutionResult<()> {
+        if expected.is_some_and(|expected| expected != &self.generation) {
+            return Err(error(
+                ExecutionErrorCode::ExecutionLost,
+                "filesystem mutation belongs to an earlier supervisor generation; inspect its outcome before retrying",
+            ));
+        }
+        Ok(())
     }
 
     pub fn descriptor_limits(&self) -> ExecutionLimits {
@@ -116,10 +134,18 @@ impl SupervisorFileSystem {
             ));
         }
 
-        let resolved = self
-            .resolver
-            .resolve_for_write(&request.path, request.follow_symlinks)
-            .await?;
+        let resolved = match request.strategy {
+            WriteStrategy::AtomicReplace => {
+                self.resolver
+                    .resolve_for_write(&request.path, request.follow_symlinks)
+                    .await?
+            }
+            WriteStrategy::InPlace => {
+                self.resolver
+                    .resolve_for_in_place_write(&request.path)
+                    .await?
+            }
+        };
         let existing = match tokio::fs::symlink_metadata(&resolved.path).await {
             Ok(metadata) => Some(metadata),
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => None,
@@ -169,7 +195,7 @@ impl SupervisorFileSystem {
             }
         }
 
-        if request.create_parents {
+        if request.create_parents && request.strategy == WriteStrategy::AtomicReplace {
             if let Some(parent) = resolved.path.parent() {
                 tokio::fs::create_dir_all(parent)
                     .await
@@ -177,7 +203,47 @@ impl SupervisorFileSystem {
             }
         }
         let preserved_metadata = existing.as_ref().filter(|metadata| metadata.is_file());
-        atomic_write(&resolved.path, request.data.as_slice(), preserved_metadata).await?;
+        match request.strategy {
+            WriteStrategy::AtomicReplace => {
+                atomic_write(&resolved.path, request.data.as_slice(), preserved_metadata).await?;
+            }
+            WriteStrategy::InPlace => {
+                // Opening the existing inode preserves hard links, permissions and
+                // open handles, matching ordinary filesystem writes in Codex.
+                let mut result = tokio::fs::write(&resolved.path, request.data.as_slice()).await;
+                if request.create_parents
+                    && result
+                        .as_ref()
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                {
+                    // Match ordinary write-then-mkdir-retry semantics. Create
+                    // the requested parent, not a dangling leaf link's target parent.
+                    let parent = request
+                        .path
+                        .path
+                        .rsplit_once('/')
+                        .map_or(".", |(parent, _)| parent);
+                    let parent = ExecutionPath::new(request.path.root_id.clone(), parent)?;
+                    let parent = self
+                        .resolver
+                        .resolve_for_directory_creation(&parent)
+                        .await?;
+                    tokio::fs::create_dir_all(&parent.path)
+                        .await
+                        .map_err(|source| io_error(&parent.path, source))?;
+                    // Resolve again after creating parents, checking containment.
+                    let target = self
+                        .resolver
+                        .resolve_for_in_place_write(&request.path)
+                        .await?;
+                    result = tokio::fs::write(&target.path, request.data.as_slice()).await;
+                }
+                result.map_err(|source| {
+                    io_error(&resolved.path, source)
+                        .with_detail("mutation_outcome", "possibly_partial")
+                })?;
+            }
+        }
         Ok(WriteFileResult {
             path: request.path.clone(),
             existed: existing.is_some(),
@@ -219,6 +285,19 @@ impl SupervisorFileSystem {
             }
             Err(source) => return Err(io_error(&resolved.path, source)),
         };
+
+        if request.target_kind == execution_core::RemoveTargetKind::File {
+            let target = self.resolver.resolve_existing(&request.path, true).await?;
+            let followed = tokio::fs::metadata(&target.path)
+                .await
+                .map_err(|source| io_error(&target.path, source))?;
+            if followed.is_dir() {
+                return Err(error(
+                    ExecutionErrorCode::IsDirectory,
+                    "path is a directory",
+                ));
+            }
+        }
 
         if let Some(expected) = &request.expected_revision {
             if metadata.is_dir() {
@@ -373,18 +452,46 @@ impl FileSystem for SupervisorFileSystem {
     ) -> ExecutionResult<WriteFileResult> {
         context.checkpoint()?;
         request.validate()?;
+        self.check_generation(request.expected_generation.as_ref())?;
         let fingerprint = fingerprint(&request)?;
         let mut state = self.mutation_state.lock().await;
         if let Some(record) = state.records.get(&request.operation_id) {
             ensure_fingerprint(record, &fingerprint, &request.operation_id)?;
             return match &record.result {
+                MutationResult::Failure(failure) => Err(failure.clone()),
                 MutationResult::Write(result) => Ok(result.clone()),
                 MutationResult::CreateDirectory | MutationResult::Remove(_) => Err(
                     operation_conflict("operation ID was already used for another operation"),
                 ),
             };
         }
-        let result = self.write_inner(&request).await?;
+        // A dropped future may already have changed the filesystem. Retain a
+        // non-retryable tombstone until the operation has a known result.
+        let fenced = request.expected_generation.is_some();
+        if fenced {
+            state.records.insert(request.operation_id.clone(), MutationRecord {
+                fingerprint: fingerprint.clone(),
+                result: MutationResult::Failure(error(
+                    ExecutionErrorCode::ExecutionLost,
+                    "filesystem mutation outcome is unknown; inspect the target before issuing a new operation",
+                ).with_detail("mutation_outcome", "unknown")),
+            });
+        }
+        let result = match self.write_inner(&request).await {
+            Ok(result) => result,
+            Err(failure) => {
+                if fenced {
+                    state.records.insert(
+                        request.operation_id.clone(),
+                        MutationRecord {
+                            fingerprint,
+                            result: MutationResult::Failure(failure.clone()),
+                        },
+                    );
+                }
+                return Err(failure);
+            }
+        };
         state.records.insert(
             request.operation_id,
             MutationRecord {
@@ -407,6 +514,7 @@ impl FileSystem for SupervisorFileSystem {
         if let Some(record) = state.records.get(&request.operation_id) {
             ensure_fingerprint(record, &fingerprint, &request.operation_id)?;
             return match &record.result {
+                MutationResult::Failure(failure) => Err(failure.clone()),
                 MutationResult::CreateDirectory => Ok(()),
                 MutationResult::Write(_) | MutationResult::Remove(_) => Err(operation_conflict(
                     "operation ID was already used for another operation",
@@ -431,18 +539,46 @@ impl FileSystem for SupervisorFileSystem {
     ) -> ExecutionResult<RemovePathResult> {
         context.checkpoint()?;
         request.validate()?;
+        self.check_generation(request.expected_generation.as_ref())?;
         let fingerprint = fingerprint(&request)?;
         let mut state = self.mutation_state.lock().await;
         if let Some(record) = state.records.get(&request.operation_id) {
             ensure_fingerprint(record, &fingerprint, &request.operation_id)?;
             return match &record.result {
+                MutationResult::Failure(failure) => Err(failure.clone()),
                 MutationResult::Remove(result) => Ok(result.clone()),
                 MutationResult::Write(_) | MutationResult::CreateDirectory => Err(
                     operation_conflict("operation ID was already used for another operation"),
                 ),
             };
         }
-        let result = self.remove_inner(&request).await?;
+        // A dropped future may already have changed the filesystem. Retain a
+        // non-retryable tombstone until the operation has a known result.
+        let fenced = request.expected_generation.is_some();
+        if fenced {
+            state.records.insert(request.operation_id.clone(), MutationRecord {
+                fingerprint: fingerprint.clone(),
+                result: MutationResult::Failure(error(
+                    ExecutionErrorCode::ExecutionLost,
+                    "filesystem mutation outcome is unknown; inspect the target before issuing a new operation",
+                ).with_detail("mutation_outcome", "unknown")),
+            });
+        }
+        let result = match self.remove_inner(&request).await {
+            Ok(result) => result,
+            Err(failure) => {
+                if fenced {
+                    state.records.insert(
+                        request.operation_id.clone(),
+                        MutationRecord {
+                            fingerprint,
+                            result: MutationResult::Failure(failure.clone()),
+                        },
+                    );
+                }
+                return Err(failure);
+            }
+        };
         state.records.insert(
             request.operation_id,
             MutationRecord {

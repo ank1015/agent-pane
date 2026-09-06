@@ -1,0 +1,27 @@
+[package]
+name = "tool-unified-exec"
+description = "Recoverable Codex-compatible exec_command and write_stdin tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+execution-core.workspace = true
+llm-contracts.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tool-filesystem.workspace = true
+tool-apply-patch = { path = "../apply-patch" }
+tokio.workspace = true
+tree-sitter = "0.25.10"
+tree-sitter-bash = "0.25"
+
+[dev-dependencies]
+execution-supervisor-core = { path = "../../../../execution/packages/execution-supervisor-core" }
+jsonschema.workspace = true
+tempfile = "3.0"
+
+[lints]
+workspace = true

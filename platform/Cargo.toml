@@ -16,6 +16,7 @@ platform-runtime-contracts = { path = "packages/platform-runtime-contracts" }
 platform-runtime-client = { path = "packages/platform-runtime-client" }
 axum = "0.8"
 base64 = "0.22"
+image = { version = "^0.25.9", default-features = false }
 rand = "0.8"
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["chrono", "derive", "json", "macros", "migrate", "postgres", "runtime-tokio-rustls", "uuid"] }

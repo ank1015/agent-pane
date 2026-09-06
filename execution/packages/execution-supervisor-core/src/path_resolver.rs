@@ -157,6 +157,32 @@ impl PathResolver {
         Ok(ResolvedPath { path })
     }
 
+    pub async fn resolve_for_in_place_write(
+        &self,
+        spec: &ExecutionPath,
+    ) -> Result<ResolvedPath, ExecutionError> {
+        let (candidate, boundary, read_only) = self.candidate(spec)?;
+        if read_only {
+            return Err(error(
+                ExecutionErrorCode::ReadOnlyRoot,
+                format!("execution root `{}` is read-only", spec.root_id),
+            ));
+        }
+        let path = resolve_for_creation(candidate, &boundary, 0).await?;
+        Ok(ResolvedPath { path })
+    }
+
+    // Retain the logical parent spelling for mkdir: a dangling symlink is not
+    // itself a missing directory. Validate its eventual target before use.
+    pub async fn resolve_for_directory_creation(
+        &self,
+        spec: &ExecutionPath,
+    ) -> Result<ResolvedPath, ExecutionError> {
+        self.resolve_for_in_place_write(spec).await?;
+        let (path, _, _) = self.candidate(spec)?;
+        Ok(ResolvedPath { path })
+    }
+
     fn candidate(&self, spec: &ExecutionPath) -> Result<(PathBuf, PathBuf, bool), ExecutionError> {
         spec.validate().map_err(|validation| {
             error(
@@ -212,6 +238,63 @@ async fn resolve_through_existing_ancestor(
         resolved.push(component);
     }
     Ok(resolved)
+}
+
+// Resolve links even when their eventual target does not exist yet. Every
+// existing ancestor is canonicalized and containment is checked before callers
+// create parents or open a file. Link traversal is bounded, including cycles.
+fn resolve_for_creation(
+    candidate: PathBuf,
+    boundary: &Path,
+    links: usize,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<PathBuf, ExecutionError>> + Send + '_>>
+{
+    Box::pin(async move {
+        if links > 40 {
+            return Err(error(
+                ExecutionErrorCode::InvalidPath,
+                "too many symbolic links in write path",
+            ));
+        }
+        let resolved = match tokio::fs::symlink_metadata(&candidate).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let target = tokio::fs::read_link(&candidate)
+                    .await
+                    .map_err(|source| io_error(&candidate, source))?;
+                let target = if target.is_absolute() {
+                    target
+                } else {
+                    candidate
+                        .parent()
+                        .ok_or_else(|| {
+                            error(ExecutionErrorCode::InvalidPath, "link has no parent")
+                        })?
+                        .join(target)
+                };
+                resolve_for_creation(target, boundary, links + 1).await?
+            }
+            Ok(_) => tokio::fs::canonicalize(&candidate)
+                .await
+                .map_err(|source| io_error(&candidate, source))?,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                let parent = candidate.parent().ok_or_else(|| {
+                    error(
+                        ExecutionErrorCode::InvalidPath,
+                        "path has no existing ancestor",
+                    )
+                })?;
+                let name = candidate.file_name().ok_or_else(|| {
+                    error(ExecutionErrorCode::InvalidPath, "path has no file name")
+                })?;
+                resolve_for_creation(parent.to_path_buf(), boundary, links)
+                    .await?
+                    .join(name)
+            }
+            Err(source) => return Err(io_error(&candidate, source)),
+        };
+        ensure_contained(&resolved, boundary)?;
+        Ok(resolved)
+    })
 }
 
 fn ensure_contained(path: &Path, boundary: &Path) -> Result<(), ExecutionError> {

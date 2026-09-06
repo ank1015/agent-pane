@@ -131,6 +131,8 @@ async fn socket_endpoint_dispatches_filesystem_and_process_operations() {
     let result = successful_call(
         &supervisor.socket_path,
         Operation::FilesystemWrite(WriteFileRequest {
+            expected_generation: None,
+            strategy: execution_core::WriteStrategy::AtomicReplace,
             operation_id: OperationId::generate(),
             path: supervisor.path("message.txt"),
             data: BinaryData::new(b"hello".to_vec()),
@@ -161,6 +163,8 @@ async fn socket_endpoint_dispatches_filesystem_and_process_operations() {
     let result = successful_call(
         &supervisor.socket_path,
         Operation::ProcessStart(StartExecutionRequest {
+            expected_generation: None,
+            output_drain_timeout_ms: None,
             operation_id: OperationId::generate(),
             execution_id: execution_id.clone(),
             command: CommandSpec::Shell {
@@ -322,4 +326,76 @@ async fn descriptor_host(supervisor: &RunningSupervisor) -> String {
         .expect("probe supervisor")
         .host_id
         .into_inner()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn socket_start_checks_generation_before_spawning_and_carries_drain_options() {
+    let supervisor = RunningSupervisor::start().await;
+    let descriptor = probe(&supervisor.socket_path).await.unwrap();
+    let mut start = StartExecutionRequest {
+        expected_generation: Some(execution_core::SupervisorGenerationId::generate()),
+        output_drain_timeout_ms: Some(50),
+        operation_id: OperationId::generate(),
+        execution_id: ExecutionId::generate(),
+        command: CommandSpec::ShellScript {
+            command: "printf once > fenced-start; sleep 2 & exit 7".into(),
+            shell: Some("/bin/sh".into()),
+            login: false,
+        },
+        cwd: ExecutionPath::root(supervisor.root_id.clone()),
+        environment: EnvironmentVariables::default(),
+        stdin: StdinMode::Closed,
+        timeout_ms: None,
+    };
+    let response = call(
+        &supervisor.socket_path,
+        &request(Operation::ProcessStart(start.clone())),
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(response, ResponseEnvelope::Error { error, .. } if error.code == execution_core::ExecutionErrorCode::ExecutionLost)
+    );
+    assert!(!supervisor.root_directory.join("fenced-start").exists());
+    start.expected_generation = Some(descriptor.supervisor_generation_id.clone());
+    let began = std::time::Instant::now();
+    let OperationResult::ExecutionHandle(handle) =
+        successful_call(&supervisor.socket_path, Operation::ProcessStart(start)).await
+    else {
+        panic!("start handle")
+    };
+    let mut cursor = 0;
+    loop {
+        let OperationResult::ReadExecution(page) = successful_call(
+            &supervisor.socket_path,
+            Operation::ProcessRead(ReadExecutionRequest {
+                execution_id: handle.execution_id.clone(),
+                supervisor_generation_id: handle.supervisor_generation_id.clone(),
+                after_sequence: cursor,
+                max_bytes: 1024,
+                wait_ms: Some(100),
+            }),
+        )
+        .await
+        else {
+            panic!("read page")
+        };
+        cursor = page.next_sequence;
+        if page
+            .events
+            .iter()
+            .any(|event| matches!(event.event, execution_core::ProcessEventKind::Closed))
+        {
+            assert_eq!(page.exit_code, Some(7));
+            break;
+        }
+        assert!(began.elapsed() < Duration::from_secs(1));
+    }
+    assert!(began.elapsed() < Duration::from_secs(1));
+    assert_eq!(
+        std::fs::read_to_string(supervisor.root_directory.join("fenced-start")).unwrap(),
+        "once"
+    );
+    supervisor.stop().await;
 }

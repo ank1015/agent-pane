@@ -114,6 +114,8 @@ async fn verify_supervisor_runtime(e2b: &E2bConfig, sandbox_id: &str) -> E2bResu
         .write(
             &context,
             WriteFileRequest {
+                expected_generation: None,
+                strategy: execution_core::WriteStrategy::AtomicReplace,
                 operation_id: OperationId::generate(),
                 path: path.clone(),
                 data: BinaryData::new(b"runtime-content".to_vec()),
@@ -145,6 +147,8 @@ async fn verify_supervisor_runtime(e2b: &E2bConfig, sandbox_id: &str) -> E2bResu
         .start(
             &context,
             StartExecutionRequest {
+                expected_generation: None,
+                output_drain_timeout_ms: None,
                 operation_id: OperationId::generate(),
                 execution_id: execution_id.clone(),
                 command: CommandSpec::Shell {
