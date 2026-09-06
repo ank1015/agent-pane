@@ -5,6 +5,7 @@ import { ApiError } from '../../lib/api-client'
 import { useProjectEnvironments, useProjects } from './project-queries'
 import { ProjectEnvironmentsTable } from './ProjectEnvironmentsTable'
 import { ProjectRecentChats } from './ProjectRecentChats'
+import { ProjectHarnessesTable } from './ProjectHarnessesTable'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -51,9 +52,10 @@ export function ProjectPage() {
 }
 
 export function ProjectSettingsPage() {
-  return <header className="provider-detail-header">
+  const { projectId = '' } = useParams()
+  return <><header className="provider-detail-header">
     <h1 className="cursor-page-title">Settings</h1>
-  </header>
+  </header><ProjectHarnessesTable key={projectId} projectId={projectId.toLowerCase()} /></>
 }
 
 export function ProjectEnvironmentsPage() {
