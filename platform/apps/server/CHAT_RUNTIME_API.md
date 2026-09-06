@@ -2,6 +2,15 @@
 
 ## Session configuration
 
+Only harnesses available to the project may create sessions or start new runs.
+Bootstrap filters the picker catalogue. Use `GET /api/projects/{id}/harnesses`
+for the full settings catalogue and `PUT /api/projects/{id}/harnesses/{harness}`
+with `{ "enabled": true }` to opt in. Required platform harnesses are automatic.
+`PROJECT_HARNESS_DISABLED` and `HARNESS_DISABLED` are 409 conflicts: refresh
+availability rather than automatically retrying the same rejected submission.
+Existing history remains readable after disabling. These checks also apply to
+forks, child-agent creation, and harness-initiated follow-up runs.
+
 Create with `POST /api/projects/{id}/sessions` and an `Idempotency-Key` header:
 
 ```json

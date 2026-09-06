@@ -8,7 +8,8 @@
 {"harnesses": [], "provider_accounts": [], "project_environments": []}
 ```
 
-`harnesses` contains all enabled catalog entries, with the same fields as
+`harnesses` contains only globally enabled entries available to this project
+(required platform harnesses or explicit project opt-ins), with the same fields as
 `GET /api/harnesses` items (including `config_schema`, `default_config`, and
 `supported_models`). Catalog availability does not guarantee an online worker.
 `provider_accounts` contains the same credential-free summaries as
@@ -24,6 +25,58 @@ fails the request (no partial-success empty arrays); existing sanitized gateway
 timeout/status handling applies. Every response has `Cache-Control: no-store`.
 The frontend can cache this GET through its query library. This is a fresh
 aggregate, not a cross-service transactional snapshot.
+
+## Project harness availability
+
+`harnesses.project_policy` is `required` or `opt_in` (new registrations default
+to `opt_in`). Environments is required for every project. The existing `enabled`
+field is a global switch and overrides project enablement. Only the authenticated
+platform catalogue administration API sets policy; worker registration cannot.
+`PUT /internal/harnesses/{id}` accepts `project_policy`, preserving an existing
+policy when omitted. `PATCH` can explicitly update it.
+
+`GET /api/projects/{project_id}/harnesses` returns `{ "items": [...] }`, including
+disabled optional harnesses for a future settings UI. Each item contains the usual
+harness fields plus `globally_enabled` (an explicit alias of `enabled`),
+`project_enabled`, and `available`. `project_enabled` is true for required
+harnesses or an enabled project grant; `available` additionally requires the
+global flag. An offline worker does not change these policy fields.
+
+`PUT /api/projects/{project_id}/harnesses/{harness_id}` accepts exactly
+`{ "enabled": true }` or `{ "enabled": false }` and returns the updated item.
+It is an idempotent set operation; no Idempotency-Key header is required.
+Enabling a required harness is a no-op. Enabling a globally disabled harness
+stores the project preference, but does not make it available until globally
+enabled again. Missing projects/harnesses return 404; invalid input is rejected.
+Responses are `Cache-Control: no-store`.
+
+Conflicts return HTTP 409 with these stable codes:
+
+- `PROJECT_HARNESS_REQUIRED`: a project cannot disable a required harness.
+- `PROJECT_HARNESS_ACTIVE_RUNS`: finish or abort this project's ready (including
+  delayed), running, and waiting runs on that harness before disabling it.
+- `PROJECT_HARNESS_DISABLED`: opt in before creating a session, forking into the
+  harness, or starting a new run, including worker child/follow-up requests.
+- `HARNESS_DISABLED`: the global catalogue switch prevents new work.
+
+The indexed `project_harnesses` association stores one boolean per project/harness.
+No row means no opt-in. Required harnesses do not need association rows. The
+migration enables optional harnesses only for projects with existing sessions
+using them, including archived sessions; future projects receive no optional
+grants. Session configurations and run snapshots are not modified.
+
+Admission checks hold shared project locks through transaction commit. Settings
+writes take an exclusive project lock and check active runs without taking
+session/run locks, so a concurrent disable cannot strand newly admitted work.
+Existing run recovery, wait results, aborts, and worker commits remain allowed.
+Historical sessions/messages/runs remain readable after disabling; replaying an
+already accepted idempotent request returns its original result. Re-enabling
+allows old sessions to continue with their frozen configuration.
+
+These routes share the existing single-user dashboard API boundary, not a new
+multi-user authorization system. Add project membership checks before public
+multi-user deployment. The future settings UI should invalidate project harness
+and bootstrap queries after updates. No frontend controls are implemented here.
 
 Like the existing dashboard APIs, this endpoint is local-development/single-user:
 provider accounts are gateway-wide, not filtered by an authenticated user. Add
