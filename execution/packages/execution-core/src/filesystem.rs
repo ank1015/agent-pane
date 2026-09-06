@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BinaryData, DirectoryCursor, ExecutionResult, FileRevision, OperationContext, OperationId,
-    RootId, TimestampMs, Validate, ValidationError,
+    RootId, SupervisorGenerationId, TimestampMs, Validate, ValidationError,
     validation::{append_nested, finish, issue, require_non_empty},
 };
 
@@ -140,9 +140,30 @@ pub enum WriteCondition {
     MatchRevision { revision: FileRevision },
 }
 
+/// How bytes are committed to a file. In-place writes preserve inode semantics
+/// and can leave partially written contents on failure.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteStrategy {
+    #[default]
+    AtomicReplace,
+    InPlace,
+}
+
+impl WriteStrategy {
+    fn is_atomic_replace(&self) -> bool {
+        *self == Self::AtomicReplace
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WriteFileRequest {
+    /// Enforced by the execution host before deduplication or mutation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_generation: Option<SupervisorGenerationId>,
+    #[serde(default, skip_serializing_if = "WriteStrategy::is_atomic_replace")]
+    pub strategy: WriteStrategy,
     pub operation_id: OperationId,
     pub path: ExecutionPath,
     pub data: BinaryData,
@@ -171,9 +192,29 @@ pub struct CreateDirectoryRequest {
     pub recursive: bool,
 }
 
+/// File mode checks the followed target is not a directory before unlinking
+/// the leaf entry. It never recursively removes a directory.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoveTargetKind {
+    #[default]
+    Any,
+    File,
+}
+
+impl RemoveTargetKind {
+    fn is_any(&self) -> bool {
+        *self == Self::Any
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RemovePathRequest {
+    #[serde(default, skip_serializing_if = "RemoveTargetKind::is_any")]
+    pub target_kind: RemoveTargetKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_generation: Option<SupervisorGenerationId>,
     pub operation_id: OperationId,
     pub path: ExecutionPath,
     #[serde(default)]
@@ -229,6 +270,20 @@ impl Validate for ReadFileRequest {
 impl Validate for WriteFileRequest {
     fn validate(&self) -> Result<(), ValidationError> {
         let mut issues = Vec::new();
+        if self.strategy == WriteStrategy::InPlace && self.expected_generation.is_none() {
+            issue(
+                &mut issues,
+                "expected_generation",
+                "in-place writes require a supervisor generation",
+            );
+        }
+        if self.strategy == WriteStrategy::InPlace && !self.follow_symlinks {
+            issue(
+                &mut issues,
+                "follow_symlinks",
+                "in-place writes require following symbolic links",
+            );
+        }
         append_nested(&mut issues, "path", self.path.validate());
         finish(issues)
     }
@@ -242,7 +297,16 @@ impl Validate for CreateDirectoryRequest {
 
 impl Validate for RemovePathRequest {
     fn validate(&self) -> Result<(), ValidationError> {
-        self.path.validate()
+        let mut issues = Vec::new();
+        append_nested(&mut issues, "path", self.path.validate());
+        if self.target_kind == RemoveTargetKind::File && self.recursive {
+            issue(
+                &mut issues,
+                "recursive",
+                "file-only removal cannot be recursive",
+            );
+        }
+        finish(issues)
     }
 }
 
@@ -342,5 +406,52 @@ mod tests {
             cursor: None,
         };
         request.validate().expect_err("zero limit should fail");
+    }
+    #[test]
+    fn write_strategy_is_additive_and_legacy_requests_keep_their_wire_shape() {
+        let legacy = serde_json::json!({
+            "operation_id": "write", "path": { "root_id": "work", "path": "file" },
+            "data": "eA==", "condition": {"type": "any"}, "create_parents": true, "follow_symlinks": true
+        });
+        let mut request: WriteFileRequest = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(request.strategy, WriteStrategy::AtomicReplace);
+        assert!(request.expected_generation.is_none());
+        assert_eq!(serde_json::to_value(&request).unwrap(), legacy);
+        request.strategy = WriteStrategy::InPlace;
+        assert!(request.validate().is_err());
+        request.expected_generation = Some(SupervisorGenerationId::generate());
+        request.validate().unwrap();
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["strategy"], "in_place");
+        assert!(wire.get("expected_generation").is_some());
+        assert_eq!(
+            serde_json::from_value::<WriteFileRequest>(wire).unwrap(),
+            request
+        );
+        request.follow_symlinks = false;
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn file_only_removal_is_additive_and_cannot_recurse() {
+        let legacy = serde_json::json!({
+            "operation_id": "remove", "path": { "root_id": "work", "path": "file" },
+            "recursive": false, "ignore_missing": false
+        });
+        let mut request: RemovePathRequest = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(request.target_kind, RemoveTargetKind::Any);
+        assert!(request.expected_generation.is_none());
+        assert_eq!(serde_json::to_value(&request).unwrap(), legacy);
+        request.target_kind = RemoveTargetKind::File;
+        request.expected_generation = Some(SupervisorGenerationId::generate());
+        request.validate().unwrap();
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["target_kind"], "file");
+        assert_eq!(
+            serde_json::from_value::<RemovePathRequest>(wire).unwrap(),
+            request
+        );
+        request.recursive = true;
+        assert!(request.validate().is_err());
     }
 }

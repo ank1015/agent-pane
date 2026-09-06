@@ -24,7 +24,8 @@ pub use error::{ExecutionError, ExecutionErrorCode, ExecutionResult};
 pub use filesystem::{
     CreateDirectoryRequest, DirectoryEntry, ExecutionPath, FileKind, FileMetadata, FileSystem,
     ListDirectoryRequest, ListDirectoryResult, ReadFileRequest, ReadFileResult, RemovePathRequest,
-    RemovePathResult, StatRequest, WriteCondition, WriteFileRequest, WriteFileResult,
+    RemovePathResult, RemoveTargetKind, StatRequest, WriteCondition, WriteFileRequest,
+    WriteFileResult, WriteStrategy,
 };
 pub use ids::{
     DirectoryCursor, ExecutionHostId, ExecutionId, FileRevision, OperationId, RootId,
