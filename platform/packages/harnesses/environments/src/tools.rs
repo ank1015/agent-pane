@@ -1,6 +1,6 @@
 //! Model-facing environment tools. Every effect has a persisted plan; filesystem
-//! adapters reuse the same prepared operations as the basic coding harness.
-use cc_harness_support::filesystem as fs;
+//! adapters and their recovery policy are owned by this harness.
+use crate::filesystem as fs;
 use execution_api::*;
 use execution_client::{ExecutionClient, HostFilter, SnapshotFilter};
 use execution_core::*;

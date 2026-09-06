@@ -147,7 +147,6 @@ name = "basic-cc-tools-harness"
 version = "0.1.0"
 dependencies = [
  "axum",
- "cc-harness-support",
  "chrono",
  "execution-api",
  "execution-client",
@@ -254,25 +253,6 @@ checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
 dependencies = [
  "find-msvc-tools",
  "shlex",
-]
-
-[[package]]
-name = "cc-harness-support"
-version = "0.1.0"
-dependencies = [
- "execution-core",
- "jsonschema",
- "llm-contracts",
- "provider-chatgpt",
- "provider-fireworks",
- "provider-openai",
- "serde",
- "serde_json",
- "tool-bash-minimal",
- "tool-edit",
- "tool-read",
- "tool-write",
- "uuid",
 ]
 
 [[package]]
@@ -463,7 +443,6 @@ name = "environments-harness"
 version = "0.1.0"
 dependencies = [
  "axum",
- "cc-harness-support",
  "chrono",
  "execution-api",
  "execution-client",

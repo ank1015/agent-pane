@@ -8,8 +8,3 @@ Harness implementations live in [harnesses](harnesses/), compiled into the share
 - [harness-runtime](harness-runtime/): shared `Harness`, `Execution`, and `Signals` interface for independently implemented harness libraries.
 - [platform-runtime-contracts](platform-runtime-contracts/): shared worker wire types and conflict codes.
 - [platform-runtime-client](platform-runtime-client/): typed worker/harness transport, stable request identity and bounded retries.
-# Shared harness implementation support
-
-`cc-harness-support` shares provider-option policy and prepared filesystem-tool
-adapters between the basic coding and environments harnesses. It is not a
-registered harness and does not impose loop semantics on other harness packages.

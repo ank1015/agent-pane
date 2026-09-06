@@ -6,7 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-cc-harness-support = { path = "../../cc-harness-support" }
 harness-runtime.workspace = true
 platform-runtime-client.workspace = true
 llm-contracts.workspace = true

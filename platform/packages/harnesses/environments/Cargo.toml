@@ -10,7 +10,6 @@ tool-filesystem.workspace = true
 tool-firecrawl-search = { path = "../../tools/firecrawl-search" }
 tool-firecrawl-scrape = { path = "../../tools/firecrawl-scrape" }
 execution-api.workspace = true
-cc-harness-support = { path = "../../cc-harness-support" }
 harness-runtime.workspace = true
 platform-runtime-client.workspace = true
 llm-contracts.workspace = true

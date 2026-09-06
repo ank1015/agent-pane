@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-/// Explicit capabilities from the same provider catalogs used by the loop.
+/// Explicit capabilities from the same provider catalogs used by this harness.
 pub fn supported_models() -> std::collections::BTreeMap<String, Vec<String>> {
     std::collections::BTreeMap::from([
         (
@@ -34,6 +34,7 @@ pub fn supported_models() -> std::collections::BTreeMap<String, Vec<String>> {
         ),
     ])
 }
+
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningLevel {
@@ -43,6 +44,7 @@ pub enum ReasoningLevel {
     Xhigh,
     Max,
 }
+
 impl ReasoningLevel {
     fn as_str(self) -> &'static str {
         match self {
@@ -55,7 +57,7 @@ impl ReasoningLevel {
     }
 }
 
-/// Pi-style policy. Provider catalogs own model IDs and output capacities.
+/// Provider catalogs own model IDs and output capacities.
 pub fn provider_options(
     model_ref: &ModelRef,
     reasoning_level: ReasoningLevel,
@@ -74,7 +76,6 @@ pub fn provider_options(
             } else {
                 options["text"] = json!({"verbosity":"low"});
                 options["tool_choice"] = json!("auto");
-                // Multiple calls may be emitted; the harness executes them sequentially.
                 options["parallel_tool_calls"] = json!(true);
             }
             options

@@ -38,14 +38,6 @@ pub struct Output {
     pub consume: Option<ExecutionPath>,
 }
 impl Output {
-    pub fn error(message: impl Into<String>) -> Self {
-        Self {
-            text: message.into(),
-            error: true,
-            observation: None,
-            consume: None,
-        }
-    }
     fn success(text: String) -> Self {
         Self {
             text,
@@ -91,10 +83,6 @@ impl Tools<'_> {
     }
     pub fn bash(&self) -> ExecutionResult<BashTool<'_>> {
         BashTool::new(self.host, self.cwd.clone(), BashConfig::default())
-    }
-
-    pub fn definitions(&self) -> ExecutionResult<Vec<ToolDefinition>> {
-        definitions()
     }
 
     pub async fn prepare(
