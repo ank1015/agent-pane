@@ -193,6 +193,8 @@ async fn registered_host_enrollment_routing_conformance_and_reconnect() -> anyho
         .start(
             &OperationContext::with_timeout(Duration::from_secs(10)),
             StartExecutionRequest {
+                expected_generation: None,
+                output_drain_timeout_ms: None,
                 operation_id: OperationId::generate(),
                 execution_id: execution_id.clone(),
                 command: CommandSpec::Argv {
