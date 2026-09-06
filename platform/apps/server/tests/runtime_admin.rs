@@ -160,6 +160,19 @@ async fn harness_upsert_patch_validation_and_authentication(pool: PgPool) {
     }
     let first = app.harness().await;
     assert_eq!(first["enabled"], true);
+    assert_eq!(first["project_policy"], "opt_in");
+    let required = app
+        .request(
+            Method::PATCH,
+            "/internal/harnesses/test",
+            ADMIN,
+            Some(json!({"project_policy":"required"})),
+            200,
+        )
+        .await;
+    assert_eq!(required["project_policy"], "required");
+    // An older catalogue writer that omits policy cannot accidentally reset it.
+    assert_eq!(app.harness().await["project_policy"], "required");
     assert_eq!(first["supported_models"], json!({}));
     let models =
         json!({"openai":["example-model"],"fireworks":["accounts/fireworks/models/example"]});
@@ -221,6 +234,9 @@ async fn harness_upsert_patch_validation_and_authentication(pool: PgPool) {
         json!({"id":"other"}),
         json!({"name":null}),
         json!({"enabled":null}),
+        json!({"project_policy":null}),
+        json!({"project_policy":"default"}),
+        json!({"project_policy":true}),
         json!({"default_config":null}),
         json!({"supported_models":null}),
         json!({"supported_models":[]}),
