@@ -1449,7 +1449,15 @@ fn registered_websocket_url(base: &url::Url, host_id: Uuid) -> Result<String, Ga
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    use std::fmt::Write;
+
+    bytes.iter().fold(
+        String::with_capacity(bytes.len() * 2),
+        |mut output, byte| {
+            write!(output, "{byte:02x}").expect("writing to a String cannot fail");
+            output
+        },
+    )
 }
 
 fn validate_host_state(value: &str) -> Result<(), GatewayError> {

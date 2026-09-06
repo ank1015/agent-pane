@@ -37,8 +37,7 @@ fn user_shell() -> Option<PathBuf> {
 
 fn discover(kind: Kind) -> Option<PathBuf> {
     if let Some(path) = user_shell()
-        && classify(&path.to_string_lossy()) == Some(kind)
-        && path.is_file()
+        .filter(|path| classify(&path.to_string_lossy()) == Some(kind) && path.is_file())
     {
         return Some(path);
     }
