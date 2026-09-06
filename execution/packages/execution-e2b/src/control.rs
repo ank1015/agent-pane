@@ -10,10 +10,10 @@ pub const EXECUTION_BASE_RAM_OPTIONS_MB: [u32; 4] = [1024, 2048, 4096, 8192];
 /// Default base-sandbox memory tier, in MiB.
 pub const DEFAULT_EXECUTION_BASE_RAM_MB: u32 = 2048;
 /// Public E2B template IDs containing the compatible execution-supervisor binary.
-pub const EXECUTION_BASE_TEMPLATE_1024_MB_ID: &str = "h5178y3chdmnimc6bk78";
-pub const EXECUTION_BASE_TEMPLATE_2048_MB_ID: &str = "gls86opr20ek0ijjzvn7";
-pub const EXECUTION_BASE_TEMPLATE_4096_MB_ID: &str = "ujcvzqxszftbr47tx76e";
-pub const EXECUTION_BASE_TEMPLATE_8192_MB_ID: &str = "0zce89ggh7g74rred802";
+pub const EXECUTION_BASE_TEMPLATE_1024_MB_ID: &str = "gbiubfcth0yh0qke09xr";
+pub const EXECUTION_BASE_TEMPLATE_2048_MB_ID: &str = "rpffhldnk5j55ptiu283";
+pub const EXECUTION_BASE_TEMPLATE_4096_MB_ID: &str = "0eslaqgop81dfuolq66a";
+pub const EXECUTION_BASE_TEMPLATE_8192_MB_ID: &str = "11whj4oo5h2x55p3fzj1";
 /// Backwards-compatible name for the default base template.
 pub const EXECUTION_BASE_TEMPLATE_ID: &str = EXECUTION_BASE_TEMPLATE_2048_MB_ID;
 
