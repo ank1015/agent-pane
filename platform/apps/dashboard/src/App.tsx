@@ -6,6 +6,8 @@ import { ProviderPage } from './features/providers/ProviderPage'
 import { ProjectsPage } from './features/projects/ProjectsPage'
 import { ProjectPage, ProjectEnvironmentsPage, ProjectSettingsPage } from './features/projects/ProjectPage'
 import { ProjectNewChatPage } from './features/projects/ProjectNewChatPage'
+import { ProjectSitesPage } from './features/sites/ProjectSitesPage'
+import { SiteViewerPage } from './features/sites/SiteViewerPage'
 import { lazy, Suspense } from 'react'
 
 const ProjectSessionPage = lazy(() => import('./features/projects/ProjectSessionPage'))
@@ -13,9 +15,11 @@ const ProjectSessionPage = lazy(() => import('./features/projects/ProjectSession
 function App() {
   return (
     <Routes>
+      <Route path="/projects/:projectId/sites/:siteId/view" element={<SiteViewerPage />} />
       <Route path="/projects/:projectId" element={<ProjectPage />}>
         <Route index element={<ProjectNewChatPage />} />
         <Route path="environments" element={<ProjectEnvironmentsPage />} />
+        <Route path="sites" element={<ProjectSitesPage />} />
         <Route path="settings" element={<ProjectSettingsPage />} />
         <Route path="environments/edit" element={<Navigate to=".." replace />} />
         <Route path="environments/list" element={<Navigate to="../environments" replace />} />

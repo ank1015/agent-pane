@@ -1,6 +1,7 @@
 import { ArrowLeft01Icon, Folder03Icon, Edit02Icon, Settings01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Link, NavLink, Outlet, useParams } from 'react-router-dom'
+import { Globe } from 'lucide-react'
 import { ApiError } from '../../lib/api-client'
 import { useProjectEnvironments, useProjects } from './project-queries'
 import { ProjectEnvironmentsTable } from './ProjectEnvironmentsTable'
@@ -29,6 +30,11 @@ export function ProjectPage() {
             className={({ isActive }) => `provider-detail-nav-item${isActive ? ' provider-detail-nav-item--active' : ''}`}>
             <span className="nav-icon-frame" aria-hidden="true"><HugeiconsIcon icon={Folder03Icon} size={16} strokeWidth={1.5} /></span>
             <span className="nav-item-label">Environments</span>
+          </NavLink>
+          <NavLink to={`${projectPath}/sites`} aria-label="Sites" title="Sites"
+            className={({ isActive }) => `provider-detail-nav-item${isActive ? ' provider-detail-nav-item--active' : ''}`}>
+            <span className="nav-icon-frame" aria-hidden="true"><Globe size={16} strokeWidth={1.5} /></span>
+            <span className="nav-item-label">Sites</span>
           </NavLink>
         </nav>
         {UUID_PATTERN.test(projectId) ? <ProjectRecentChats key={projectId} projectId={projectId.toLowerCase()} /> : null}
