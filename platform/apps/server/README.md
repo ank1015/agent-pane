@@ -463,3 +463,8 @@ the existing database, with no additional migration required. The public
 dashboard POST remains unchanged; harnesses must use the fenced internal route
 for recoverable creation. Runtime construction must inject the existing
 `EnvironmentService` with `RuntimeService::with_environments` (wired in main).
+
+## Sites integration
+
+See [SITES.md](SITES.md) for authenticated project site management, provisioning,
+backend forwarding, operator grants, and the session-oriented backend SDK.
