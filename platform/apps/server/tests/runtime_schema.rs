@@ -861,6 +861,7 @@ async fn upgrade_preserves_existing_projects_and_environments(pool: PgPool) {
         include_str!("../migrations/20260904050000_create_session_state.sql"),
         include_str!("../migrations/20260905060000_session_configuration.sql"),
         include_str!("../migrations/20260906000000_environment_native_paths.sql"),
+        include_str!("../migrations/20260906010000_project_harnesses.sql"),
     ] {
         sqlx::raw_sql(migration).execute(&pool).await.unwrap();
     }
@@ -870,6 +871,12 @@ async fn upgrade_preserves_existing_projects_and_environments(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(frozen, serde_json::json!({}));
+    let grants: Vec<(Uuid, String, bool)> =
+        sqlx::query_as("select project_id,harness_id,enabled from project_harnesses")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(grants, vec![(existing.project, "test".into(), true)]);
     assert_eq!(
         sqlx::query_scalar::<_, String>(
             "select state->>'phase' from run_checkpoints where run_id=$1"
