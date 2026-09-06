@@ -4,9 +4,26 @@ use execution_core::{
     PathConvention,
 };
 
+mod normalized;
+pub use normalized::resolve_path_normalized;
+
 // Parse the remote host's paths without consulting the worker OS or filesystem.
 // Reject '..' rather than lexically collapsing through a possible symlink.
 fn parts(value: &str, windows: bool) -> ExecutionResult<(String, Vec<String>)> {
+    split_parts(value, windows, ParentSegments::Reject)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ParentSegments {
+    Reject,
+    Preserve,
+}
+
+fn split_parts(
+    value: &str,
+    windows: bool,
+    parents: ParentSegments,
+) -> ExecutionResult<(String, Vec<String>)> {
     if value.is_empty() || value.contains('\0') {
         return Err(error(
             Code::InvalidPath,
@@ -75,7 +92,7 @@ fn parts(value: &str, windows: bool) -> ExecutionResult<(String, Vec<String>)> {
     };
     let mut result = Vec::new();
     for part in tail.split('/') {
-        if part == ".." {
+        if part == ".." && parents == ParentSegments::Reject {
             return Err(error(
                 Code::InvalidPath,
                 "parent (..) segments are unsupported; use an absolute path inside a registered root",
@@ -84,7 +101,7 @@ fn parts(value: &str, windows: bool) -> ExecutionResult<(String, Vec<String>)> {
         if part.is_empty() || part == "." {
             continue;
         }
-        if windows && (part.contains(':') || part.ends_with(['.', ' '])) {
+        if windows && part != ".." && (part.contains(':') || part.ends_with(['.', ' '])) {
             return Err(error(
                 Code::InvalidPath,
                 "unsupported Windows path component",
@@ -319,5 +336,59 @@ mod tests {
                 assert!(resolve(&host, &cwd, value).is_err(), "{value}");
             }
         }
+    }
+    #[test]
+    fn normalized_paths_support_parent_segments_without_changing_strict_resolution() {
+        let host = host(
+            PathConvention::Unix,
+            &[("work", "/work"), ("other", "/other")],
+        );
+        let cwd = ExecutionPath::new(RootId::new("work").unwrap(), "project").unwrap();
+        for value in [
+            "missing/../file",
+            "../project/file",
+            "/work/unused/../project/file",
+        ] {
+            assert_eq!(
+                resolve_path_normalized(&host, &cwd, value).unwrap().path,
+                "project/file"
+            );
+            assert!(resolve(&host, &cwd, value).is_err());
+        }
+        assert_eq!(
+            resolve_path_normalized(&host, &cwd, "../../other/file")
+                .unwrap()
+                .root_id
+                .as_str(),
+            "other"
+        );
+        assert_eq!(resolve_path_normalized(&host, &cwd, "").unwrap(), cwd);
+        assert!(resolve_path_normalized(&host, &cwd, "../../../outside").is_err());
+    }
+
+    #[test]
+    fn normalized_windows_paths_clamp_at_drive_or_share_root() {
+        let host = host(
+            PathConvention::Windows,
+            &[("work", r"C:\work"), ("share", r"\\server\share")],
+        );
+        let cwd = ExecutionPath::new(RootId::new("work").unwrap(), "project").unwrap();
+        for value in [
+            r"sub\..\file",
+            r"C:..\project\file",
+            r"\work\project\file",
+            r"\\?\C:\work\project\..\project\file",
+        ] {
+            assert_eq!(
+                resolve_path_normalized(&host, &cwd, value).unwrap().path,
+                "project/file",
+                "{value}"
+            );
+        }
+        let path = resolve_path_normalized(&host, &cwd, r"\\server\share\..\..\file").unwrap();
+        assert_eq!(path.root_id.as_str(), "share");
+        assert_eq!(path.path, "file");
+        assert!(resolve_path_normalized(&host, &cwd, r"D:relative").is_err());
+        assert!(resolve_path_normalized(&host, &cwd, r"..\..\escape").is_err());
     }
 }

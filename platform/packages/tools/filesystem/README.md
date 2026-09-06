@@ -14,3 +14,9 @@ are rejected to avoid changing the meaning of remote symlink traversal; use an
 absolute path instead. The execution filesystem enforces symlink containment.
 
 Errors from this package use `source: "tool-filesystem"`.
+
+`resolve_path_normalized`, used by apply-patch, provides a separate Codex-style
+lexical join. Parent segments collapse before registered-root mapping, stopping
+at the native POSIX, drive, or share root. The strict `resolve_path` behavior
+used by existing tools is unchanged. Containment and other execution path
+restrictions still apply.
