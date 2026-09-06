@@ -92,6 +92,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             providers::ProviderService::new(llm_gateway.clone()),
             environment_service.clone(),
         ));
+    let sites_url = std::env::var("PLATFORM_SITES_SERVICE_URL").unwrap_or_default();
+    let sites_token =
+        zeroize::Zeroizing::new(std::env::var("PLATFORM_SITES_SERVICE_TOKEN").unwrap_or_default());
+    let capability_token = zeroize::Zeroizing::new(
+        std::env::var("PLATFORM_SITES_CAPABILITY_TOKEN").unwrap_or_default(),
+    );
+    let sites = if sites_url.is_empty() && sites_token.is_empty() && capability_token.is_empty() {
+        None
+    } else {
+        if sites_token.as_str() == capability_token.as_str()
+            || sites_token.as_str() == admin_token.as_str()
+            || sites_token.as_str() == registration_token.as_str()
+            || capability_token.as_str() == registration_token.as_str()
+        {
+            return Err("Sites service credentials must be distinct from each other and other service roles".into());
+        }
+        Some(platform_server::sites::SitesService::new(
+            database.pool().clone(),
+            platform_server::sites::SitesClient::new(url::Url::parse(&sites_url)?, &sites_token)?,
+            runtime_service.clone(),
+            providers::ProviderService::new(llm_gateway.clone()),
+            &capability_token,
+            &admin_token,
+        )?)
+    };
+    let sites_reconciler = sites.as_ref().map(|s| s.spawn_reconciler());
+    let site_callbacks = sites.as_ref().map(|s| s.spawn_callback_dispatcher());
+    let sites_app = sites
+        .map(platform_server::sites::router)
+        .unwrap_or_default();
     let login_service = ChatGptLoginService::new(llm_gateway.clone())?;
     let login_service = match TcpListener::bind(providers::CALLBACK_ADDRESS).await {
         Ok(callback_listener) => {
@@ -118,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(providers::login_router(login_service))
             .merge(projects::router(project_service))
             .merge(bootstrap_app)
+            .merge(sites_app)
             .merge(runtime::router(runtime_service))
             .merge(worker_app)
             .merge(admin_app)
@@ -142,6 +173,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     };
+    if let Some(task) = sites_reconciler {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(task) = site_callbacks {
+        task.abort();
+        let _ = task.await;
+    }
     reconciler.abort();
     notifications.abort();
     let _ = tokio::join!(reconciler, notifications);

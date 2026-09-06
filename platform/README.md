@@ -5,6 +5,9 @@ This directory contains the standalone platform architecture. The existing platf
 - `apps/` contains independently deployable platform applications.
 - `apps/dashboard` contains the React and Vite management interface.
 - `apps/server` contains the Rust API used by the dashboard.
+- `apps/sites-service` contains site storage, lifecycle, source/release publication,
+  and isolated static hosting; see its
+  [setup and internal API](apps/sites-service/README.md).
 - `packages/` contains reusable platform crates.
 
 `platform/` is an independent Cargo workspace. After the first workspace member is added, run its complete local verification from this directory:

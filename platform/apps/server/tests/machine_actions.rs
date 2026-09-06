@@ -18,7 +18,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 const ID: &str = "018f47a8-80cc-7b2f-9d44-6657f5f82ad0";
 fn host() -> Value {
     json!({"id":ID,"kind":"registered","name":"Development Mac","desired_state":"ready","state":"ready",
-        "status_code":null,"status_message":null,"status_retryable":false,"descriptor":null,"metadata":{},"e2b":null,
+        "status_code":null,"status_message":null,"status_retryable":false,"descriptor":null,"metadata":{},"roots":[],"e2b":null,
         "registered":{"installation_id":null,"daemon_version":null,"protocol_version":null,"registered_at":null,"last_connected_at":null,"last_disconnected_at":null},
         "last_seen_at":null,"revision":1,"created_at":"2026-09-03T00:00:00Z","updated_at":"2026-09-03T00:00:00Z","deleted_at":null})
 }
