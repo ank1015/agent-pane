@@ -5,9 +5,10 @@ Research date: 2026-09-05
 ## Implemented outcome
 
 The selected production tiers are 1024 MiB/1 vCPU, 2048 MiB/2 vCPU (default),
-4096 MiB/2 vCPU, and 8192 MiB/4 vCPU. All four templates were built and
-published successfully on 2026-09-05. Live sandboxes from every tier passed
-the complete `execution-supervisor` operation surface and were then deleted.
+4096 MiB/2 vCPU, and 8192 MiB/4 vCPU. The current templates were built and
+published successfully on 2026-09-07 with supervisor release
+`0.1.0-dev-7d4c8ad2` and `ripgrep`. Live sandboxes from every tier passed the
+complete `execution-supervisor` operation surface and were then deleted.
 
 The earlier 512-MiB exploration and suggested mapping below are retained as the
 research record that informed the final selection.
