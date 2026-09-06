@@ -14,3 +14,5 @@ pub fn router(execution_gateway: ExecutionGatewayClient, llm_gateway: LlmGateway
         .merge(machines::router(MachineService::new(execution_gateway)))
         .merge(providers::router(ProviderService::new(llm_gateway)))
 }
+
+pub mod sites;
