@@ -49,7 +49,7 @@ impl RuntimeService {
         if from.project_id != session.project_id {
             return Err(RuntimeError::NotFound);
         }
-        mutations::enabled(&mut tx, &session.harness_id).await?;
+        mutations::enabled(&mut tx, session.project_id, &session.harness_id).await?;
         let (run, input) =
             mutations::start_with_parent(&mut tx, &session, &request.run, Some(source)).await?;
         mutations::event(
@@ -102,7 +102,7 @@ impl RuntimeService {
             ));
         }
         let harness = request.harness_id.as_deref().unwrap_or(&source.harness_id);
-        mutations::enabled(&mut tx, harness).await?;
+        mutations::enabled(&mut tx, p.project_id, harness).await?;
         let config = super::configuration::resolve_from(
             &mut tx,
             harness,

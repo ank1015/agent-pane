@@ -34,6 +34,13 @@ impl App {
             .execute(&pool)
             .await
             .unwrap();
+        sqlx::query(
+            "insert into project_harnesses(project_id,harness_id,enabled) values($1,'test',true)",
+        )
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
         let runtime = RuntimeService::new(pool.clone());
         let app = router(runtime.clone()).merge(worker_router(runtime, BOOT));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
