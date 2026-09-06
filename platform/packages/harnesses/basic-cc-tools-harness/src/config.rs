@@ -106,7 +106,7 @@ impl ExecutionTarget {
     }
 }
 
-pub use cc_harness_support::model::ReasoningLevel;
+pub use crate::model::ReasoningLevel;
 
 pub fn config_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["model","reasoning_level","environment"],"properties":{
@@ -170,6 +170,6 @@ impl Config {
     }
 
     pub fn provider_options(&self, session: Uuid) -> Result<JsonObject, String> {
-        cc_harness_support::model::provider_options(&self.model, self.reasoning_level, session)
+        crate::model::provider_options(&self.model, self.reasoning_level, session)
     }
 }
