@@ -71,6 +71,8 @@ impl Fixture {
         stdin: StdinMode,
     ) -> StartExecutionRequest {
         StartExecutionRequest {
+            expected_generation: None,
+            output_drain_timeout_ms: None,
             operation_id: OperationId::generate(),
             execution_id: ExecutionId::generate(),
             command: CommandSpec::Shell {
@@ -118,6 +120,8 @@ async fn filesystem_writes_reads_lists_and_replays_mutations() {
     let context = OperationContext::new();
     let operation_id = OperationId::generate();
     let request = WriteFileRequest {
+        expected_generation: None,
+        strategy: execution_core::WriteStrategy::AtomicReplace,
         operation_id: operation_id.clone(),
         path: fixture.path("nested/value.txt"),
         data: BinaryData::new(b"hello world".to_vec()),
@@ -182,6 +186,8 @@ async fn filesystem_writes_reads_lists_and_replays_mutations() {
         .write(
             &context,
             WriteFileRequest {
+                expected_generation: None,
+                strategy: execution_core::WriteStrategy::AtomicReplace,
                 operation_id,
                 path: fixture.path("nested/other.txt"),
                 data: BinaryData::new(b"different".to_vec()),
@@ -200,6 +206,8 @@ async fn filesystem_writes_reads_lists_and_replays_mutations() {
         .write(
             &context,
             WriteFileRequest {
+                expected_generation: None,
+                strategy: execution_core::WriteStrategy::AtomicReplace,
                 operation_id: OperationId::generate(),
                 path: fixture.path("nested/value.txt"),
                 data: BinaryData::new(b"replacement".to_vec()),
@@ -266,6 +274,8 @@ async fn filesystem_confines_symlinks_and_can_replace_a_final_link() {
         .write(
             &OperationContext::new(),
             WriteFileRequest {
+                expected_generation: None,
+                strategy: execution_core::WriteStrategy::AtomicReplace,
                 operation_id: OperationId::generate(),
                 path: fixture.path("link.txt"),
                 data: BinaryData::new(b"local".to_vec()),
@@ -630,4 +640,73 @@ fn stream_bytes(events: &[ProcessEvent], stderr: bool) -> Vec<u8> {
         }
     }
     bytes
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn legacy_process_requests_still_wait_for_descendant_output() {
+    let fixture = Fixture::new().await;
+    let context = OperationContext::with_timeout(Duration::from_secs(5));
+    let request = fixture.start_request("(sleep 0.4; printf late) & exit 7", "", StdinMode::Closed);
+    let encoded = serde_json::to_value(&request).unwrap();
+    assert!(encoded.get("expected_generation").is_none());
+    assert!(encoded.get("output_drain_timeout_ms").is_none());
+    let handle = fixture
+        .runtime
+        .processes()
+        .start(&context, request)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let first = fixture
+        .runtime
+        .processes()
+        .read(
+            &context,
+            ReadExecutionRequest {
+                execution_id: handle.execution_id.clone(),
+                supervisor_generation_id: handle.supervisor_generation_id.clone(),
+                after_sequence: 0,
+                max_bytes: 1024,
+                wait_ms: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.state, ExecutionState::Running);
+    let mut cursor = first.next_sequence;
+    let mut bytes = Vec::new();
+    loop {
+        let page = fixture
+            .runtime
+            .processes()
+            .read(
+                &context,
+                ReadExecutionRequest {
+                    execution_id: handle.execution_id.clone(),
+                    supervisor_generation_id: handle.supervisor_generation_id.clone(),
+                    after_sequence: cursor,
+                    max_bytes: 1024,
+                    wait_ms: Some(100),
+                },
+            )
+            .await
+            .unwrap();
+        cursor = page.next_sequence;
+        for event in &page.events {
+            if let ProcessEventKind::Output { data, .. } = &event.event {
+                bytes.extend_from_slice(data.as_slice());
+            }
+        }
+        if page.state == ExecutionState::Exited {
+            assert_eq!(page.exit_code, Some(7));
+            assert!(
+                page.events
+                    .iter()
+                    .any(|event| matches!(event.event, ProcessEventKind::Closed))
+            );
+            break;
+        }
+    }
+    assert_eq!(bytes, b"late");
 }
