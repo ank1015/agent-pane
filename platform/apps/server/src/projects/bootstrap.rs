@@ -61,8 +61,9 @@ impl ProjectBootstrapService {
         let (harnesses, accounts, environments) = tokio::try_join!(
             async {
                 sqlx::query_scalar::<_, sqlx::types::Json<Harness>>(
-                    "select to_jsonb(h) from harnesses h where enabled order by name,id",
+                    "select to_jsonb(h) from harnesses h left join project_harnesses p on p.harness_id=h.id and p.project_id=$1 where h.enabled and (h.project_policy='required' or coalesce(p.enabled,false)) order by h.name,h.id",
                 )
+                .bind(project_id)
                 .fetch_all(&self.pool)
                 .await
                 .map(|rows| rows.into_iter().map(|row| row.0).collect())
