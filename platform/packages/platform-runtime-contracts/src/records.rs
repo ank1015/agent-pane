@@ -276,8 +276,27 @@ pub struct Harness {
     #[serde(default)]
     pub supported_models: std::collections::BTreeMap<String, Vec<String>>,
     pub enabled: bool,
+    #[serde(default)]
+    pub project_policy: HarnessProjectPolicy,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessProjectPolicy {
+    Required,
+    #[default]
+    OptIn,
+}
+
+impl HarnessProjectPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Required => "required",
+            Self::OptIn => "opt_in",
+        }
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
