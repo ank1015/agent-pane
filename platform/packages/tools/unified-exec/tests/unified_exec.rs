@@ -736,3 +736,105 @@ async fn stale_cached_descriptor_cannot_spawn_on_restarted_supervisor() {
             .exists()
     );
 }
+
+#[tokio::test]
+async fn intercepted_patch_limits_are_pinned_across_recovery() {
+    let host = Host::new(4096).await;
+    let policy = UnifiedExecConfig {
+        patch_config: tool_apply_patch::ApplyPatchConfig {
+            max_file_bytes: 3,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let tool = UnifiedExecTool::new(host.runtime.as_ref(), host.cwd(), policy).unwrap();
+    let prepared = tool.prepare_exec_command(exec("apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: too-big\n+123456789\n*** End Patch\nPATCH", false),exec_ids(811)).unwrap();
+    let saved = serde_json::to_value(prepared).unwrap();
+    // A recovered worker uses different defaults; saved policy still wins.
+    let recovered: PreparedExecCommand = serde_json::from_value(saved).unwrap();
+    let running = host
+        .tool()
+        .start_exec_command(&context(), &recovered)
+        .await
+        .unwrap();
+    let mut running: RunningExecCommand =
+        serde_json::from_value(serde_json::to_value(running).unwrap()).unwrap();
+    let failure = host
+        .tool()
+        .poll_exec_command(&context(), &mut running)
+        .await
+        .err()
+        .expect("oversized file rejected");
+    assert_eq!(failure.code, ExecutionErrorCode::ResourceExhausted);
+    assert!(!host.temp.path().join("workspace/project/too-big").exists());
+}
+
+#[tokio::test]
+async fn disabled_patch_interception_runs_the_shell_even_after_recovery() {
+    use std::os::unix::fs::PermissionsExt;
+    let host = Host::new(4096).await;
+    let directory = host.temp.path().join("workspace/project");
+    let executable = directory.join("apply_patch");
+    std::fs::write(
+        &executable,
+        "#!/bin/sh\ncat > shell-input\nprintf shell-handler\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let tool = UnifiedExecTool::new(
+        host.runtime.as_ref(),
+        host.cwd(),
+        UnifiedExecConfig {
+            intercept_apply_patch: false,
+            environment: EnvironmentVariables {
+                set: [(
+                    "PATH".into(),
+                    format!("{}:/usr/bin:/bin", directory.display()),
+                )]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut input = exec(
+        "apply_patch <<'PATCH'\n*** Begin Patch\n*** Add File: should-not-be-created\n+bad\n*** End Patch\nPATCH",
+        false,
+    );
+    input.yield_time_ms = 10_000;
+    input.login = Some(false);
+    input.shell = Some("/bin/sh".into());
+    let prepared = tool.prepare_exec_command(input, exec_ids(901)).unwrap();
+    let prepared: PreparedExecCommand =
+        serde_json::from_value(serde_json::to_value(prepared).unwrap()).unwrap();
+    // Default tool construction enables interception, but the saved command
+    // already resolved to shell execution and cannot change during replay.
+    let recovered_tool = host.tool();
+    let mut running = recovered_tool
+        .start_exec_command(&context(), &prepared)
+        .await
+        .unwrap();
+    assert!(running.session().is_some());
+    let result = recovered_tool
+        .wait_exec_command(&context(), &mut running)
+        .await
+        .unwrap();
+    assert_eq!(result.output.exit_code, Some(0));
+    assert_eq!(result.output.output, "shell-handler");
+    assert!(!directory.join("should-not-be-created").exists());
+    assert!(
+        std::fs::read_to_string(directory.join("shell-input"))
+            .unwrap()
+            .contains("*** Begin Patch")
+    );
+    // Raw patch text is also dispatched to the shell rather than pre-rejected.
+    assert!(
+        tool.prepare_exec_command(
+            exec("*** Begin Patch\n*** Add File: x\n+y\n*** End Patch", false),
+            exec_ids(902)
+        )
+        .is_ok()
+    );
+}

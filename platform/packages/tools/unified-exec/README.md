@@ -71,10 +71,16 @@ adapters when delivering it:
 - Serde on prepared/running/result values is for durable checkpoints. It includes
   internal output-budget metadata; do not use it as the model-facing adapter.
 
-Whole-script `apply_patch`/`applypatch` heredocs, including the supported
+With the default `intercept_apply_patch: true`, whole-script
+`apply_patch`/`applypatch` heredocs, including the supported
 `cd <path> &&` form, run through `tool-apply-patch`. Recognition uses the pinned
 Codex Tree-sitter query, so surrounding commands are not silently discarded.
-Raw patches without an explicit invocation fail. Patch verification happens in
+Raw patches without an explicit invocation fail. Set
+`intercept_apply_patch: false` for shell-only harnesses: all scripts then go to
+the shell, including patch-shaped text. Prepared state pins this execution path,
+so recovery does not reinterpret a saved command using a different configuration.
+
+When interception is enabled, patch verification happens in
 `start_exec_command` without mutations; each subsequent poll performs one
 recoverable patch step. **Persist every returned running state before polling
 again**, including polls with no process events. `running.session()` is `None`
