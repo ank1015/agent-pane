@@ -74,6 +74,11 @@ const fn default_write_yield_time_ms() -> u64 {
 /// Harness policy and host-side execution settings, never model arguments.
 #[derive(Clone, Debug)]
 pub struct UnifiedExecConfig {
+    /// When false, dispatch every script to the shell without patch recognition.
+    /// Prepared commands already pin the resulting shell or patch execution path.
+    pub intercept_apply_patch: bool,
+    /// Policy for intercepted apply_patch heredocs. Pinned in prepared commands.
+    pub patch_config: ApplyPatchConfig,
     pub shell: Option<String>,
     pub default_login: bool,
     pub allow_shell_override: bool,
@@ -96,6 +101,8 @@ pub struct UnifiedExecConfig {
 impl Default for UnifiedExecConfig {
     fn default() -> Self {
         Self {
+            intercept_apply_patch: true,
+            patch_config: ApplyPatchConfig::default(),
             shell: None,
             default_login: true,
             allow_shell_override: true,
@@ -157,6 +164,8 @@ impl ExecSession {
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedExecCommand {
+    #[serde(default)]
+    patch_config: ApplyPatchConfig,
     host_id: ExecutionHostId,
     generation: SupervisorGenerationId,
     session_id: i32,
@@ -522,15 +531,19 @@ impl<'a> UnifiedExecTool<'a> {
         let login = input
             .login
             .unwrap_or(self.config.default_login && self.config.allow_login_shell);
-        let patch = patch::extract(&input.cmd)?
-            .map(|(body, workdir)| {
-                let cwd = workdir.map_or_else(
-                    || Ok(cwd.clone()),
-                    |dir| resolve_path(self.runtime.descriptor(), &cwd, &dir),
-                )?;
-                Ok::<_, ExecutionError>(patch::Invocation { body, cwd })
-            })
-            .transpose()?;
+        let patch = if self.config.intercept_apply_patch {
+            patch::extract(&input.cmd)?
+        } else {
+            None
+        }
+        .map(|(body, workdir)| {
+            let cwd = workdir.map_or_else(
+                || Ok(cwd.clone()),
+                |dir| resolve_path(self.runtime.descriptor(), &cwd, &dir),
+            )?;
+            Ok::<_, ExecutionError>(patch::Invocation { body, cwd })
+        })
+        .transpose()?;
         let request = StartExecutionRequest {
             expected_generation: Some(self.runtime.descriptor().supervisor_generation_id.clone()),
             output_drain_timeout_ms: Some(50),
@@ -561,6 +574,7 @@ impl<'a> UnifiedExecTool<'a> {
             yield_time_ms = yield_time_ms.max(DEFAULT_EXEC_YIELD_TIME_MS);
         }
         Ok(PreparedExecCommand {
+            patch_config: self.config.patch_config.clone(),
             host_id: self.runtime.descriptor().host_id.clone(),
             generation: self.runtime.descriptor().supervisor_generation_id.clone(),
             session_id: ids.session_id,
@@ -590,7 +604,7 @@ impl<'a> UnifiedExecTool<'a> {
             let tool = ApplyPatchTool::new(
                 self.runtime,
                 invocation.cwd.clone(),
-                ApplyPatchConfig::default(),
+                prepared.patch_config.clone(),
             )?;
             let verified = tool
                 .prepare(
@@ -668,7 +682,7 @@ impl<'a> UnifiedExecTool<'a> {
             let tool = ApplyPatchTool::new(
                 self.runtime,
                 invocation.cwd.clone(),
-                ApplyPatchConfig::default(),
+                running.prepared.patch_config.clone(),
             )?;
             if let PatchProgress::Complete(output) = tool.step(context, patch).await? {
                 if !running.collection.ready {
