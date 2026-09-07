@@ -30,7 +30,7 @@ pub enum ApplyPatchFileUpdateMode {
     PreserveLineEndings,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ApplyPatchConfig {
     pub max_patch_bytes: u64,
     pub max_file_bytes: u64,
