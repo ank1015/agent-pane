@@ -8,6 +8,8 @@ license.workspace = true
 
 [dependencies]
 harness-runtime.workspace = true
+unified-exec-only-harness = { path = "../../packages/harnesses/unified-exec-only-harness" }
+basic-codex-tools-harness = { path = "../../packages/harnesses/basic-codex-tools-harness" }
 basic-cc-tools-harness = { path = "../../packages/harnesses/basic-cc-tools-harness" }
 environments-harness = { path = "../../packages/harnesses/environments" }
 tool-firecrawl-search = { path = "../../packages/tools/firecrawl-search" }

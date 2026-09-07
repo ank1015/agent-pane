@@ -183,6 +183,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "basic-codex-tools-harness"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "execution-api",
+ "execution-client",
+ "execution-core",
+ "execution-supervisor-core",
+ "execution-wire",
+ "futures-util",
+ "harness-runtime",
+ "image",
+ "jsonschema",
+ "llm-client",
+ "llm-contracts",
+ "platform-runtime-client",
+ "platform-server",
+ "provider-chatgpt",
+ "provider-openai",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tool-apply-patch",
+ "tool-unified-exec",
+ "tool-view-image",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1828,6 +1863,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "basic-cc-tools-harness",
+ "basic-codex-tools-harness",
  "dotenvy",
  "environments-harness",
  "execution-client",
@@ -1846,6 +1882,7 @@ dependencies = [
  "tool-firecrawl-search",
  "tracing",
  "tracing-subscriber",
+ "unified-exec-only-harness",
  "uuid",
  "zeroize",
 ]
@@ -3372,6 +3409,37 @@ name = "unicode-properties"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
+
+[[package]]
+name = "unified-exec-only-harness"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "execution-api",
+ "execution-client",
+ "execution-core",
+ "execution-supervisor-core",
+ "execution-wire",
+ "futures-util",
+ "harness-runtime",
+ "jsonschema",
+ "llm-client",
+ "llm-contracts",
+ "platform-runtime-client",
+ "platform-server",
+ "provider-chatgpt",
+ "provider-fireworks",
+ "provider-openai",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tool-unified-exec",
+ "uuid",
+]
 
 [[package]]
 name = "untrusted"
