@@ -34,9 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     let client = PlatformClient::new(&url, uuid::Uuid::new_v4(), token, ClientConfig::default())?;
     let mut registry = Registry::default();
+    let exec_only_enabled = std::env::var("UNIFIED_EXEC_ONLY_ENABLED").as_deref() == Ok("true");
+    let codex_enabled = std::env::var("BASIC_CODEX_TOOLS_ENABLED").as_deref() == Ok("true");
     let basic_enabled = std::env::var("BASIC_CC_TOOLS_ENABLED").as_deref() == Ok("true");
     let environments_enabled = std::env::var("ENVIRONMENTS_ENABLED").as_deref() == Ok("true");
-    if basic_enabled || environments_enabled {
+    if basic_enabled || codex_enabled || exec_only_enabled || environments_enabled {
         let mut llm_config = llm_client::LlmClientConfig::new(
             std::env::var("LLM_GATEWAY_URL")?.parse()?,
             std::env::var("LLM_GATEWAY_API_TOKEN")?,
@@ -50,6 +52,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         execution_config.allow_insecure_http = insecure;
         let llm = llm_client::LlmClient::new(llm_config)?;
         let execution = execution_client::ExecutionClient::new(execution_config)?;
+        if exec_only_enabled {
+            registry.register(
+                unified_exec_only_harness::ID,
+                Arc::new(unified_exec_only_harness::UnifiedExecOnlyHarness::new(
+                    llm.clone(),
+                    execution.clone(),
+                )),
+            )?;
+        }
+        if codex_enabled {
+            let publisher = basic_codex_tools_harness::GcsImagePublisher::new(std::env::var(
+                "BASIC_CODEX_IMAGE_BUCKET",
+            )?)?;
+            registry.register(
+                basic_codex_tools_harness::ID,
+                Arc::new(basic_codex_tools_harness::BasicCodexToolsHarness::new(
+                    llm.clone(),
+                    execution.clone(),
+                    Arc::new(publisher),
+                )),
+            )?;
+        }
         if basic_enabled {
             registry.register(
                 basic_cc_tools_harness::ID,
