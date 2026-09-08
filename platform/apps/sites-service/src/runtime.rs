@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 use std::{
     io::{self, BufRead, Read, Write},
     path::Path,
-    process::Stdio,
     time::{Duration, Instant},
 };
 use tokio::{
@@ -74,6 +73,8 @@ pub fn guest_main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             .set("__sitesHost", Function::new(ctx.clone(), host_call)?)?;
         ctx.globals()
             .set("__sitesInput", input.context.to_string())?;
+        let factory: Function = ctx.eval(platform_javascript_sdk::factory())?;
+        ctx.globals().set("__platformFactory", factory)?;
         let runner: Function = ctx.eval(include_str!("backend_sdk.js"))?;
         let (module, evaluated) = Module::declare(ctx.clone(), "backend.js", input.code)?.eval()?;
         evaluated.finish::<()>()?;
@@ -96,79 +97,7 @@ pub fn guest_main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 }
 
 pub(crate) fn sandbox_command(executable: &Path) -> io::Result<Command> {
-    let executable = executable.canonicalize()?;
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        // Deny default, with read access only to the executable and system runtime.
-        // The private storage volume and networking are not granted.
-        let quoted = executable
-            .to_str()
-            .ok_or(io::Error::other("executable path"))?;
-        if quoted.contains(['"', '\\', '\n']) {
-            return Err(io::Error::other("executable path"));
-        }
-        let policy = format!(
-            r#"(version 1)
-(deny default)
-(allow process-exec (literal "{quoted}"))
-(allow file-read* (literal "/") (literal "{quoted}") (subpath "/System/Library") (subpath "/usr/lib") (literal "/dev/urandom") (literal "/dev/null"))
-(allow sysctl-read)
-(allow mach-lookup (global-name "com.apple.system.logger"))
-"#
-        );
-        let mut cmd = Command::new("/usr/bin/sandbox-exec");
-        cmd.args(["-p", &policy])
-            .arg(&executable)
-            .arg("--backend-runtime");
-        cmd
-    };
-    #[cfg(target_os = "linux")]
-    let mut command = {
-        let mut cmd = Command::new("bwrap");
-        cmd.args([
-            "--unshare-all",
-            "--die-with-parent",
-            "--new-session",
-            "--clearenv",
-        ]);
-        for path in ["/usr", "/lib", "/lib64"] {
-            if Path::new(path).exists() {
-                cmd.args(["--ro-bind", path, path]);
-            }
-        }
-        cmd.args([
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--tmpfs",
-            "/tmp",
-            "--ro-bind",
-        ])
-        .arg(&executable)
-        .arg("/backend-runtime")
-        .args([
-            "--chdir",
-            "/tmp",
-            "--",
-            "/backend-runtime",
-            "--backend-runtime",
-        ]);
-        cmd
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    return Err(io::Error::other("No supported OS sandbox"));
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    {
-        command
-            .env_clear()
-            .current_dir("/")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        Ok(command)
-    }
+    tool_code_mode::sandbox::command(executable, "--backend-runtime")
 }
 
 pub async fn execute(input: GuestInput, db: Database, executable: &Path) -> Outcome {
