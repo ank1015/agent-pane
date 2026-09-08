@@ -15,6 +15,7 @@ import { useChatStream } from './chat-stream'
 import { useChatSubmission, userMessage } from './chat-submission'
 import { buildConversation } from './project-conversation'
 import { useProjectBootstrap } from './project-queries'
+import { summarizeSessionUsage } from './project-session-usage'
 import type { ChatSession, ProjectRunSummary, RunInput, SessionMessage } from './project-session-types'
 import { isLiveRunStatus } from './project-session-types'
 
@@ -128,18 +129,7 @@ const SessionHeader = memo(function SessionHeader({ session, activeRun, messages
   const account = bootstrap.data?.provider_accounts.find(a => a.id === locked?.accountId)
   const descriptor = session.config.environment as { type?: string; machine_id?: string; snapshot_id?: string; workspace_root?: string; path?: string } | undefined
   const environment = bootstrap.data?.project_environments.find(e => e.type === descriptor?.type && e.workspace_root === descriptor.workspace_root && e.path === descriptor.path && (e.type === 'machine' ? e.machine_id === descriptor.machine_id : e.snapshot_id === descriptor.snapshot_id))
-  const usage = useMemo(() => {
-    let cost = 0, input = 0, cached = 0, hasCost = false, hasTokens = false
-    const finite = (value: number | undefined) => value !== undefined && Number.isFinite(value) && value >= 0 ? value : 0
-    for (const message of messages) {
-      if (message.message.role !== 'assistant' || !message.message.usage) continue
-      const u = message.message.usage
-      hasCost ||= u.cost !== undefined
-      hasTokens ||= u.input !== undefined || u.cache_read !== undefined
-      cost += finite(u.cost?.total); input += finite(u.input); cached += finite(u.cache_read)
-    }
-    return { cost: hasCost ? '$' + cost.toFixed(5) : '—', cache: hasTokens ? (input + cached ? cached / (input + cached) * 100 : 0).toFixed(1) + '%' : '—' }
-  }, [messages])
+  const usage = useMemo(() => summarizeSessionUsage(messages), [messages])
   return <header className="project-session-header">
     <div className="project-session-context">
       <span className="project-context-picker-trigger project-context-picker-trigger--static" title={session.harness_id}>{session.harness_id}</span>
@@ -151,7 +141,7 @@ const SessionHeader = memo(function SessionHeader({ session, activeRun, messages
     </div>
     <div className="project-session-header-summary">
       {locked ? <span className="project-session-header-account" title={'Provider account: ' + (account?.name ?? 'Session account')}><ProviderIcon provider={locked.provider} className="project-session-header-account-icon" /><span>{account?.name ?? 'Session account'}</span></span> : null}
-      <span className="project-session-header-metric" title={'Recorded cost: ' + usage.cost + ' · Cache hit rate: ' + usage.cache}>{usage.cost}<span className="project-session-header-metric-separator">/</span>{usage.cache}</span>
+      <span className="project-session-header-metric" title={'Recorded cost: ' + usage.cost + ' · Cache hit rate: ' + usage.cache + ' · Latest context: ' + usage.context + ' tokens'}>{usage.cost}<span className="project-session-header-metric-separator">/</span>{usage.cache}<span className="project-session-header-metric-separator">/</span>{usage.context}</span>
       <span role="status">{activeRun?.abort_requested_at ? 'Stopping…' : activeRun?.status === 'ready' ? 'Queued' : activeRun?.status === 'waiting' ? 'Waiting' : activeRun ? 'Working' : 'Idle'}</span>
     </div>
   </header>
