@@ -7,6 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+sites-harness = { path = "../../packages/harnesses/sites" }
+tool-code-mode.workspace = true
 harness-runtime.workspace = true
 unified-exec-only-harness = { path = "../../packages/harnesses/unified-exec-only-harness" }
 basic-codex-tools-harness = { path = "../../packages/harnesses/basic-codex-tools-harness" }

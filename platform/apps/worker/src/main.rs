@@ -8,8 +8,16 @@ use tracing_subscriber::EnvFilter;
 
 type Health = Arc<RwLock<Snapshot>>;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("--code-mode-runtime") {
+        return tool_code_mode::guest::main();
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve())
+}
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -38,26 +46,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let codex_enabled = std::env::var("BASIC_CODEX_TOOLS_ENABLED").as_deref() == Ok("true");
     let basic_enabled = std::env::var("BASIC_CC_TOOLS_ENABLED").as_deref() == Ok("true");
     let environments_enabled = std::env::var("ENVIRONMENTS_ENABLED").as_deref() == Ok("true");
-    if basic_enabled || codex_enabled || exec_only_enabled || environments_enabled {
+    let sites_enabled = std::env::var("SITES_ENABLED").as_deref() == Ok("true");
+    if basic_enabled || codex_enabled || exec_only_enabled || environments_enabled || sites_enabled
+    {
         let mut llm_config = llm_client::LlmClientConfig::new(
             std::env::var("LLM_GATEWAY_URL")?.parse()?,
             std::env::var("LLM_GATEWAY_API_TOKEN")?,
         );
-        let mut execution_config = execution_client::ExecutionClientConfig::new(
-            std::env::var("EXECUTION_GATEWAY_URL")?.parse()?,
-            std::env::var("EXECUTION_GATEWAY_API_TOKEN")?,
-        );
         let insecure = std::env::var("GATEWAYS_ALLOW_INSECURE_HTTP").as_deref() == Ok("true");
         llm_config.allow_insecure_http = insecure;
-        execution_config.allow_insecure_http = insecure;
         let llm = llm_client::LlmClient::new(llm_config)?;
-        let execution = execution_client::ExecutionClient::new(execution_config)?;
+        let execution =
+            if basic_enabled || codex_enabled || exec_only_enabled || environments_enabled {
+                let mut config = execution_client::ExecutionClientConfig::new(
+                    std::env::var("EXECUTION_GATEWAY_URL")?.parse()?,
+                    std::env::var("EXECUTION_GATEWAY_API_TOKEN")?,
+                );
+                config.allow_insecure_http = insecure;
+                Some(execution_client::ExecutionClient::new(config)?)
+            } else {
+                None
+            };
         if exec_only_enabled {
             registry.register(
                 unified_exec_only_harness::ID,
                 Arc::new(unified_exec_only_harness::UnifiedExecOnlyHarness::new(
                     llm.clone(),
-                    execution.clone(),
+                    execution.as_ref().unwrap().clone(),
                 )),
             )?;
         }
@@ -69,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 basic_codex_tools_harness::ID,
                 Arc::new(basic_codex_tools_harness::BasicCodexToolsHarness::new(
                     llm.clone(),
-                    execution.clone(),
+                    execution.as_ref().unwrap().clone(),
                     Arc::new(publisher),
                 )),
             )?;
@@ -79,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 basic_cc_tools_harness::ID,
                 Arc::new(basic_cc_tools_harness::BasicCcToolsHarness::new(
                     llm.clone(),
-                    execution.clone(),
+                    execution.as_ref().unwrap().clone(),
                 )),
             )?;
         }
@@ -96,7 +111,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             registry.register(
                 environments_harness::ID,
                 Arc::new(environments_harness::EnvironmentsHarness::new(
-                    llm, execution, web,
+                    llm.clone(),
+                    execution.as_ref().unwrap().clone(),
+                    web,
+                )),
+            )?;
+        }
+        if sites_enabled {
+            let web = match std::env::var("FIRECRAWL_API_KEY") {
+                Ok(key) if key.is_empty() => None,
+                Ok(key) => Some(sites_harness::WebTools {
+                    search: tool_firecrawl_search::FirecrawlSearchToolContext::new(key.clone())?,
+                    scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext::new(key)?,
+                }),
+                Err(std::env::VarError::NotPresent) => None,
+                Err(error) => return Err(error.into()),
+            };
+            let browser = match (
+                std::env::var_os("SITES_BROWSER_NODE").filter(|v| !v.is_empty()),
+                std::env::var_os("SITES_BROWSER_SCRIPT").filter(|v| !v.is_empty()),
+            ) {
+                (None, None) => None,
+                (Some(node), Some(script)) => {
+                    let node = std::path::PathBuf::from(node);
+                    let script = std::path::PathBuf::from(script);
+                    if !node.is_absolute()
+                        || !script.is_absolute()
+                        || !node.is_file()
+                        || !script.is_file()
+                    {
+                        return Err(
+                            "Sites browser requires existing absolute executable and script paths"
+                                .into(),
+                        );
+                    }
+                    Some(sites_harness::Browser { node, script })
+                }
+                _ => {
+                    return Err(
+                        "Set both SITES_BROWSER_NODE and SITES_BROWSER_SCRIPT, or neither".into(),
+                    );
+                }
+            };
+            registry.register(
+                sites_harness::ID,
+                Arc::new(sites_harness::SitesHarness::new(
+                    llm,
+                    std::env::current_exe()?,
+                    web,
+                    browser,
                 )),
             )?;
         }
