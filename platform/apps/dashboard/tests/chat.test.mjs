@@ -101,7 +101,7 @@ test('creation freezes selected config, resolves machine/snapshot shape and pass
   assert.equal(createChatRequest({ id: 'environments', config_schema: {} }, undefined, submission).config_override.environment, undefined)
   assert.throws(() => createChatRequest(harness, undefined, submission), /Select an environment/)
 })
-test('new session titles prefix only the environments harness without changing the prompt', () => {
+test('new session titles use harness-specific prefixes without changing the prompt', () => {
   const submission = { prompt: '  Set up a Python workspace  ', accountId: id, provider: 'openai', modelId: 'model', reasoningLevel: 'high', webSearchEnabled: false }
   const environmentRequest = createChatRequest({ id: 'environments', config_schema: {} }, undefined, submission)
   assert.equal(environmentRequest.title, '(Env) Set up a Python workspace')
@@ -159,4 +159,19 @@ test('mutation seeding never pretends an unloaded existing history is complete',
   assert.equal(client.getQueryData(chatKeys.messages(id)), undefined)
   assert.equal(client.getQueryData(chatKeys.runs(id)), undefined)
   client.clear()
+})
+
+test('Sites freezes an optional site and needs no authoring environment', () => {
+  const harness = { id: 'sites', config_schema: { properties: { siteId: { type: ['string', 'null'] } } } }
+  const submission = { prompt: 'Build a results site', accountId: id, provider: 'chatgpt', modelId: 'gpt-5.6-luna', reasoningLevel: 'low' }
+  const fresh = createChatRequest(harness, undefined, submission)
+  assert.equal(fresh.config_override.siteId, null)
+  assert.equal(fresh.config_override.environment, undefined)
+  assert.equal(fresh.title, '(Sites) Build a results site')
+  const existing = createChatRequest(harness, { type: 'sandbox', snapshot_id: id }, submission, id)
+  assert.equal(existing.config_override.siteId, id)
+  assert.equal(existing.config_override.environment, undefined)
+  assert.equal(existing.config_override.account_id, id)
+  assert.throws(() => createChatRequest(harness, undefined, submission, 'bad-site'), /site/i)
+  for (const event of ['code_mode.journal', 'run.output_published']) assert.ok(RUN_EVENT_TYPES.includes(event))
 })

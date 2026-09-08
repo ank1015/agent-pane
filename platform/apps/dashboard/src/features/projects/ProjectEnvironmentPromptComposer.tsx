@@ -23,6 +23,7 @@ import { ProviderIcon } from '../providers/provider-icons'
 type ProjectEnvironmentPromptComposerProps = {
   promptValue?: string
   placeholder?: string
+  promptLabel?: string
   onPromptChange?: (prompt: string) => void
   defaultReasoningLevel?: string
   webSearchSupported?: boolean
@@ -71,6 +72,7 @@ type AccountTooltip = {
 export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironmentPromptComposer({
   promptValue,
   placeholder = 'Describe the Environment',
+  promptLabel = 'Environment instructions',
   onPromptChange,
   defaultReasoningLevel,
   webSearchSupported = true,
@@ -272,7 +274,7 @@ export const ProjectEnvironmentPromptComposer = memo(function ProjectEnvironment
         className="project-environment-composer-input"
         value={prompt}
         placeholder={placeholder}
-        aria-label="Environment instructions"
+        aria-label={promptLabel}
         spellCheck
         readOnly={isSubmitting}
         onChange={(event) => setPrompt(event.target.value)}

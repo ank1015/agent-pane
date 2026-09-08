@@ -1,4 +1,4 @@
-import { ENVIRONMENTS_HARNESS_ID, type Harness } from './project-bootstrap'
+import { ENVIRONMENTS_HARNESS_ID, SITES_HARNESS_ID, type Harness } from './project-bootstrap'
 import type { ProjectEnvironment } from './project-types'
 import type { ProjectEnvironmentPromptSubmission, ProjectEnvironmentPromptLockedOptions } from './ProjectEnvironmentPromptComposer'
 import type { CreateSessionRequest, JsonObject } from './project-session-types'
@@ -18,7 +18,7 @@ export function sessionReasoningLevels(harness: Harness | undefined, selected: s
   return [...levels, selected]
 }
 
-export function createChatRequest(harness: Harness, environment: ProjectEnvironment | undefined, submission: ProjectEnvironmentPromptSubmission): CreateSessionRequest {
+export function createChatRequest(harness: Harness, environment: ProjectEnvironment | undefined, submission: ProjectEnvironmentPromptSubmission, siteId: string | null = null): CreateSessionRequest {
   const config: JsonObject = {
     model: { provider: submission.provider, id: submission.modelId },
     account_id: submission.accountId,
@@ -31,7 +31,11 @@ export function createChatRequest(harness: Harness, environment: ProjectEnvironm
     if (!sourceId) throw new Error('This environment is missing its machine or snapshot.')
     config.environment = { type: environment.type, [environment.type === 'machine' ? 'machine_id' : 'snapshot_id']: sourceId, workspace_root: environment.workspace_root, path: environment.path }
   }
-  const titlePrefix = harness.id === ENVIRONMENTS_HARNESS_ID ? '(Env) ' : ''
+  if (harness.id === SITES_HARNESS_ID) {
+    if (siteId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(siteId)) throw new Error('Select a valid site.')
+    config.siteId = siteId
+  }
+  const titlePrefix = harness.id === ENVIRONMENTS_HARNESS_ID ? '(Env) ' : harness.id === SITES_HARNESS_ID ? '(Sites) ' : ''
   const title = (titlePrefix + submission.prompt.trim()).slice(0, 80)
   return { harness_id: harness.id, title, config_override: config, initial_run: { expected_session_revision: 0, input: userMessage(submission.prompt) } }
 }

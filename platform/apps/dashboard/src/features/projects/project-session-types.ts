@@ -126,6 +126,7 @@ export type SessionMessage = {
   deliveryLabel?: string
 }
 export type ChatSession = {
+  site_id?: string | null
   id: string; project_id: string; harness_id: string; title: string | null
   config: JsonObject; current_revision: number; active_run: ProjectRunSummary | null
   archived_at: string | null

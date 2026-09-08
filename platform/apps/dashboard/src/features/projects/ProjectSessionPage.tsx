@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { LoaderCircleIcon } from 'lucide-react'
 import { CloudIcon, ComputerIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -143,6 +143,7 @@ const SessionHeader = memo(function SessionHeader({ session, activeRun, messages
   return <header className="project-session-header">
     <div className="project-session-context">
       <span className="project-context-picker-trigger project-context-picker-trigger--static" title={session.harness_id}>{session.harness_id}</span>
+      {session.harness_id === 'sites' ? (session.site_id || typeof session.config.siteId === 'string' ? <Link className="project-context-picker-trigger" to={`/projects/${session.project_id}/sites/${session.site_id || session.config.siteId}`}>View site</Link> : <span className="provider-detail">Site created when authoring begins</span>) : null}
       {descriptor ? <span className="project-context-picker-trigger project-context-picker-trigger--static" title={environment?.name ?? descriptor.path}>
         <HugeiconsIcon icon={descriptor.type === 'machine' ? ComputerIcon : CloudIcon} size={13} strokeWidth={1.5} aria-hidden="true" />
         <span>{environment?.name ?? descriptor.path ?? 'Environment'}</span>

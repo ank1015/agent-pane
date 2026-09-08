@@ -16,6 +16,7 @@ export type ProjectBootstrap = {
 }
 
 export const ENVIRONMENTS_HARNESS_ID = 'environments'
+export const SITES_HARNESS_ID = 'sites'
 
 export function harnessOptions(data: ProjectBootstrap | undefined, harness: Harness | undefined) {
   const properties = harness?.config_schema?.properties

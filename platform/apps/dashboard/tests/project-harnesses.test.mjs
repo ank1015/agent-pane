@@ -15,16 +15,18 @@ const { ApiError } = await vite.ssrLoadModule('/src/lib/api-client.ts')
 const project = '01900000-0000-7000-8000-000000000001'
 const harness = (id, project_enabled, project_policy = 'opt_in') => ({ id, name: id, description: null, project_enabled, project_policy, enabled: true, globally_enabled: true, available: project_enabled, supported_models: {}, config_schema: null, default_config: {} })
 const required = harness('Environments', true, 'required')
+const sites = harness('Sites', true, 'required')
 const optional = harness('Basic CC', true)
 const unused = harness('Unused', false)
 
-test('table shares provider styling, includes active platform and opt-in harnesses, and only optional rows have remove buttons', () => {
+test('table shows platform-owned Sites without a remove button', () => {
   const client = new QueryClient()
-  client.setQueryData(projectKeys.harnesses(project), { items: [required, optional, unused] })
+  client.setQueryData(projectKeys.harnesses(project), { items: [required, sites, optional, unused] })
   try {
     const html = renderToStaticMarkup(createElement(QueryClientProvider, { client }, createElement(ProjectHarnessesTable, { projectId: project })))
-    for (const value of ['providers-table', 'provider-add-button', 'Environments', 'Platform', 'Basic CC', 'Opt-in', 'Remove Basic CC']) assert.ok(html.includes(value), value)
+    for (const value of ['providers-table', 'provider-add-button', 'Environments', 'Sites', 'Platform', 'Basic CC', 'Opt-in', 'Remove Basic CC']) assert.ok(html.includes(value), value)
     assert.ok(!html.includes('Remove Environments'))
+    assert.ok(!html.includes('Remove Sites'))
     assert.ok(!html.includes('Unused'))
   } finally { client.clear() }
 })
