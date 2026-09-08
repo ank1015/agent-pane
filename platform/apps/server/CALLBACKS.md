@@ -88,8 +88,9 @@ For a batch barrier, apply the following pattern:
    again before acknowledging. An early return for a duplicate event can strand
    work if the previous execution died after step 1.
 
-Application tables must be created with the existing release migration API while
-the site is suspended; `ctx.db` intentionally cannot execute schema changes.
+Create application tables during live authoring with `ctx.sites.execute`; the
+legacy release migration API remains supported. Backend `ctx.db` intentionally
+cannot execute schema changes.
 A minimal drain looks like this (table names are application-defined):
 
 ```js

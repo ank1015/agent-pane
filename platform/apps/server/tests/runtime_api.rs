@@ -126,6 +126,21 @@ async fn project_harness_defaults_scope_required_policy_and_validation(pool: PgP
     assert_eq!(env["project_policy"], "required");
     assert_eq!(env["project_enabled"], true);
     assert_eq!(env["available"], true);
+    let sites = items.iter().find(|h| h["id"] == "sites").unwrap();
+    assert_eq!(sites["project_policy"], "required");
+    assert_eq!(sites["project_enabled"], true);
+    assert_eq!(sites["available"], true);
+    let required_path = format!("/api/projects/{other}/harnesses/sites");
+    let denied = app
+        .check(
+            Method::PUT,
+            &required_path,
+            None,
+            Some(json!({"enabled":false})),
+            409,
+        )
+        .await;
+    assert_eq!(denied["error"]["code"], "PROJECT_HARNESS_REQUIRED");
     let optional = items.iter().find(|h| h["id"] == "test").unwrap();
     assert_eq!(optional["project_policy"], "opt_in");
     assert_eq!(optional["globally_enabled"], true);
