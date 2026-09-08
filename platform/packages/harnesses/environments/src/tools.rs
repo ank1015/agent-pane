@@ -407,7 +407,7 @@ impl Tools<'_> {
                         && record.desired_state == DesiredSnapshotState::Ready
                     {
                         return Ok(Progress::done(Output::json(
-                            json!({"snapshot_id":id,"host_id":host_id,"e2b_account_id":record.e2b_account_id,"name":record.name,"state":"ready","note":"Filesystem calls resume the source builder automatically if needed."}),
+                            json!({"snapshot_id":id,"host_id":host_id,"e2b_account_id":record.e2b_account_id,"name":record.name,"state":"ready"}),
                         )?));
                     }
                     if matches!(
