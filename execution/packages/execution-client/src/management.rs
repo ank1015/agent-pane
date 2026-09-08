@@ -37,6 +37,15 @@ pub struct SnapshotFilter {
 }
 
 impl ExecutionClient {
+    /// Request deletion of an existing host; the returned state may still be deleting.
+    pub async fn delete_host(
+        &self,
+        ctx: &OperationContext,
+        id: Uuid,
+    ) -> ExecutionResult<ExecutionHost> {
+        self.management(ctx, Method::DELETE, &format!("hosts/{id}"), None, None, &())
+            .await
+    }
     pub async fn list_accounts(&self, ctx: &OperationContext) -> ExecutionResult<Vec<E2bAccount>> {
         self.management(ctx, Method::GET, "e2b-accounts", None, None, &())
             .await
