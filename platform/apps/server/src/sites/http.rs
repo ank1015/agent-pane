@@ -28,6 +28,30 @@ pub fn router(service: SitesService) -> Router {
             "/api/projects/{project}/sites/{site}/invocations/{invocation}",
             get(inspect),
         )
+        .route(
+            "/api/projects/{project}/sites/{site}/diagnostics",
+            get(diagnostics),
+        )
+        .route(
+            "/api/projects/{project}/sites/{site}/sessions",
+            get(authoring_sessions),
+        )
+        .route(
+            "/api/projects/{project}/sites/{site}/source",
+            get(source).patch(edit),
+        )
+        .route(
+            "/api/projects/{project}/sites/{site}/snapshots",
+            get(snapshots).post(snapshot),
+        )
+        .route(
+            "/api/projects/{project}/sites/{site}/snapshots/{snapshot}/restore",
+            post(restore),
+        )
+        .route(
+            "/api/projects/{project}/sites/{site}/authoring/{operation}",
+            get(authoring_operation),
+        )
         .route("/internal/site-access/{project}", put(access))
         .route(
             "/api/projects/{project}/sites/{site}/callbacks",
@@ -99,13 +123,21 @@ async fn authenticate(
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Grant {
     id: String,
+    #[serde(default = "declared_mode")]
     environment_mode: String,
+    #[serde(default)]
+    configurable_fields: Vec<String>,
+}
+fn declared_mode() -> String {
+    "declared".into()
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Access {
     token: String,
     enabled: bool,
+    #[serde(default)]
+    execution_enabled: bool,
     harnesses: Vec<Grant>,
     account_ids: Vec<Uuid>,
 }
@@ -130,8 +162,8 @@ async fn access(
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(Error::NotFound)?;
-    sqlx::query("insert into site_project_access(project_id,token_hash,enabled) values($1,$2,$3) on conflict(project_id) do update set token_hash=$2,enabled=$3")
-        .bind(project).bind(hash).bind(input.enabled).execute(&mut *tx).await?;
+    sqlx::query("insert into site_project_access(project_id,token_hash,enabled,execution_enabled) values($1,$2,$3,$4) on conflict(project_id) do update set token_hash=$2,enabled=$3,execution_enabled=$4")
+        .bind(project).bind(hash).bind(input.enabled).bind(input.execution_enabled).execute(&mut *tx).await?;
     sqlx::query("delete from site_harness_grants where project_id=$1")
         .bind(project)
         .execute(&mut *tx)
@@ -142,11 +174,21 @@ async fn access(
         .await?;
     for grant in input.harnesses {
         if !platform_runtime_contracts::is_valid_harness_id(&grant.id)
-            || !matches!(grant.environment_mode.as_str(), "none" | "single")
+            || !matches!(
+                grant.environment_mode.as_str(),
+                "none" | "single" | "declared"
+            )
+            || grant.configurable_fields.len() > 64
+            || grant.configurable_fields.iter().any(|f| {
+                f.is_empty()
+                    || f.len() > 128
+                    || f.chars().any(char::is_control)
+                    || f == "account_id"
+            })
         {
             return Err(invalid("Invalid harness grant."));
         }
-        sqlx::query("insert into site_harness_grants(project_id,harness_id,environment_mode) values($1,$2,$3)").bind(project).bind(grant.id).bind(grant.environment_mode).execute(&mut *tx).await?;
+        sqlx::query("insert into site_harness_grants(project_id,harness_id,environment_mode,configurable_fields) values($1,$2,$3,$4)").bind(project).bind(grant.id).bind(grant.environment_mode).bind(grant.configurable_fields).execute(&mut *tx).await?;
     }
     for id in input.account_ids {
         sqlx::query("insert into site_account_grants(project_id,account_id) values($1,$2) on conflict do nothing").bind(project).bind(id).execute(&mut *tx).await?;
@@ -434,4 +476,155 @@ async fn callback_retry(
         return Err(Error::Conflict);
     }
     Ok(Json(super::callbacks::get(&s.pool, site, callback).await?))
+}
+
+async fn source(
+    State(s): State<SitesService>,
+    Path((project, site)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Value>> {
+    s.site(project, site).await?;
+    Ok(Json(
+        s.client
+            .call(
+                reqwest::Method::GET,
+                &format!("/internal/sites/{site}/source"),
+                None,
+            )
+            .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Edit {
+    id: Uuid,
+    patch: String,
+}
+async fn edit(
+    State(s): State<SitesService>,
+    Path((project, site)): Path<(Uuid, Uuid)>,
+    Json(input): Json<Edit>,
+) -> Result<Json<Value>> {
+    ready(&s, project, site).await?;
+    Ok(Json(
+        s.client
+            .call(
+                reqwest::Method::POST,
+                &format!("/internal/sites/{site}/authoring"),
+                Some(&json!({"id":input.id,"type":"patch","patch":input.patch})),
+            )
+            .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotInput {
+    id: Uuid,
+    name: String,
+}
+async fn snapshot(
+    State(s): State<SitesService>,
+    Path((project, site)): Path<(Uuid, Uuid)>,
+    Json(input): Json<SnapshotInput>,
+) -> Result<Json<Value>> {
+    ready(&s, project, site).await?;
+    Ok(Json(
+        s.client
+            .call(
+                reqwest::Method::POST,
+                &format!("/internal/sites/{site}/authoring"),
+                Some(&json!({"id":input.id,"type":"snapshot","name":input.name})),
+            )
+            .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotPage {
+    after: Option<Uuid>,
+    limit: Option<u32>,
+}
+async fn snapshots(
+    State(s): State<SitesService>,
+    Path((project, site)): Path<(Uuid, Uuid)>,
+    Query(q): Query<SnapshotPage>,
+) -> Result<Json<Value>> {
+    s.site(project, site).await?;
+    let limit = q.limit.unwrap_or(20);
+    if !(1..=50).contains(&limit) {
+        return Err(invalid("Invalid snapshot page size."));
+    }
+    let after = q.after.map(|id| format!("&after={id}")).unwrap_or_default();
+    Ok(Json(
+        s.client
+            .call(
+                reqwest::Method::GET,
+                &format!("/internal/sites/{site}/snapshots?limit={limit}{after}"),
+                None,
+            )
+            .await?,
+    ))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Restore {
+    id: Uuid,
+}
+async fn restore(
+    State(s): State<SitesService>,
+    Path((project, site, snapshot)): Path<(Uuid, Uuid, Uuid)>,
+    Json(input): Json<Restore>,
+) -> Result<Json<Value>> {
+    ready(&s, project, site).await?;
+    Ok(Json(
+        s.client
+            .call(
+                reqwest::Method::POST,
+                &format!("/internal/sites/{site}/authoring"),
+                Some(&json!({"id":input.id,"type":"restore","snapshot_id":snapshot})),
+            )
+            .await?,
+    ))
+}
+async fn authoring_operation(
+    State(s): State<SitesService>,
+    Path((project, site, operation)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<Json<Value>> {
+    s.site(project, site).await?;
+    Ok(Json(
+        s.client
+            .call(
+                reqwest::Method::GET,
+                &format!("/internal/sites/{site}/authoring/{operation}"),
+                None,
+            )
+            .await?,
+    ))
+}
+
+/// Recent authoring conversations, including an explicitly selected site before
+/// its first authoring call. The project credential and site membership are checked.
+async fn authoring_sessions(
+    State(s): State<SitesService>,
+    Path((project, site)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Value>> {
+    s.site(project, site).await?;
+    let items:Vec<Value>=sqlx::query_scalar("select jsonb_build_object('id',ss.id,'title',ss.title,'created_at',ss.created_at,'active_run', (select jsonb_build_object('id',r.id,'status',r.status) from runs r where r.session_id=ss.id and r.status in ('ready','running','waiting'))) from sessions ss where ss.project_id=$1 and ss.harness_id='sites' and ss.archived_at is null and (exists(select 1 from site_authoring_bindings b where b.session_id=ss.id and b.site_id=$2) or ss.config->>'siteId'=$2::text) order by ss.created_at desc,ss.id desc limit 20")
+        .bind(project).bind(site).fetch_all(&s.pool).await?;
+    Ok(Json(json!({"items":items})))
+}
+
+async fn diagnostics(
+    State(s): State<SitesService>,
+    Path((project, site)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Value>> {
+    s.site(project, site).await?;
+    Ok(Json(
+        s.client
+            .call(
+                reqwest::Method::GET,
+                &format!("/internal/sites/{site}/authoring-logs"),
+                None,
+            )
+            .await?,
+    ))
 }
