@@ -7,6 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+schemars = { version = "=1.2.2", optional = true, features = ["chrono04", "uuid1"] }
 chrono.workspace = true
 llm-contracts.workspace = true
 serde.workspace = true
@@ -14,6 +15,8 @@ serde_json.workspace = true
 
 uuid.workspace = true
 
+[features]
+schema = ["dep:schemars", "llm-contracts/schema"]
+
 [lints]
 workspace = true
-

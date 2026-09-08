@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum EnvironmentType {
     Machine,
     Sandbox,
@@ -12,6 +13,7 @@ pub enum EnvironmentType {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CreateEnvironment {
     pub name: String,
     #[serde(rename = "type")]
@@ -25,6 +27,7 @@ pub struct CreateEnvironment {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Environment {
     pub id: Uuid,
     pub project_id: Uuid,
