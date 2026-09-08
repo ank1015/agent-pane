@@ -16,8 +16,11 @@ pub struct Timestamp(pub u64);
 /// Message sent by a user.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UserMessage {
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub id: MessageId,
+    #[cfg_attr(feature = "schema", schemars(with = "u64"))]
     pub timestamp: Timestamp,
     pub content: Vec<ContentPart>,
 }
