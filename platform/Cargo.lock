@@ -489,6 +489,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
+name = "dyn-clone"
+version = "1.0.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
 name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -933,6 +939,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "platform-runtime-client",
+ "serde_json",
  "tokio",
  "uuid",
 ]
@@ -1446,6 +1453,7 @@ name = "llm-contracts"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -1770,6 +1778,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "platform-agent-code-mode"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "harness-runtime",
+ "platform-javascript-sdk",
+ "platform-runtime-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tool-code-mode",
+ "uuid",
+]
+
+[[package]]
+name = "platform-javascript-sdk"
+version = "0.1.0"
+dependencies = [
+ "platform-runtime-contracts",
+ "schemars",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "platform-runtime-client"
 version = "0.1.0"
 dependencies = [
@@ -1793,6 +1827,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "llm-contracts",
+ "schemars",
  "serde",
  "serde_json",
  "uuid",
@@ -1807,10 +1842,16 @@ dependencies = [
  "chrono",
  "dotenvy",
  "execution-api",
+ "execution-client",
  "execution-core",
+ "execution-supervisor-core",
+ "execution-wire",
  "futures-util",
+ "harness-runtime",
  "jsonschema",
+ "llm-client",
  "llm-contracts",
+ "platform-agent-code-mode",
  "platform-runtime-client",
  "platform-runtime-contracts",
  "rand 0.8.8",
@@ -1818,10 +1859,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sites-harness",
  "sqlx",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tool-bash-minimal",
+ "tool-code-mode",
+ "tool-filesystem",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -1838,6 +1883,8 @@ dependencies = [
  "dotenvy",
  "fs2",
  "hmac",
+ "platform-javascript-sdk",
+ "platform-runtime-contracts",
  "reqwest",
  "rquickjs",
  "rusqlite",
@@ -1850,6 +1897,8 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
+ "tool-apply-patch",
+ "tool-code-mode",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -1876,8 +1925,10 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sites-harness",
  "sqlx",
  "tokio",
+ "tool-code-mode",
  "tool-firecrawl-scrape",
  "tool-firecrawl-search",
  "tracing",
@@ -2413,6 +2464,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "schemars"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "687274d293b6cdc6e73e0fee520bf2049650090d7164f87672d212a3c530cf4a"
+dependencies = [
+ "chrono",
+ "dyn-clone",
+ "ref-cast",
+ "schemars_derive",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d98c67716b46af2f0b8cf752abc930f6f9aecfbf671ecfb531db8a31dbe4e2ba"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn 3.0.4",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2442,6 +2520,17 @@ name = "serde_derive"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.4",
+]
+
+[[package]]
+name = "serde_derive_internals"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2580,6 +2669,31 @@ name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
+name = "sites-harness"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "harness-runtime",
+ "jsonschema",
+ "llm-client",
+ "llm-contracts",
+ "nix",
+ "platform-agent-code-mode",
+ "platform-javascript-sdk",
+ "platform-runtime-client",
+ "provider-chatgpt",
+ "provider-fireworks",
+ "provider-openai",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tool-firecrawl-scrape",
+ "tool-firecrawl-search",
+ "uuid",
+]
 
 [[package]]
 name = "slab"
@@ -3096,6 +3210,22 @@ dependencies = [
  "tempfile",
  "tokio",
  "tool-filesystem",
+]
+
+[[package]]
+name = "tool-code-mode"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "jsonschema",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
