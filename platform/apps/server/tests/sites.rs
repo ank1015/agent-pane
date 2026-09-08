@@ -22,6 +22,15 @@ const CAP: &str = "sites-test-capability-token-01234567890123456789";
 const TOKEN: &str = "sites-test-project-token-01234567890123456789";
 const SERVICE: &str = "sites-test-service-token-01234567890123456789";
 const HARNESS: &str = "basic-cc-tools-harness";
+#[cfg(test)]
+#[path = "support/capabilities.rs"]
+mod capabilities;
+#[cfg(all(test, unix))]
+#[path = "support/code_mode.rs"]
+mod code_mode;
+#[cfg(all(test, unix))]
+#[path = "support/remote.rs"]
+mod remote;
 struct Fixture {
     service: SitesService,
     pool: PgPool,
@@ -38,6 +47,7 @@ struct Fixture {
     foreign_environment: Uuid,
     account: Uuid,
     release: Uuid,
+    runtime: RuntimeService,
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -62,6 +72,14 @@ impl Fixture {
         pool: PgPool,
         code: Option<&str>,
         content: Option<(String, String)>,
+    ) -> Self {
+        Self::with_remote_content(pool, code, content, None).await
+    }
+    async fn with_remote_content(
+        pool: PgPool,
+        code: Option<&str>,
+        content: Option<(String, String)>,
+        gateway: Option<&str>,
     ) -> Self {
         let project = Uuid::now_v7();
         let other = Uuid::now_v7();
@@ -171,10 +189,20 @@ impl Fixture {
             LlmGatewayClient::new(provider_url.parse().unwrap(), ADMIN, Duration::from_secs(3))
                 .unwrap(),
         );
+        let mut runtime = RuntimeService::new(pool.clone())
+            .with_providers(providers.clone())
+            .with_sites(SitesClient::new(sites_url.parse().unwrap(), SERVICE).unwrap());
+        if let Some(url) = gateway {
+            let mut config =
+                execution_client::ExecutionClientConfig::new(url.parse().unwrap(), ADMIN);
+            config.allow_insecure_http = true;
+            runtime =
+                runtime.with_execution(execution_client::ExecutionClient::new(config).unwrap());
+        }
         let service = SitesService::new(
             pool.clone(),
             SitesClient::new(sites_url.parse().unwrap(), SERVICE).unwrap(),
-            RuntimeService::new(pool.clone()),
+            runtime.clone(),
             providers,
             CAP,
             ADMIN,
@@ -212,6 +240,7 @@ impl Fixture {
             foreign_environment,
             account,
             release: Uuid::nil(),
+            runtime,
         };
         for _ in 0..100 {
             if f.client
@@ -564,6 +593,118 @@ async fn site_sdk_end_to_end(pool: PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires local PostgreSQL and a built sites-service binary"]
+async fn site_reads_harness_outputs_through_the_real_backend_bridge(pool: PgPool) {
+    use platform_runtime_client::{
+        ClientConfig, Command as RuntimeCommand, PlatformClient, RequestKey, WorkerRegistration,
+        types::*,
+    };
+    let mut f = Fixture::new(pool).await;
+    sqlx::query("update harnesses set harness_contract=$1 where id=$2")
+        .bind(json!({"outputs":{"result":{"kind":"json"}}}))
+        .bind(HARNESS)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let accepted = f
+        .sdk(
+            "sessions.start",
+            json!([f.start(),{"idempotencyKey":"output-test"}]),
+        )
+        .await;
+    assert_eq!(accepted["status"], 200, "{accepted}");
+    let run: Uuid = serde_json::from_value(accepted["body"]["runId"].clone()).unwrap();
+    assert_eq!(
+        f.sdk("runs.outputs", json!([run])).await["body"]["items"],
+        json!([])
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let routes =
+        platform_server::runtime::worker_router(RuntimeService::new(f.pool.clone()), ADMIN);
+    f.tasks.push(tokio::spawn(async move {
+        axum::serve(listener, routes).await.unwrap();
+    }));
+    let client = PlatformClient::new(&url, Uuid::new_v4(), TOKEN, ClientConfig::default()).unwrap();
+    client
+        .register(
+            ADMIN,
+            &WorkerRegistration {
+                build_id: "outputs-test".into(),
+                supported_harnesses: vec![HARNESS.into()],
+                capacity: 1,
+            },
+        )
+        .await
+        .unwrap();
+    let assignments = client
+        .claim(&RuntimeCommand::new(
+            RequestKey::new("claim").unwrap(),
+            Claim { limit: 1 },
+        ))
+        .await
+        .unwrap();
+    let caller = client.run(assignments.items[0].lease()).unwrap();
+    assert_eq!(caller.lease().run_id, run);
+    let published = caller
+        .publish_output(&RuntimeCommand::new(
+            RequestKey::new("publish").unwrap(),
+            PublishRunOutput {
+                name: "result".into(),
+                output: OutputValue::Json(json!({"score":42})),
+            },
+        ))
+        .await
+        .unwrap();
+    let ctx = caller.context(&ContextQuery::default()).await.unwrap();
+    let mut commit = Commit::new(ctx.run.run.version, ctx.session.current_revision);
+    commit.disposition = Disposition::Failed {
+        error: json!({"kind":"test"}).as_object().unwrap().clone(),
+    };
+    caller
+        .commit(&RuntimeCommand::new(
+            RequestKey::new("finish").unwrap(),
+            commit,
+        ))
+        .await
+        .unwrap();
+    let result = f.sdk("runs.outputs", json!([run,{"limit":1}])).await;
+    assert_eq!(result["status"], 200, "{result}");
+    let page: RunOutputsPage = serde_json::from_value(result["body"].clone()).unwrap();
+    assert_eq!(page.items, vec![published]);
+    assert_eq!(
+        f.sdk("runs.outputs", json!([run,{"afterSequence":1}]))
+            .await["body"]["items"],
+        json!([])
+    );
+    assert_eq!(
+        f.sdk("runs.outputs", json!([run,{"limit":51}])).await["status"],
+        400
+    );
+    let foreign_session = Uuid::now_v7();
+    let foreign_run = Uuid::now_v7();
+    sqlx::query("insert into sessions(id,project_id,harness_id,config) values($1,$2,$3,'{}')")
+        .bind(foreign_session)
+        .bind(f.other)
+        .bind(HARNESS)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    sqlx::query("insert into runs(id,project_id,session_id) values($1,$2,$3)")
+        .bind(foreign_run)
+        .bind(f.other)
+        .bind(foreign_session)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        f.sdk("runs.outputs", json!([foreign_run])).await["body"]["code"],
+        "RUNTIME_NOT_FOUND"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires local PostgreSQL and a built sites-service binary"]
 async fn site_management_grants_and_uncertain_provisioning(pool: PgPool) {
     let mut f = Fixture::new(pool).await;
     let path = format!("/api/projects/{}/sites/{}", f.project, f.site);
@@ -611,7 +752,10 @@ async fn site_management_grants_and_uncertain_provisioning(pool: PgPool) {
         .await;
     assert_eq!(first, replay);
     assert_eq!(first["response"]["body"]["env"], json!(["list", "get"]));
-    assert_eq!(first["response"]["body"]["harness"], json!(["list", "get"]));
+    assert_eq!(
+        first["response"]["body"]["harness"],
+        json!(["list", "get", "startOptions"])
+    );
     let mut changed = call.clone();
     changed["request"]["path"] = json!("/other");
     f.request(
@@ -1391,3 +1535,11 @@ pub async fn browser_preview(pool: PgPool) {
     let _ = vite.kill();
     let _ = vite.wait();
 }
+
+#[cfg(all(test, unix))]
+#[path = "support/sites_authoring.rs"]
+mod sites_authoring;
+
+#[cfg(all(test, unix))]
+#[path = "support/sites_harness.rs"]
+mod sites_harness;

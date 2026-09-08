@@ -2,17 +2,21 @@
 mod admin;
 mod admin_http;
 mod background;
+mod capabilities;
 mod commits;
 mod configuration;
 mod coordination;
 mod environments;
 mod error;
 mod http;
+mod metrics;
 mod model;
 mod mutations;
 mod project_harnesses;
 mod queries;
 mod receipts;
+mod remote_operations;
+mod run_outputs;
 mod session_state;
 mod stream;
 mod waits;
@@ -36,6 +40,9 @@ pub struct RuntimeService {
     pool: PgPool,
     signals: broadcast::Sender<Uuid>,
     environments: Option<crate::projects::environments::EnvironmentService>,
+    providers: Option<crate::providers::ProviderService>,
+    execution: Option<execution_client::ExecutionClient>,
+    sites: Option<crate::sites::SitesClient>,
 }
 
 impl RuntimeService {
@@ -45,6 +52,9 @@ impl RuntimeService {
             pool,
             signals,
             environments: None,
+            providers: None,
+            execution: None,
+            sites: None,
         }
     }
 
@@ -56,10 +66,25 @@ impl RuntimeService {
         self
     }
 
+    pub fn with_providers(mut self, service: crate::providers::ProviderService) -> Self {
+        self.providers = Some(service);
+        self
+    }
+    pub fn with_execution(mut self, client: execution_client::ExecutionClient) -> Self {
+        self.execution = Some(client);
+        self
+    }
+
+    pub fn with_sites(mut self, client: crate::sites::SitesClient) -> Self {
+        self.sites = Some(client);
+        self
+    }
+
     fn notify(&self, run: Uuid) {
         let _ = self.signals.send(run);
     }
 }
 
 mod site_sdk;
+mod sites_authoring;
 pub use site_sdk::SiteScope;

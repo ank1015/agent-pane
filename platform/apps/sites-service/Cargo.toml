@@ -7,6 +7,10 @@ rust-version = "1.87"
 license.workspace = true
 
 [dependencies]
+tool-apply-patch.workspace = true
+platform-runtime-contracts.workspace = true
+tool-code-mode.workspace = true
+platform-javascript-sdk.workspace = true
 reqwest.workspace = true
 axum.workspace = true
 base64.workspace = true

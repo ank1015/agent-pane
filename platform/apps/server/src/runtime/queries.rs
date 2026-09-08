@@ -14,7 +14,7 @@ pub(super) const RUN_JSON: &str = "to_jsonb(r) - 'worker_id' - 'lease_epoch' - '
 
 fn session_projection() -> String {
     format!(
-        "to_jsonb(s) || jsonb_build_object('active_run', (select {RUN_JSON} from runs r where r.session_id=s.id and r.status in ('ready','running','waiting')))"
+        "to_jsonb(s) || jsonb_build_object('site_id',(select b.site_id from site_authoring_bindings b where b.session_id=s.id),'active_run', (select {RUN_JSON} from runs r where r.session_id=s.id and r.status in ('ready','running','waiting')))"
     )
 }
 
@@ -117,11 +117,19 @@ impl RuntimeService {
         column: &'static str,
         id: Uuid,
     ) -> Result<()> {
+        Self::exists_on(&mut *self.pool.acquire().await?, table, column, id).await
+    }
+    pub(super) async fn exists_on(
+        db: &mut PgConnection,
+        table: &'static str,
+        column: &'static str,
+        id: Uuid,
+    ) -> Result<()> {
         let found: bool = sqlx::query_scalar(&format!(
             "select exists(select 1 from {table} where {column}=$1)"
         ))
         .bind(id)
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *db)
         .await?;
         if found {
             Ok(())
@@ -130,12 +138,19 @@ impl RuntimeService {
         }
     }
     pub(super) async fn sessions(&self, project: Uuid, q: ListQuery) -> Result<Value> {
+        Self::sessions_on(&mut *self.pool.acquire().await?, project, q).await
+    }
+    pub(super) async fn sessions_on(
+        db: &mut PgConnection,
+        project: Uuid,
+        q: ListQuery,
+    ) -> Result<Value> {
         if q.status.is_some() {
             return Err(RuntimeError::Invalid(
                 "Sessions do not support status filtering.",
             ));
         }
-        self.exists("projects", "project_id", project).await?;
+        Self::exists_on(db, "projects", "project_id", project).await?;
         let count = limit(q.limit)?;
         let archived = q.archived.unwrap_or(false);
         let tag = format!("sessions:v1:{project}:{archived}");
@@ -160,13 +175,21 @@ impl RuntimeService {
             .push(" order by last_activity_at desc,id desc limit ")
             .push_bind(count + 1);
         page(
-            query.build_query_scalar().fetch_all(&self.pool).await?,
+            query.build_query_scalar().fetch_all(&mut *db).await?,
             count,
             tag,
             "last_activity_at",
         )
     }
     pub(super) async fn runs(&self, id: Uuid, children: bool, q: ListQuery) -> Result<Value> {
+        Self::runs_on(&mut *self.pool.acquire().await?, id, children, q).await
+    }
+    pub(super) async fn runs_on(
+        db: &mut PgConnection,
+        id: Uuid,
+        children: bool,
+        q: ListQuery,
+    ) -> Result<Value> {
         if q.archived.is_some() {
             return Err(RuntimeError::Invalid(
                 "Runs do not support archived filtering.",
@@ -186,8 +209,7 @@ impl RuntimeService {
                 return Err(RuntimeError::Invalid("Invalid run status."));
             }
         }
-        self.exists(if children { "runs" } else { "sessions" }, "id", id)
-            .await?;
+        Self::exists_on(db, if children { "runs" } else { "sessions" }, "id", id).await?;
         let count = limit(q.limit)?;
         let tag = format!("runs:v1:{id}:{children}:{:?}", q.status);
         let c = cursor(q.cursor.as_deref(), &tag)?;
@@ -215,14 +237,21 @@ impl RuntimeService {
             .push(" order by created_at,id limit ")
             .push_bind(count + 1);
         page(
-            query.build_query_scalar().fetch_all(&self.pool).await?,
+            query.build_query_scalar().fetch_all(&mut *db).await?,
             count,
             tag,
             "created_at",
         )
     }
     pub(super) async fn messages(&self, id: Uuid, q: MessageQuery) -> Result<Value> {
-        self.exists("sessions", "id", id).await?;
+        Self::messages_on(&mut *self.pool.acquire().await?, id, q).await
+    }
+    pub(super) async fn messages_on(
+        db: &mut PgConnection,
+        id: Uuid,
+        q: MessageQuery,
+    ) -> Result<Value> {
+        Self::exists_on(db, "sessions", "id", id).await?;
         let count = limit(q.limit)?;
         let after = after(q.after_revision)?;
         if let Some(run) = q.run_id {
@@ -231,14 +260,14 @@ impl RuntimeService {
             )
             .bind(run)
             .bind(id)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *db)
             .await?;
             if !found {
                 return Err(RuntimeError::NotFound);
             }
         }
         let items=sqlx::query_scalar("select jsonb_build_object('message_id',m.id,'revision',sm.revision,'run_id',sm.run_id,'origin_run_id',m.origin_run_id,'message',m.message,'created_at',m.created_at) from session_messages sm join messages m on m.id=sm.message_id where sm.session_id=$1 and sm.revision>$2 and ($3::uuid is null or sm.run_id=$3) order by sm.revision limit $4")
-            .bind(id).bind(after).bind(q.run_id).bind(count+1).fetch_all(&self.pool).await?;
+            .bind(id).bind(after).bind(q.run_id).bind(count+1).fetch_all(&mut *db).await?;
         Ok(sequence_page(
             items,
             count,

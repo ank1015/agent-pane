@@ -111,6 +111,7 @@ impl RuntimeService {
                 .then_some(&source.config),
         )
         .await?;
+        super::run_outputs::validate_inputs(&mut tx, p.project_id, harness, &config).await?;
         let session = Uuid::now_v7();
         sqlx::query("insert into sessions(id,project_id,harness_id,title,forked_from_session_id,forked_at_revision,config) values($1,$2,$3,$4,$5,$6,$7)").bind(session).bind(p.project_id).bind(harness).bind(request.title).bind(request.fork_at_revision.map(|_|source.id)).bind(request.fork_at_revision).bind(config).execute(&mut *tx).await?;
         if let Some(revision) = request.fork_at_revision {

@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/*", "packages/harness-runtime", "packages/platform-runtime-client", "packages/platform-runtime-contracts", "packages/tools/*", "packages/harnesses/*"]
+members = ["apps/*", "packages/harness-runtime", "packages/platform-runtime-client", "packages/platform-runtime-contracts", "packages/platform-javascript-sdk", "packages/platform-agent-code-mode", "packages/tools/*", "packages/harnesses/*"]
 exclude = ["apps/dashboard"]
 resolver = "3"
 
@@ -10,6 +10,10 @@ rust-version = "1.85"
 license = "MIT"
 
 [workspace.dependencies]
+tool-apply-patch = { path = "packages/tools/apply-patch" }
+tool-code-mode = { path = "packages/tools/code-mode" }
+platform-javascript-sdk = { path = "packages/platform-javascript-sdk" }
+platform-agent-code-mode = { path = "packages/platform-agent-code-mode" }
 tool-filesystem = { path = "packages/tools/filesystem" }
 harness-runtime = { path = "packages/harness-runtime" }
 platform-runtime-contracts = { path = "packages/platform-runtime-contracts" }

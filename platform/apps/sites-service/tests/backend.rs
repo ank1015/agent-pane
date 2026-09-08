@@ -463,6 +463,14 @@ async fn limits_errors_migration_rollback_and_release_compatibility() {
             )
             .await;
         assert_eq!(result["error_code"], error, "{code}: {result}");
+        if code.contains("private failure") {
+            assert_eq!(result["logs"][0]["message"], "Uncaught backend error");
+            assert_eq!(result["logs"][0]["data"]["message"], "private failure");
+            assert!(
+                result["response"].is_null(),
+                "diagnostics belong to author logs, not frontend responses"
+            );
+        }
     }
     let code = "export default async (r,ctx) => { await ctx.db.transaction(async tx => { await tx.execute(\"INSERT INTO items VALUES ('timeout',1)\"); while(true) {} }); return {status:200,body:null}; };";
     let r = server.publish(site, code, vec![MIGRATION], 1, 1).await;
@@ -628,4 +636,23 @@ async fn concurrent_calls_disconnect_and_bounded_database_failures() {
     }
     let read = server.invoke(site, release, "/read", Value::Null).await;
     assert_eq!(read["response"]["body"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn uncaught_backend_diagnostics_are_bounded_and_schema_stays_author_only() {
+    let root = TempDir::new().unwrap();
+    let server = Server::start(root.path()).await;
+    let site = server.site().await;
+    for code in [
+        "export default () => { throw Error('x'.repeat(10000)); };",
+        "export default async (_,ctx) => { await ctx.db.execute('CREATE TABLE forbidden(x)'); return {status:200,body:null}; };",
+    ] {
+        let release = server.publish(site, code, vec![], 0, 0).await;
+        let result = server.invoke(site, release, "/", Value::Null).await;
+        assert_eq!(result["error_code"], "BACKEND_ERROR", "{result}");
+        assert_eq!(result["logs"][0]["message"], "Uncaught backend error");
+        let diagnostic = result["logs"][0]["data"]["message"].as_str().unwrap();
+        assert!(!diagnostic.is_empty() && diagnostic.len() <= 512);
+        assert!(result["response"].is_null());
+    }
 }

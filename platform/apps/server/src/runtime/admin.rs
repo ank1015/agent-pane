@@ -21,6 +21,9 @@ pub(super) struct Harness {
     pub config_schema: Option<Map<String, Value>>,
     #[serde(default)]
     pub supported_models: std::collections::BTreeMap<String, Vec<String>>,
+    /// Omitted by older writers preserves existing declarations.
+    #[serde(default)]
+    pub harness_contract: Option<platform_runtime_contracts::HarnessContract>,
     #[serde(default = "enabled")]
     pub enabled: bool,
     /// Omitted on update preserves platform policy; new harnesses opt in.
@@ -40,6 +43,9 @@ fn validate_id(id: &str) -> Result<()> {
 }
 impl Harness {
     fn validate(&self) -> Result<()> {
+        if let Some(contract) = &self.harness_contract {
+            super::run_outputs::validate_contract(contract)?;
+        }
         if self.supported_models.len() > 64
             || serde_json::to_vec(&self.supported_models)
                 .map_err(|_| RuntimeError::StoredData)?
@@ -128,9 +134,9 @@ impl RuntimeService {
         validate_id(id)?;
         request.validate()?;
         let mut tx = self.transaction().await?;
-        let result = sqlx::query_scalar("insert into harnesses as h(id,name,description,default_config,config_schema,enabled,supported_models,project_policy) values($1,$2,$3,$4,$5,$6,$7,coalesce($8,'opt_in')) on conflict(id) do update set name=excluded.name,description=excluded.description,default_config=excluded.default_config,config_schema=excluded.config_schema,enabled=excluded.enabled,supported_models=excluded.supported_models,project_policy=coalesce($8,h.project_policy),updated_at=clock_timestamp() returning to_jsonb(h)")
+        let result = sqlx::query_scalar("insert into harnesses as h(id,name,description,default_config,config_schema,enabled,supported_models,project_policy,harness_contract) values($1,$2,$3,$4,$5,$6,$7,coalesce($8,'opt_in'),coalesce($9,'{}'::jsonb)) on conflict(id) do update set name=excluded.name,description=excluded.description,default_config=excluded.default_config,config_schema=excluded.config_schema,enabled=excluded.enabled,supported_models=excluded.supported_models,project_policy=coalesce($8,h.project_policy),harness_contract=coalesce($9,h.harness_contract),updated_at=clock_timestamp() returning to_jsonb(h)")
             .bind(id).bind(request.name).bind(request.description).bind(Value::Object(request.default_config))
-            .bind(request.config_schema.map(Value::Object)).bind(request.enabled).bind(serde_json::to_value(request.supported_models).map_err(|_| RuntimeError::StoredData)?).bind(request.project_policy.map(|p|p.as_str())).fetch_one(&mut *tx).await?;
+            .bind(request.config_schema.map(Value::Object)).bind(request.enabled).bind(serde_json::to_value(request.supported_models).map_err(|_| RuntimeError::StoredData)?).bind(request.project_policy.map(|p|p.as_str())).bind(request.harness_contract.map(|v| serde_json::to_value(v).expect("contract serialization"))).fetch_one(&mut *tx).await?;
         tx.commit().await?;
         Ok(result)
     }
@@ -148,6 +154,7 @@ impl RuntimeService {
                         | "enabled"
                         | "supported_models"
                         | "project_policy"
+                        | "harness_contract"
                 )
             })
         {
@@ -161,7 +168,12 @@ impl RuntimeService {
                 "project_policy must be required or opt_in.",
             ));
         }
-        let mut current: Value = sqlx::query_scalar("select jsonb_build_object('name',name,'description',description,'default_config',default_config,'config_schema',config_schema,'enabled',enabled,'supported_models',supported_models,'project_policy',project_policy) from harnesses where id=$1 for update")
+        if patch.get("harness_contract").is_some_and(Value::is_null) {
+            return Err(RuntimeError::Invalid(
+                "Use an empty object to clear harness_contract.",
+            ));
+        }
+        let mut current: Value = sqlx::query_scalar("select jsonb_build_object('name',name,'description',description,'default_config',default_config,'config_schema',config_schema,'enabled',enabled,'supported_models',supported_models,'project_policy',project_policy,'harness_contract',harness_contract) from harnesses where id=$1 for update")
             .bind(id).fetch_optional(&mut *tx).await?.ok_or(RuntimeError::NotFound)?;
         current
             .as_object_mut()
@@ -170,9 +182,9 @@ impl RuntimeService {
         let request: Harness = serde_json::from_value(current)
             .map_err(|_| RuntimeError::Invalid("Invalid harness field type."))?;
         request.validate()?;
-        let result = sqlx::query_scalar("update harnesses as h set name=$2,description=$3,default_config=$4,config_schema=$5,enabled=$6,supported_models=$7,project_policy=$8,updated_at=clock_timestamp() where id=$1 returning to_jsonb(h)")
+        let result = sqlx::query_scalar("update harnesses as h set name=$2,description=$3,default_config=$4,config_schema=$5,enabled=$6,supported_models=$7,project_policy=$8,harness_contract=$9,updated_at=clock_timestamp() where id=$1 returning to_jsonb(h)")
             .bind(id).bind(request.name).bind(request.description).bind(Value::Object(request.default_config))
-            .bind(request.config_schema.map(Value::Object)).bind(request.enabled).bind(serde_json::to_value(request.supported_models).map_err(|_| RuntimeError::StoredData)?).bind(request.project_policy.unwrap_or_default().as_str()).fetch_one(&mut *tx).await?;
+            .bind(request.config_schema.map(Value::Object)).bind(request.enabled).bind(serde_json::to_value(request.supported_models).map_err(|_| RuntimeError::StoredData)?).bind(request.project_policy.unwrap_or_default().as_str()).bind(serde_json::to_value(request.harness_contract.unwrap_or_default()).expect("contract serialization")).fetch_one(&mut *tx).await?;
         tx.commit().await?;
         Ok(result)
     }

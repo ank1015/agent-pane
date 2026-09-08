@@ -190,7 +190,7 @@ impl<'a> BashTool<'a> {
             None => self.cwd.clone(),
         };
         let request = StartExecutionRequest {
-            expected_generation: None,
+            expected_generation: Some(self.runtime.descriptor().supervisor_generation_id.clone()),
             output_drain_timeout_ms: None,
             operation_id: ids.operation_id,
             execution_id: ids.execution_id,
@@ -235,13 +235,33 @@ impl<'a> BashTool<'a> {
             .processes()
             .start(context, prepared.request.clone())
             .await?;
-        if handle.execution_id != prepared.request.execution_id {
+        if handle.execution_id != prepared.request.execution_id
+            || handle.supervisor_generation_id != prepared.generation
+        {
             return Err(error(
                 ExecutionErrorCode::Internal,
                 "start returned another execution ID; command outcome is uncertain",
             ));
         }
-        // Use the returned generation, never replace it from a refreshed descriptor.
+        self.recover(prepared, handle)
+    }
+
+    /// Reattach to a saved identity without starting a process. This also permits
+    /// cancellation/draining when the original start acknowledgement was lost.
+    pub fn recover(
+        &self,
+        prepared: &PreparedBash,
+        handle: ExecutionHandle,
+    ) -> ExecutionResult<RunningBash> {
+        self.validate_host(prepared)?;
+        if handle.execution_id != prepared.request.execution_id
+            || handle.supervisor_generation_id != prepared.generation
+        {
+            return Err(error(
+                ExecutionErrorCode::InvalidRequest,
+                "execution identity does not match prepared command",
+            ));
+        }
         Ok(RunningBash {
             prepared: prepared.clone(),
             handle,

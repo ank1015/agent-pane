@@ -3,6 +3,8 @@
 (() => {
   const host = globalThis.__sitesHost;
   const input = JSON.parse(globalThis.__sitesInput);
+  const makePlatform = globalThis.__platformFactory;
+  delete globalThis.__platformFactory;
   delete globalThis.__sitesHost;
   delete globalThis.__sitesInput;
   const stringify = JSON.stringify.bind(JSON);
@@ -79,25 +81,17 @@
     requireOutsideTransaction();
     return rpc('platform.' + method, args);
   };
+  const shared = makePlatform(callPlatform);
   const platform = freeze({
+    ...shared,
     callbacks: freeze({
       list: (options = {}) => callPlatform('callbacks.list', { options }),
       get: callbackId => callPlatform('callbacks.get', { callbackId }),
     }),
-    environments: freeze({
-      list: () => callPlatform('environments.list', {}),
-      get: environmentId => callPlatform('environments.get', { environmentId }),
-    }),
-    harnesses: freeze({
-      list: () => callPlatform('harnesses.list', {}),
-      get: harnessId => callPlatform('harnesses.get', { harnessId }),
-    }),
     sessions: freeze({
+      ...shared.sessions,
       startOptions: harnessId => callPlatform('sessions.startOptions', { harnessId }),
       start: (input, options) => callPlatform('sessions.start', { input, options }),
-      list: (options = {}) => callPlatform('sessions.list', { options }),
-      get: sessionId => callPlatform('sessions.get', { sessionId }),
-      messages: (sessionId, options = {}) => callPlatform('sessions.messages', { sessionId, options }),
       metrics: (sessionId, options = {}) => callPlatform('sessions.metrics', { sessionId, options }),
       send: (sessionId, input, options) => callPlatform('sessions.send', { ...input, sessionId, options }),
       stop: (sessionId, options) => {
@@ -109,8 +103,19 @@
   const ctx = freeze({ site: freeze(input.site), invocation, db, log: freeze(log), platform });
   // The runner is captured by Rust and removed before loading site code.
   return async function run(handler) {
-    const response = await handler(input.request, ctx);
-    if (transaction) throw new ErrorType('Backend returned with an unawaited transaction');
-    return stringify(response);
+    try {
+      const response = await handler(input.request, ctx);
+      if (transaction) throw new ErrorType('Backend returned with an unawaited transaction');
+      return stringify(response);
+    } catch (error) {
+      // Keep a bounded author-visible diagnostic without returning a stack or
+      // implementation details to the site's frontend response.
+      try {
+        const message = typeof error?.message === 'string' ? error.message.slice(0, 512) : 'Backend threw a non-Error value';
+        const code = typeof error?.code === 'string' ? error.code.slice(0, 64) : null;
+        log.error('Uncaught backend error', { message, code });
+      } catch { /* Logging failure must not replace the original failure. */ }
+      throw error;
+    }
   };
 })()

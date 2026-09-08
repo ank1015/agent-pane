@@ -55,6 +55,7 @@ pub fn router_with_content(
         )
         .merge(crate::bundle_http::routes(app.clone()))
         .merge(crate::backend_http::routes())
+        .merge(crate::authoring_http::routes())
         .fallback(|| async {
             (
                 StatusCode::NOT_FOUND,
@@ -90,10 +91,12 @@ async fn authenticate(State(app): State<App>, request: Request, next: Next) -> R
         return Error::Unauthorized.into_response();
     }
     let release_listing = request.method() == axum::http::Method::GET
-        && request
-            .extensions()
-            .get::<MatchedPath>()
-            .is_some_and(|p| p.as_str() == "/internal/sites/{id}/releases");
+        && request.extensions().get::<MatchedPath>().is_some_and(|p| {
+            matches!(
+                p.as_str(),
+                "/internal/sites/{id}/releases" | "/internal/sites/{id}/snapshots"
+            )
+        });
     if request.uri().query().is_some() && !release_listing {
         return Error::Invalid("Query parameters are not supported.").into_response();
     }

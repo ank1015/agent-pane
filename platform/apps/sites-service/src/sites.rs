@@ -49,6 +49,7 @@ pub(crate) struct Inner {
     pub platform: Option<crate::platform::PlatformClient>,
     // Serializes local lifecycle/reconciliation operations, not HTTP reads.
     pub mutations: Mutex<()>,
+    pub authoring: Mutex<()>,
     pub publications: Arc<Semaphore>,
     changed: Notify,
     pub storage: Storage,
@@ -76,6 +77,7 @@ impl SiteService {
             pool,
             platform,
             mutations: Mutex::new(()),
+            authoring: Mutex::new(()),
             publications: Arc::new(Semaphore::new(2)),
             changed: Notify::new(),
             storage,

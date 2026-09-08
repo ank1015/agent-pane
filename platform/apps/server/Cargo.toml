@@ -17,6 +17,9 @@ chrono.workspace = true
 dotenvy.workspace = true
 execution-api.workspace = true
 execution-core.workspace = true
+execution-client.workspace = true
+tool-bash-minimal = { path = "../../packages/tools/bash-minimal" }
+tool-filesystem.workspace = true
 futures-util.workspace = true
 jsonschema.workspace = true
 llm-contracts.workspace = true
@@ -32,6 +35,13 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+sites-harness = { path = "../../packages/harnesses/sites" }
+harness-runtime.workspace = true
+llm-client = { path = "../../../llm/packages/llm-client" }
+platform-agent-code-mode.workspace = true
+tool-code-mode.workspace = true
+execution-supervisor-core = { path = "../../../execution/packages/execution-supervisor-core" }
+execution-wire = { path = "../../../execution/packages/execution-wire" }
 tempfile = "3"
 platform-runtime-client.workspace = true
 reqwest = { workspace = true, features = ["stream"] }

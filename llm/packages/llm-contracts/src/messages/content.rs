@@ -8,6 +8,7 @@ use crate::{
 /// Text plus optional application-owned metadata.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TextContent {
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -17,6 +18,7 @@ pub struct TextContent {
 /// Provider-facing image quality hint.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ImageDetail {
     Auto,
     Low,
@@ -27,6 +29,7 @@ pub enum ImageDetail {
 /// Base64-encoded image input.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Base64ImageSource {
     pub data: String,
     pub mime_type: String,
@@ -35,6 +38,7 @@ pub struct Base64ImageSource {
 /// Remotely hosted image input.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct UrlImageSource {
     pub url: String,
 }
@@ -42,6 +46,7 @@ pub struct UrlImageSource {
 /// Source of image bytes.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ImageSource {
     Base64(Base64ImageSource),
     Url(UrlImageSource),
@@ -50,6 +55,7 @@ pub enum ImageSource {
 /// Image plus optional provider and application hints.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ImageContent {
     pub source: ImageSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -61,6 +67,7 @@ pub struct ImageContent {
 /// User or tool-result content.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ContentPart {
     Text(TextContent),
     Image(ImageContent),

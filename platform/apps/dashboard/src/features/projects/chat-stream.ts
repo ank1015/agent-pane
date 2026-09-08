@@ -9,7 +9,7 @@ export const RUN_EVENT_TYPES = [
   'run.created', 'run.started', 'run.resumed', 'run.committed',
   'run.input_received', 'run.abort_requested', 'run.yielded', 'run.waiting',
   'run.woken', 'run.wait_resolved', 'run.completed', 'run.failed',
-  'run.aborted', 'run.lease_expired',
+  'run.aborted', 'run.lease_expired', 'code_mode.journal', 'run.output_published',
 ] as const
 export function useChatStream(project: string, session: string, runId: string | undefined) {
   const client = useQueryClient()
@@ -49,6 +49,8 @@ export function useChatStream(project: string, session: string, runId: string | 
           setReconnecting(false)
           void client.invalidateQueries({ queryKey: projectKeys.bootstrap(project) })
           void client.invalidateQueries({ queryKey: projectKeys.environments(project) })
+          void client.invalidateQueries({ queryKey: ['project-sites', project] })
+          void client.invalidateQueries({ queryKey: ['site-detail', project] })
         }
       } catch { reconnect() }
     }

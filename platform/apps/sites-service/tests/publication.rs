@@ -765,3 +765,6 @@ async fn concurrent_activation_has_one_winner() {
         1
     );
 }
+
+#[path = "support/authoring.rs"]
+mod authoring;

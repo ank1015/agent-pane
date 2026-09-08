@@ -394,7 +394,7 @@ impl Drop for Database {
     }
 }
 
-fn parameter(value: Value) -> DbResult<SqlValue> {
+pub(crate) fn parameter(value: Value) -> DbResult<SqlValue> {
     Ok(match value {
         Value::Null => SqlValue::Null,
         Value::String(s) if s.len() <= MAX_RESULT => SqlValue::Text(s),
@@ -447,7 +447,7 @@ fn value(input: ValueRef<'_>) -> DbResult<Value> {
 
 // Recognize only a single statement; semicolons in quoted literals/comments do
 // not delimit SQL. SQLite itself performs all actual parsing and authorization.
-fn single_statement(sql: &str) -> bool {
+pub(crate) fn single_statement(sql: &str) -> bool {
     let bytes = sql.as_bytes();
     let mut i = 0;
     let mut ended = false;

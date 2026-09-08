@@ -21,3 +21,10 @@ database constraints remain server responsibilities.
 No HTTP, SQLx, retries, scheduling or harness behavior belongs here. The server
 retains validation and transactional invariants. Real-server integration tests
 verify its response projections against these records.
+
+## Shared capabilities and harness outputs
+
+See [the capability contracts and seven implementation phases](../../CAPABILITIES.md).
+`HarnessContract` declares optional environment inputs and named outputs;
+`PublishRunOutput`/`RunOutput` describe immutable run outputs. `capabilities`
+defines the shared agent/backend vocabulary for subsequent API phases.

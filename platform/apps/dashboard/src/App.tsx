@@ -7,6 +7,7 @@ import { ProjectsPage } from './features/projects/ProjectsPage'
 import { ProjectPage, ProjectEnvironmentsPage, ProjectSettingsPage } from './features/projects/ProjectPage'
 import { ProjectNewChatPage } from './features/projects/ProjectNewChatPage'
 import { ProjectSitesPage } from './features/sites/ProjectSitesPage'
+import { SiteDetailPage } from './features/sites/SiteDetailPage'
 import { SiteViewerPage } from './features/sites/SiteViewerPage'
 import { lazy, Suspense } from 'react'
 
@@ -20,6 +21,7 @@ function App() {
         <Route index element={<ProjectNewChatPage />} />
         <Route path="environments" element={<ProjectEnvironmentsPage />} />
         <Route path="sites" element={<ProjectSitesPage />} />
+        <Route path="sites/:siteId" element={<SiteDetailPage />} />
         <Route path="settings" element={<ProjectSettingsPage />} />
         <Route path="environments/edit" element={<Navigate to=".." replace />} />
         <Route path="environments/list" element={<Navigate to="../environments" replace />} />

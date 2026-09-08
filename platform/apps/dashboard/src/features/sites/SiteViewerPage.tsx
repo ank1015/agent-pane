@@ -1,27 +1,34 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { postJson } from '../../lib/api-client'
+import { useSite } from './site-queries'
 import { backendResult, validSiteCall } from './site-bridge'
 import '../../styles/sites.css'
 type View = { name: string; url: string; releaseId: string; token: string; expiresAt: number }
 export function SiteViewerPage() {
   const { projectId = '', siteId = '' } = useParams()
-  return <SiteView key={`${projectId}:${siteId}`} projectId={projectId} siteId={siteId} />
+  const detail = useSite(projectId, siteId)
+  if (!detail.data?.resource.active_release_id || detail.data.site.desired_status !== 'ready') return <main className="site-viewer"><div className="site-viewer-error"><p role={detail.isError ? 'alert' : 'status'}>{detail.error?.message || (detail.isPending ? 'Opening site…' : 'This site has no live code available yet.')}</p><Link to={`/projects/${projectId}/sites/${siteId}`}>Back to site</Link></div></main>
+  return <SitePreview key={`${projectId}:${siteId}`} projectId={projectId} siteId={siteId} revision={detail.data.resource.active_release_id} />
 }
-function SiteView({ projectId, siteId }: { projectId: string; siteId: string }) {
+type PreviewProps = { projectId: string; siteId: string; revision: string; embedded?: boolean }
+export function SitePreview(props: PreviewProps) {
+  return <Preview key={`${props.projectId}:${props.siteId}:${props.revision}`} {...props} />
+}
+function Preview({ projectId, siteId, embedded = false }: PreviewProps) {
   const [view, setView] = useState<View | null>(null)
   const [error, setError] = useState('')
   const [generation, setGeneration] = useState(0)
   useEffect(() => {
     let current = true
     const previousTitle = document.title
-    document.title = 'Opening site…'
+    if (!embedded) document.title = 'Opening site…'
     postJson<View>(`/api/site-view/projects/${encodeURIComponent(projectId)}/sites/${encodeURIComponent(siteId)}/open`, {}).then(v => {
-      if (current) { setView(v); document.title = `${v.name} · Sites` }
+      if (current) { setView(v); if (!embedded) document.title = `${v.name} · Sites` }
     }).catch(e => { if (current) setError(e.message) })
-    return () => { current = false; document.title = previousTitle }
-  }, [projectId, siteId, generation])
-  return <main className="site-viewer" aria-label={view?.name || 'Site viewer'}>
+    return () => { current = false; if (!embedded) document.title = previousTitle }
+  }, [projectId, siteId, generation, embedded])
+  return <main className={embedded ? 'site-viewer site-viewer--embedded' : 'site-viewer'} aria-label={view?.name || 'Site viewer'}>
     {view ? <SiteFrame key={view.token} view={view} onError={setError} /> : !error ? <p className="site-viewer-notice" role="status">Opening site…</p> : null}
     {error ? <div className="site-viewer-error" role="alert"><p>{error}</p><button onClick={() => { setView(null); setError(''); setGeneration(g => g + 1) }}>Reload site</button><Link to={`/projects/${projectId}/sites`}>Back to Sites</Link></div> : null}
   </main>

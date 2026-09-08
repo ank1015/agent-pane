@@ -45,6 +45,11 @@ pub fn worker_router(service: RuntimeService, registration_token: impl AsRef<str
         .route("/internal/workers/{id}/assignments", get(assignments))
         .route("/internal/workers/{id}/work-available", get(work_available))
         .route("/internal/runs/{id}/context", get(context))
+        .route("/internal/runs/{id}/capabilities", post(capability))
+        .route(
+            "/internal/runs/{id}/workspace-bindings",
+            post(bind_workspace),
+        )
         .route(
             "/internal/runs/{id}/environments",
             get(environments).post(create_environment),
@@ -53,6 +58,8 @@ pub fn worker_router(service: RuntimeService, registration_token: impl AsRef<str
         .route("/internal/runs/{id}/inputs", get(inputs))
         .route("/internal/runs/{id}/commits", post(commit))
         .route("/internal/runs/{id}/events", post(events))
+        .route("/internal/runs/{id}/outputs", post(publish_output))
+        .route("/internal/runs/{id}/outputs/{target}", get(run_outputs))
         .route("/internal/runs/{id}/children", post(children))
         .route("/internal/runs/{id}/follow-ups", post(follow_up))
         .route("/internal/runs/{id}/messages", post(messages))
@@ -189,6 +196,37 @@ async fn environments(
 ) -> Result<Json<Value>> {
     Ok(Json(s.worker_environments(id(p)?, owner(w, &h)?).await?))
 }
+async fn capability(
+    State(s): State<RuntimeService>,
+    Extension(w): Extension<Uuid>,
+    p: Id,
+    h: HeaderMap,
+    b: Body<platform_runtime_contracts::capabilities::CapabilityRequest>,
+) -> Result<Json<Value>> {
+    let request = body(b)?;
+    Ok(Json(
+        s.platform_capability(
+            super::capabilities::Caller::Agent {
+                run: id(p)?,
+                owner: owner(w, &h)?,
+            },
+            &request.method,
+            request.args,
+            None,
+        )
+        .await?,
+    ))
+}
+async fn bind_workspace(
+    State(s): State<RuntimeService>,
+    Extension(w): Extension<Uuid>,
+    p: Id,
+    h: HeaderMap,
+    b: Body<platform_runtime_contracts::capabilities::BindHarnessWorkspace>,
+) -> Result<Reply> {
+    s.bind_harness_workspace(id(p)?, owner(w, &h)?, key(&h)?, body(b)?)
+        .await
+}
 async fn create_environment(
     State(s): State<RuntimeService>,
     Extension(w): Extension<Uuid>,
@@ -239,6 +277,30 @@ async fn events(
 ) -> Result<Reply> {
     s.worker_events(id(p)?, owner(w, &h)?, key(&h)?, body(b)?)
         .await
+}
+async fn publish_output(
+    State(s): State<RuntimeService>,
+    Extension(w): Extension<Uuid>,
+    p: Id,
+    h: HeaderMap,
+    b: Body<platform_runtime_contracts::PublishRunOutput>,
+) -> Result<Reply> {
+    s.publish_run_output(id(p)?, owner(w, &h)?, key(&h)?, body(b)?)
+        .await
+}
+async fn run_outputs(
+    State(s): State<RuntimeService>,
+    Extension(w): Extension<Uuid>,
+    p: std::result::Result<Path<(Uuid, Uuid)>, PathRejection>,
+    h: HeaderMap,
+    q: Params<platform_runtime_contracts::RunOutputsQuery>,
+) -> Result<Json<Value>> {
+    let Path((source, target)) =
+        p.map_err(|_| RuntimeError::Invalid("Provide valid run UUIDs."))?;
+    Ok(Json(
+        s.worker_run_outputs(source, owner(w, &h)?, target, query(q)?)
+            .await?,
+    ))
 }
 async fn children(
     State(s): State<RuntimeService>,

@@ -1,9 +1,15 @@
-# Sites integration (Stage 4)
+# Sites integration
 
 Platform owns logical sites and authorization. The sites service owns releases,
 SQLite and isolated backend invocations. [Stage 5 completion callbacks](CALLBACKS.md)
 continue work after a run terminates. The [dashboard Sites table and viewer](../dashboard/SITES.md) are available.
-Agent authoring and preview-editing workflows remain deferred.
+The platform-owned [Sites harness](../../packages/harnesses/sites/README.md) edits
+the live frontend/backend pair through the shared authoring SDK. The dashboard
+uses the regular harness/chat UI and user-controlled code snapshots and rollback.
+Backend `ctx.platform` now uses the same JavaScript factory as agent code mode.
+Shared declarations and method documentation are generated from runtime contracts;
+see [the SDK generation workflow](../../packages/platform-javascript-sdk/README.md).
+Existing backend aliases, database APIs and callback behavior remain compatible.
 
 ## Configure the two services
 
@@ -67,7 +73,16 @@ grants. The operator is explicitly trusting the granted harness implementation.
 `single` maps a selected project environment to the existing immutable
 `environment` config descriptor (absolute native `workspace_root`, relative
 `path`, and machine or snapshot ID). `none` does not accept an environment. These
-are explicit adapters for v1, not a general multi-machine config language.
+remain legacy adapters. New grants default to `environmentMode: "declared"` and
+use harness-specific reference declarations plus a `configurableFields` allowlist
+of top-level config keys. See [shared capability contracts](../../CAPABILITIES.md)
+for the full session/run API and grant examples.
+Set `executionEnabled: true` in this same grant to expose durable
+`ctx.platform.sandboxes` and `ctx.platform.execution` operations. It defaults to
+false and must be included on each grant replacement that should retain it.
+Commands run with the selected host OS user's permissions. The backend invocation
+accepts a durable handle; the server reconciles long work independently. See
+[phase 3 lifecycle, polling and cancellation semantics](../../CAPABILITIES.md#durable-sandbox-and-command-sdk-phase-3).
 Environment/site builders should not be granted unless intentionally authorized.
 LLM account grants reference gateway accounts; discovery/start additionally
 requires active status and supported provider/model. There is no fallback to an
@@ -88,6 +103,13 @@ Unknown JSON fields are rejected; all responses are no-store and carry request I
 | POST | `/api/projects/{project}/sites/{site}/content-access` | `{ "release_id": "...", "ttl_seconds": 900 }` → existing scoped content grant |
 | POST | `/api/projects/{project}/sites/{site}/invocations` | Forward the existing Stage 3 invocation contract |
 | GET | `/api/projects/{project}/sites/{site}/invocations/{id}` | Inspect the saved invocation |
+| GET | `/api/projects/{project}/sites/{site}/sessions` | Up to 20 recent nonarchived authoring chats, including an explicit site selection before its first edit |
+| GET | `/api/projects/{project}/sites/{site}/diagnostics` | Bounded recent invocation summaries; inspect an invocation for saved logs |
+| GET/PATCH | `/api/projects/{project}/sites/{site}/source` | Read the two live files / apply a context patch with durable operation ID |
+| GET/POST | `/api/projects/{project}/sites/{site}/snapshots` | Page saved code / save the current code with a name and operation ID |
+| POST | `/api/projects/{project}/sites/{site}/snapshots/{id}/restore` | Replace live code with a user-selected snapshot |
+| GET | `/api/projects/{project}/sites/{site}/authoring/{id}` | Inspect a saved authoring operation |
+
 
 Provisioning persists intent before contacting the sites service. Retrying PUT
 with the same site/project/name is safe. A background reconciler walks records
@@ -111,11 +133,18 @@ is a trusted service boundary, not an endpoint for guest/browser requests.
 
 ## Backend SDK
 
+`ctx.platform.runs.outputs(runId, {afterSequence, limit})` reads immutable,
+harness-published outputs within the current project, including terminal runs.
+See [shared capability contracts and implementation phases](../../CAPABILITIES.md).
+Workspace/artifact references do not provision resources or grant access.
+
 See `../sites-service/src/sdk.d.ts`. SDK arguments use camelCase; returned Platform
-records retain existing snake_case fields. All methods return promises. Methods:
+records retain existing snake_case fields. All methods return promises. The
+shared API adds accounts.list, harnesses.startOptions, sessions.create/stats and
+runs.create/list/get/steer/abort/stats/outputs. Legacy convenience methods:
 
 ```ts
-ctx.platform.environments.list()                 // {items}, maximum 200
+ctx.platform.environments.list({limit, cursor})   // {items, next_cursor}
 ctx.platform.environments.get(environmentId)
 ctx.platform.harnesses.list()                    // granted + enabled only
 ctx.platform.harnesses.get(harnessId)
@@ -188,8 +217,9 @@ fields/methods fail explicitly.
 
 ```sh
 # From platform/, PostgreSQL role must have CREATEDB.
-cargo build -p platform-sites-service
-DATABASE_URL=postgresql:///postgres cargo test -p platform-server --test sites -- --ignored
+cargo build -p platform-sites-service -p platform-worker -p tool-code-mode --bins
+DATABASE_URL=postgresql:///postgres SITES_TEST_BROWSER_NODE=/absolute/path/to/node \
+  cargo test -p platform-server --test sites -- --ignored
 cargo test -p platform-sites-service
 cargo clippy -p platform-server -p platform-sites-service --all-targets -- -D warnings
 ```
@@ -198,3 +228,42 @@ The integration test uses disposable PostgreSQL/filesystem state, a local mock
 LLM account inventory and the real sites-service binary and OS-sandboxed QuickJS
 child. It starts actual Platform run records without spending provider credits
 or provisioning execution hosts. Existing worker tests cover run execution.
+
+
+## Step 7 enablement and compatibility
+
+1. Apply the Platform migrations and run a Sites service with persistent data and
+   matching API/capability credentials. Expose content on its own origin; keep
+   trusted service/admin and local dashboard listeners private.
+2. Configure project access with the full intended account/harness grants and
+   `executionEnabled` when commands/sandboxes are needed. Use declared harness
+   config fields (`model`, `reasoning_level`, `environment` or `siteId` as
+   applicable); account IDs are granted separately.
+3. Start a worker with `SITES_ENABLED=true`, LLM gateway credentials and optional
+   research/browser configuration. Sites is Platform-owned and cannot be removed
+   from an individual project. Catalog availability alone does not guarantee a
+   capable worker.
+4. Configure the dashboard's server-only project token map and exact content
+   origin. Start with one project and complete the live checks before enabling
+   additional projects. Static `dist/` hosting requires an equivalent BFF.
+5. Validate runtime compatibility of saved environment snapshots. Old snapshots
+   may contain an old supervisor even when a current base image exists. Preserve
+   generation fencing; refresh the binary through the operator/provider channel,
+   restart the test supervisor, and save a new compatible snapshot/environment.
+   Do not remove request fields or silently replay commands against a changed
+   generation. Existing sessions retain their original environment configuration.
+
+The live authoring smoke and setup are documented in [dashboard Sites](../dashboard/SITES.md).
+Database schema changes belong to `ctx.sites.execute` during authoring. Backend
+`ctx.db` permits data reads/writes, not DDL. Uncaught handler failures retain the
+existing `BACKEND_ERROR` response and put a bounded message/code in author-visible
+invocation logs; stacks are not returned to the site's frontend.
+
+For the experiment flow, run two independent sessions, inspect their declared
+`runs.outputs`, and verify the actual workspace files using durable execution
+handles. A run with no workspace output is normal: the caller reports that no
+workspace was published rather than inventing a host. For callback applications,
+start work once with a stable key and `onComplete`; persist event IDs and follow-up
+intent before acknowledging callbacks. Agent waits and backend callbacks are
+separate continuation mechanisms. Worker/service recovery tests must inspect
+saved operations and receipts without replaying arbitrary JavaScript cells.

@@ -9,6 +9,7 @@ pub enum ConflictCode {
     SessionRevisionConflict,
     CheckpointVersionConflict,
     SessionStateVersionConflict,
+    RunOutputImmutable,
     IdempotencyKeyConflict,
     WorkerIdentityConflict,
     WorkerStateConflict,
@@ -32,6 +33,7 @@ impl ConflictCode {
             Self::SessionRevisionConflict => "SESSION_REVISION_CONFLICT",
             Self::CheckpointVersionConflict => "CHECKPOINT_VERSION_CONFLICT",
             Self::SessionStateVersionConflict => "SESSION_STATE_VERSION_CONFLICT",
+            Self::RunOutputImmutable => "RUN_OUTPUT_IMMUTABLE",
             Self::IdempotencyKeyConflict => "IDEMPOTENCY_KEY_CONFLICT",
             Self::WorkerIdentityConflict => "WORKER_IDENTITY_CONFLICT",
             Self::WorkerStateConflict => "WORKER_STATE_CONFLICT",
@@ -55,6 +57,7 @@ pub struct ErrorEnvelope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ErrorInfo {
     /// Keep unknown future codes intact rather than failing to decode the error.
     pub code: String,

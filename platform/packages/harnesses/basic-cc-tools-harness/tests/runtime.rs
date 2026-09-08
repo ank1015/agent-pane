@@ -126,13 +126,22 @@ impl App {
         let start_count = starts.clone();
         let aborts = Arc::new(AtomicUsize::new(0));
         let abort_count = aborts.clone();
-        let runtime = RuntimeService::new(pool.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let mut gateway = ExecutionClientConfig::new(url.parse().unwrap(), "execution-test-token");
+        gateway.allow_insecure_http = true;
+        let runtime = RuntimeService::new(pool.clone())
+            .with_execution(ExecutionClient::new(gateway).unwrap());
+        let descriptor = supervisor.descriptor().clone();
+        let now = chrono::Utc::now();
+        let host_record = json!({"id":host,"kind":"registered","name":"Test host","state":"ready","desired_state":"ready","status_retryable":false,"roots":descriptor.roots,"descriptor":descriptor,"metadata":{},"revision":1,"created_at":now,"updated_at":now});
         let sandbox_script = script.clone();
         let sandbox_host = host.clone();
         let lose_create = Arc::new(AtomicBool::new(false));
         let create_lost = lose_create.clone();
         let app = router(runtime.clone())
             .merge(worker_router(runtime, BOOT))
+            .route("/v1/hosts/{id}", get(move || { let value=host_record.clone(); async move { Json(value) } }))
             .route("/v1/hosts", post(move |headers: HeaderMap, Json(request): Json<Value>| {
                 let script = sandbox_script.clone();
                 let host = sandbox_host.clone();
@@ -246,8 +255,6 @@ impl App {
                     },
                 ),
             );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
@@ -537,6 +544,11 @@ async fn all_four_tools_and_fresh_read_per_edit(pool: PgPool) {
         ],
     )
     .await;
+    let environment = Uuid::now_v7();
+    sqlx::query("insert into project_environments(id,project_id,name,type,machine_id,workspace_root,path) values($1,$2,'Tools workspace','machine',$3,$4,'.')")
+        .bind(environment).bind(app.project).bind(app.host.as_str().parse::<Uuid>().unwrap())
+        .bind(std::fs::canonicalize(app.temp.path().join("workspace")).unwrap().to_str().unwrap())
+        .execute(&app.pool).await.unwrap();
     let id = app.create().await;
     app.activate(app.claim().await).await.unwrap();
     assert_eq!(app.status(id).await, "completed");
@@ -587,8 +599,8 @@ async fn all_four_tools_and_fresh_read_per_edit(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(
-        entries, 1,
-        "only the resolved execution target is session-scoped"
+        entries, 2,
+        "resolved target and durable workspace publication plan are session-scoped"
     );
     let state: Value =
         sqlx::query_scalar("select value from session_state where key='execution-target'")
@@ -596,6 +608,17 @@ async fn all_four_tools_and_fresh_read_per_edit(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(state["host_id"], json!(app.host));
+    let output: Value =
+        sqlx::query_scalar("select output from run_outputs where run_id=$1 and name='workspace'")
+            .bind(id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(output["kind"], "execution_workspace");
+    assert_eq!(output["value"]["host_id"], state["host_id"]);
+    assert_eq!(output["value"]["workspace_root"], state["workspace_root"]);
+    assert_eq!(output["value"]["path"], state["path"]);
+    assert_eq!(output["value"]["environment_id"], json!(environment));
     let input: Value = sqlx::query_scalar(
         "select to_jsonb(i) from run_inputs i where kind='user_message' limit 1",
     )

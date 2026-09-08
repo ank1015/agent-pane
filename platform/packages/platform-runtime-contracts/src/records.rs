@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RunStatus {
     Ready,
     Running,
@@ -17,6 +18,7 @@ pub enum RunStatus {
 
 /// Public run state. Ownership is available only in worker responses.
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Run {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -60,12 +62,16 @@ impl Assignment {
 }
 
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Session {
     pub id: Uuid,
     pub project_id: Uuid,
     pub harness_id: String,
     /// Resolved at creation and immutable. Each run snapshots this configuration.
     pub config: JsonObject,
+    /// Frozen at session creation; older responses may predate declarations.
+    #[serde(default)]
+    pub harness_contract: crate::HarnessContract,
     pub title: Option<String>,
     pub forked_from_session_id: Option<Uuid>,
     pub forked_at_revision: Option<i64>,
@@ -120,22 +126,26 @@ pub struct SavedCheckpoint {
     pub updated_at: DateTime<Utc>,
 }
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SessionMessage {
     pub message_id: Uuid,
     pub revision: i64,
     pub run_id: Option<Uuid>,
     pub origin_run_id: Option<Uuid>,
+    #[cfg_attr(feature = "schema", schemars(with = "serde_json::Value"))]
     pub message: Message,
     pub created_at: DateTime<Utc>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum InputState {
     Pending,
     Handled,
     Rejected,
 }
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RunInput {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -210,16 +220,21 @@ pub struct Items<T> {
     pub items: Vec<T>,
 }
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(rename = "CursorPage_{T}"))]
 pub struct CursorPage<T> {
     pub items: Vec<T>,
     pub next_cursor: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(rename = "SequencePage_{T}"))]
 pub struct SequencePage<T> {
     pub items: Vec<T>,
     pub next_after_sequence: Option<i64>,
 }
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MessagePage {
     pub items: Vec<SessionMessage>,
     pub next_after_revision: Option<i64>,
@@ -256,22 +271,27 @@ pub struct ChildResponse {
     pub input: RunInput,
 }
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MessageResponse {
     pub run: Run,
     pub input: RunInput,
 }
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct AbortResponse {
     pub run: Run,
     pub input: Option<RunInput>,
 }
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Harness {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
     pub default_config: JsonObject,
     pub config_schema: Option<JsonObject>,
+    #[serde(default)]
+    pub harness_contract: crate::HarnessContract,
     /// Provider IDs mapped to explicit supported model IDs. Empty is unspecified, not a wildcard.
     #[serde(default)]
     pub supported_models: std::collections::BTreeMap<String, Vec<String>>,
@@ -284,6 +304,7 @@ pub struct Harness {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum HarnessProjectPolicy {
     Required,
     #[default]

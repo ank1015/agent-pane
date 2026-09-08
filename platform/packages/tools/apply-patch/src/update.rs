@@ -3,7 +3,7 @@ use execution_core::{ExecutionErrorCode as Code, ExecutionResult};
 
 type Replacement = (usize, usize, Vec<String>);
 
-pub(crate) fn derive_new_contents(
+pub fn derive_new_contents(
     path: &str,
     original: &str,
     chunks: &[UpdateFileChunk],

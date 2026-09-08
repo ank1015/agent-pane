@@ -104,3 +104,14 @@ before model dispatch.
 Filesystem targeting is per call; project scope is derived from the run. The
 Platform catalog migration registers its config schema separately from worker
 availability. Neither harness is enabled automatically.
+
+## Sites harness
+
+`SITES_ENABLED=true` registers the trusted `sites` harness. It needs the LLM gateway
+settings, plus Platform Sites access/grants for authoring. Sites is Platform-owned
+and does not require project opt-in.
+A Sites-only worker does not load execution gateway credentials. `siteId` selects
+an existing project site or is null for lazy creation. Multiple sessions may edit
+the same live site. There is no development sandbox, draft or agent publication
+step. See [Sites harness](../../packages/harnesses/sites/README.md) for recovery,
+optional Firecrawl research, browser setup, and the complete system prompt.

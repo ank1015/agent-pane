@@ -1,0 +1,32 @@
+[package]
+name = "sites-harness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+harness-runtime.workspace = true
+platform-runtime-client.workspace = true
+llm-contracts.workspace = true
+llm-client = { path = "../../../../llm/packages/llm-client" }
+provider-openai = { path = "../../../../llm/packages/provider-openai" }
+provider-chatgpt = { path = "../../../../llm/packages/provider-chatgpt" }
+provider-fireworks = { path = "../../../../llm/packages/provider-fireworks" }
+serde.workspace = true
+serde_json.workspace = true
+jsonschema.workspace = true
+futures-util.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+
+platform-agent-code-mode.workspace = true
+platform-javascript-sdk.workspace = true
+tool-firecrawl-search = { path = "../../tools/firecrawl-search" }
+tool-firecrawl-scrape = { path = "../../tools/firecrawl-scrape" }
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.28", features = ["signal", "process"] }
+
+[lints]
+workspace = true

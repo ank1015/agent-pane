@@ -38,8 +38,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             config.execution_gateway_timeout,
         )?,
     );
-    let runtime_service = runtime::RuntimeService::new(database.pool().clone())
-        .with_environments(environment_service.clone());
+    let llm_gateway = LlmGatewayClient::new(
+        config.llm_gateway_url,
+        &config.llm_gateway_admin_token,
+        config.llm_gateway_timeout,
+    )?;
+    let mut remote_config = execution_client::ExecutionClientConfig::new(
+        config.execution_gateway_url.clone(),
+        config.execution_gateway_token.clone(),
+    );
+    // Use the server's existing operator-selected gateway URL policy, including
+    // private development HTTP deployments supported by the gateway proxy.
+    remote_config.allow_insecure_http = config.execution_gateway_url.scheme() == "http";
+    remote_config.request_timeout = std::time::Duration::from_secs(10);
+    remote_config.max_response_bytes = 1024 * 1024;
+    let remote_client = execution_client::ExecutionClient::new(remote_config)?;
+    let mut runtime_service = runtime::RuntimeService::new(database.pool().clone())
+        .with_environments(environment_service.clone())
+        .with_providers(providers::ProviderService::new(llm_gateway.clone()))
+        .with_execution(remote_client);
     let registration_token = zeroize::Zeroizing::new(
         std::env::var("PLATFORM_WORKER_REGISTRATION_TOKEN").unwrap_or_default(),
     );
@@ -55,6 +72,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!(
             "Worker registration is disabled: set PLATFORM_WORKER_REGISTRATION_TOKEN to enable it"
         );
+    }
+    let sites_url = std::env::var("PLATFORM_SITES_SERVICE_URL").unwrap_or_default();
+    let sites_token =
+        zeroize::Zeroizing::new(std::env::var("PLATFORM_SITES_SERVICE_TOKEN").unwrap_or_default());
+    let capability_token = zeroize::Zeroizing::new(
+        std::env::var("PLATFORM_SITES_CAPABILITY_TOKEN").unwrap_or_default(),
+    );
+    if !sites_url.is_empty() {
+        runtime_service = runtime_service.with_sites(platform_server::sites::SitesClient::new(
+            url::Url::parse(&sites_url)?,
+            &sites_token,
+        )?);
     }
     let worker_app = runtime::worker_router(runtime_service.clone(), registration_token.as_str());
     let admin_token =
@@ -74,16 +103,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let admin_app = runtime::admin_router(runtime_service.clone(), admin_token.as_str());
     let reconciler = runtime_service.spawn_reconciler();
+    let remote_reconciler = runtime_service.spawn_remote_reconciler();
     let notifications = runtime_service.spawn_notification_listener();
     let execution_gateway = ExecutionGatewayClient::new(
         config.execution_gateway_url,
         &config.execution_gateway_token,
         config.execution_gateway_timeout,
-    )?;
-    let llm_gateway = LlmGatewayClient::new(
-        config.llm_gateway_url,
-        &config.llm_gateway_admin_token,
-        config.llm_gateway_timeout,
     )?;
     let listener = TcpListener::bind(bind_address).await?;
     let bootstrap_app =
@@ -92,12 +117,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             providers::ProviderService::new(llm_gateway.clone()),
             environment_service.clone(),
         ));
-    let sites_url = std::env::var("PLATFORM_SITES_SERVICE_URL").unwrap_or_default();
-    let sites_token =
-        zeroize::Zeroizing::new(std::env::var("PLATFORM_SITES_SERVICE_TOKEN").unwrap_or_default());
-    let capability_token = zeroize::Zeroizing::new(
-        std::env::var("PLATFORM_SITES_CAPABILITY_TOKEN").unwrap_or_default(),
-    );
     let sites = if sites_url.is_empty() && sites_token.is_empty() && capability_token.is_empty() {
         None
     } else {
@@ -182,8 +201,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = task.await;
     }
     reconciler.abort();
+    remote_reconciler.abort();
     notifications.abort();
-    let _ = tokio::join!(reconciler, notifications);
+    let _ = tokio::join!(reconciler, notifications, remote_reconciler);
     result?;
     Ok(())
 }
