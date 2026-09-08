@@ -50,8 +50,19 @@ pub(super) async fn input(
     payload: Value,
     key: &str,
 ) -> Result<Value> {
-    Ok(sqlx::query_scalar("insert into run_inputs(id,project_id,run_id,kind,payload,deduplication_key) values($1,$2,$3,$4,$5,$6) returning to_jsonb(run_inputs) - 'deduplication_key'")
-        .bind(Uuid::now_v7()).bind(project).bind(run).bind(kind).bind(payload).bind(key).fetch_one(&mut **tx).await?)
+    input_from(tx, project, run, kind, payload, key, None).await
+}
+pub(super) async fn input_from(
+    tx: &mut Tx<'_>,
+    project: Uuid,
+    run: Uuid,
+    kind: &str,
+    payload: Value,
+    key: &str,
+    source: Option<Uuid>,
+) -> Result<Value> {
+    Ok(sqlx::query_scalar("insert into run_inputs(id,project_id,run_id,kind,payload,deduplication_key,source_run_id) values($1,$2,$3,$4,$5,$6,$7) returning to_jsonb(run_inputs) - 'deduplication_key'")
+        .bind(Uuid::now_v7()).bind(project).bind(run).bind(kind).bind(payload).bind(key).bind(source).fetch_one(&mut **tx).await?)
 }
 async fn start(tx: &mut Tx<'_>, s: &SessionRow, request: &StartRun) -> Result<(Uuid, Value)> {
     start_with_parent(tx, s, request, None).await
@@ -191,6 +202,7 @@ impl RuntimeService {
         enabled(&mut tx, project, &request.harness_id).await?;
         let config =
             configuration::resolve(&mut tx, &request.harness_id, &request.config_override).await?;
+        super::run_outputs::validate_inputs(&mut tx, project, &request.harness_id, &config).await?;
         let id = Uuid::now_v7();
         sqlx::query(
             "insert into sessions(id,project_id,harness_id,title,config) values($1,$2,$3,$4,$5)",
@@ -255,6 +267,7 @@ impl RuntimeService {
             (harness == source.harness_id).then_some(&source.config),
         )
         .await?;
+        super::run_outputs::validate_inputs(&mut tx, source.project_id, harness, &config).await?;
         let child = Uuid::now_v7();
         sqlx::query("insert into sessions(id,project_id,harness_id,title,forked_from_session_id,forked_at_revision,config) values($1,$2,$3,$4,$5,$6,$7)")
             .bind(child).bind(source.project_id).bind(harness).bind(request.title.as_ref().or(source.title.as_ref())).bind(id).bind(request.at_revision).bind(config).execute(&mut *tx).await?;

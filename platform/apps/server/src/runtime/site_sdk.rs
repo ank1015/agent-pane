@@ -40,17 +40,6 @@ struct Read {
     options: Options,
 }
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct List {
-    #[serde(default)]
-    options: Options,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct EnvironmentId {
-    environment_id: Uuid,
-}
-#[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct HarnessId {
     harness_id: String,
@@ -103,12 +92,12 @@ struct Send {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Completion {
-    path: String,
+pub(super) struct Completion {
+    pub(super) path: String,
     #[serde(default)]
-    payload: Value,
+    pub(super) payload: Value,
 }
-async fn subscribe(
+pub(super) async fn subscribe(
     tx: &mut Transaction<'_, Postgres>,
     scope: SiteScope,
     run: Uuid,
@@ -147,7 +136,7 @@ struct Stop {
     reason: Option<String>,
     options: MutationOptions,
 }
-fn key(key: &str) -> Result<()> {
+pub(super) fn key(key: &str) -> Result<()> {
     if key.is_empty() || key.len() > 256 || !key.bytes().all(|c| c.is_ascii_graphic()) {
         Err(RuntimeError::Invalid(
             "Provide a stable idempotency key of 1–256 visible ASCII characters.",
@@ -164,7 +153,7 @@ fn message(prompt: &str) -> Result<llm_contracts::Message> {
         json!({"role":"user","id":Uuid::now_v7().to_string(),"timestamp":chrono::Utc::now().timestamp_millis(),"content":[{"type":"text","content":prompt}]}),
     )
 }
-async fn scope(tx: &mut Transaction<'_, Postgres>, s: SiteScope) -> Result<()> {
+pub(super) async fn scope(tx: &mut Transaction<'_, Postgres>, s: SiteScope) -> Result<()> {
     let found:Option<Uuid>=sqlx::query_scalar("select s.id from project_sites s join site_project_access a on a.project_id=s.project_id where s.id=$1 and s.project_id=$2 and s.deleted_at is null and s.desired_status='ready' and a.enabled for share of s")
         .bind(s.site).bind(s.project).fetch_optional(&mut **tx).await?;
     found.ok_or(RuntimeError::NotFound)?;
@@ -181,7 +170,7 @@ async fn session_scope(
     }
     Ok(session)
 }
-async fn harness(
+pub(super) async fn harness(
     tx: &mut Transaction<'_, Postgres>,
     project: Uuid,
     id: &str,
@@ -190,7 +179,11 @@ async fn harness(
     sqlx::query_as("select to_jsonb(h),g.environment_mode from harnesses h join site_harness_grants g on g.harness_id=h.id and g.project_id=$1 where h.id=$2 for share of h,g")
         .bind(project).bind(id).fetch_optional(&mut **tx).await?.ok_or(RuntimeError::Invalid("Harness is not permitted for site invocation."))
 }
-async fn account(tx: &mut Transaction<'_, Postgres>, project: Uuid, id: Uuid) -> Result<()> {
+pub(super) async fn account(
+    tx: &mut Transaction<'_, Postgres>,
+    project: Uuid,
+    id: Uuid,
+) -> Result<()> {
     let found:Option<Uuid>=sqlx::query_scalar("select account_id from site_account_grants where project_id=$1 and account_id=$2 for share").bind(project).bind(id).fetch_optional(&mut **tx).await?;
     found.ok_or(RuntimeError::Invalid(
         "Account is not permitted for site invocation.",
@@ -201,11 +194,16 @@ async fn environment(tx: &mut Transaction<'_, Postgres>, project: Uuid, id: Uuid
     sqlx::query_scalar("select jsonb_build_object('type',type,'workspace_root',workspace_root,'path',path) || case when type='machine' then jsonb_build_object('machine_id',machine_id) else jsonb_build_object('snapshot_id',snapshot_id) end from project_environments where project_id=$1 and id=$2 for share")
         .bind(project).bind(id).fetch_optional(&mut **tx).await?.ok_or(RuntimeError::NotFound)
 }
-async fn validate_existing(tx: &mut Transaction<'_, Postgres>, session: &SessionRow) -> Result<()> {
+pub(super) async fn validate_existing(
+    tx: &mut Transaction<'_, Postgres>,
+    session: &SessionRow,
+) -> Result<()> {
     let (_, mode) = harness(tx, session.project_id, &session.harness_id).await?;
     let id: Uuid = decode(session.config["account_id"].clone())?;
     account(tx, session.project_id, id).await?;
-    if mode == "single" {
+    if mode == "declared" {
+        super::capabilities::validate_frozen_inputs(tx, session).await?;
+    } else if mode == "single" {
         let found:bool=sqlx::query_scalar("select exists(select 1 from project_environments where project_id=$1 and (jsonb_build_object('type',type,'workspace_root',workspace_root,'path',path) || case when type='machine' then jsonb_build_object('machine_id',machine_id) else jsonb_build_object('snapshot_id',snapshot_id) end)=$2)")
             .bind(session.project_id).bind(&session.config["environment"]).fetch_one(&mut **tx).await?;
         if !found {
@@ -250,6 +248,16 @@ impl RuntimeService {
         args: Value,
         providers: &ProviderService,
     ) -> Result<Value> {
+        if super::capabilities::is_method(method) {
+            return self
+                .platform_capability(
+                    super::capabilities::Caller::Site(s),
+                    method,
+                    args,
+                    Some(providers),
+                )
+                .await;
+        }
         // Reads also enforce the current access grant. Never use a guest-supplied project.
         let mut tx = self.transaction().await?;
         scope(&mut tx, s).await?;
@@ -285,45 +293,6 @@ impl RuntimeService {
                         _ => RuntimeError::NotFound,
                     })
             }
-            "environments.list" => {
-                let _: std::collections::BTreeMap<String, Value> = decode(args.clone())?;
-                if args != json!({}) {
-                    return Err(RuntimeError::Invalid("No arguments expected."));
-                }
-                let items:Vec<Value>=sqlx::query_scalar("select to_jsonb(e) from project_environments e where project_id=$1 order by lower(name),id limit 201").bind(s.project).fetch_all(&self.pool).await?;
-                if items.len() > 200 {
-                    return Err(RuntimeError::Invalid(
-                        "Environment inventory exceeds 200 records.",
-                    ));
-                }
-                Ok(json!({"items":items}))
-            }
-            "environments.get" => {
-                let a: EnvironmentId = decode(args)?;
-                sqlx::query_scalar(
-                    "select to_jsonb(e) from project_environments e where project_id=$1 and id=$2",
-                )
-                .bind(s.project)
-                .bind(a.environment_id)
-                .fetch_optional(&self.pool)
-                .await?
-                .ok_or(RuntimeError::NotFound)
-            }
-            "harnesses.list" => {
-                if args != json!({}) {
-                    return Err(RuntimeError::Invalid("No arguments expected."));
-                }
-                let items:Vec<Value>=sqlx::query_scalar("select to_jsonb(h) || jsonb_build_object('environmentMode',g.environment_mode) from harnesses h join site_harness_grants g on g.harness_id=h.id and g.project_id=$1 left join project_harnesses p on p.harness_id=h.id and p.project_id=$1 where h.enabled and (h.project_policy='required' or coalesce(p.enabled,false)) order by h.name,h.id")
-                    .bind(s.project).fetch_all(&self.pool).await?;
-                Ok(json!({"items":items}))
-            }
-            "harnesses.get" => {
-                let a: HarnessId = decode(args)?;
-                let mut tx = self.transaction().await?;
-                let (mut h, mode) = harness(&mut tx, s.project, &a.harness_id).await?;
-                h["environmentMode"] = json!(mode);
-                Ok(h)
-            }
             "sessions.startOptions" => {
                 let a: HarnessId = decode(args)?;
                 let mut tx = self.transaction().await?;
@@ -338,48 +307,7 @@ impl RuntimeService {
             "sessions.start" => self.site_start(s, args, providers).await,
             "sessions.send" => self.site_send(s, args).await,
             "sessions.stop" => self.site_stop(s, args).await,
-            "sessions.list" => {
-                let a: List = decode(args)?;
-                if a.options.after_revision.is_some() || a.options.run_id.is_some() {
-                    return Err(RuntimeError::Invalid("Unsupported list options."));
-                }
-                let mut page = self
-                    .sessions(
-                        s.project,
-                        platform_runtime_contracts::ListQuery {
-                            limit: a.options.limit,
-                            cursor: a.options.cursor,
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-                let ids: Vec<Uuid> = page["items"]
-                    .as_array()
-                    .ok_or(RuntimeError::StoredData)?
-                    .iter()
-                    .map(|v| decode(v["id"].clone()))
-                    .collect::<Result<_>>()?;
-                let latest:Vec<(Uuid,Value)>=sqlx::query_as(&format!("select distinct on (r.session_id) r.session_id,{} from runs r where session_id=any($1) order by session_id,created_at desc,id desc",q::RUN_JSON)).bind(&ids).fetch_all(&self.pool).await?;
-                for item in page["items"]
-                    .as_array_mut()
-                    .ok_or(RuntimeError::StoredData)?
-                {
-                    let id: Uuid = decode(item["id"].clone())?;
-                    item["latest_run"] = latest
-                        .iter()
-                        .find(|(s, _)| *s == id)
-                        .map(|(_, v)| v.clone())
-                        .unwrap_or(Value::Null);
-                    let current = if item["active_run"].is_null() {
-                        &item["latest_run"]
-                    } else {
-                        &item["active_run"]
-                    };
-                    item["status"] = current.get("status").cloned().unwrap_or(json!("idle"));
-                }
-                Ok(page)
-            }
-            "sessions.get" | "sessions.messages" | "sessions.metrics" => {
+            "sessions.metrics" => {
                 let a: Read = decode(args)?;
                 let owner: Uuid = sqlx::query_scalar("select project_id from sessions where id=$1")
                     .bind(a.session_id)
@@ -401,51 +329,15 @@ impl RuntimeService {
                         return Err(RuntimeError::NotFound);
                     }
                 }
-                match method {
-                    "sessions.get" => {
-                        if a.options.limit.is_some()
-                            || a.options.cursor.is_some()
-                            || a.options.after_revision.is_some()
-                            || a.options.run_id.is_some()
-                        {
-                            return Err(RuntimeError::Invalid("Get does not accept options."));
-                        }
-                        let mut session = self.session(a.session_id).await?;
-                        let latest:Option<Value>=sqlx::query_scalar(&format!("select {} from runs r where session_id=$1 order by created_at desc,id desc limit 1",q::RUN_JSON)).bind(a.session_id).fetch_optional(&self.pool).await?;
-                        session["latest_run"] = json!(latest);
-                        let current = if !session["active_run"].is_null() {
-                            &session["active_run"]
-                        } else {
-                            &session["latest_run"]
-                        };
-                        session["status"] = current.get("status").cloned().unwrap_or(json!("idle"));
-                        Ok(session)
-                    }
-                    "sessions.messages" => {
-                        if a.options.cursor.is_some() {
-                            return Err(RuntimeError::Invalid("Messages use afterRevision."));
-                        }
-                        self.messages(
-                            a.session_id,
-                            platform_runtime_contracts::MessageQuery {
-                                after_revision: a.options.after_revision,
-                                limit: a.options.limit,
-                                run_id: a.options.run_id,
-                            },
-                        )
-                        .await
-                    }
-                    _ => {
-                        if a.options.limit.is_some()
-                            || a.options.cursor.is_some()
-                            || a.options.after_revision.is_some()
-                        {
-                            return Err(RuntimeError::Invalid("Metrics accept runId only."));
-                        }
-                        self.site_metrics(a.session_id, a.options.run_id).await
-                    }
+                if a.options.limit.is_some()
+                    || a.options.cursor.is_some()
+                    || a.options.after_revision.is_some()
+                {
+                    return Err(RuntimeError::Invalid("Metrics accept runId only."));
                 }
+                self.site_metrics(a.session_id, a.options.run_id).await
             }
+
             _ => Err(RuntimeError::Invalid(
                 "Unknown or unavailable Platform capability.",
             )),
@@ -558,6 +450,8 @@ impl RuntimeService {
         let config =
             configuration::resolve(&mut tx, &a.input.harness_id, patch.as_object().unwrap())
                 .await?;
+        super::run_outputs::validate_inputs(&mut tx, s.project, &a.input.harness_id, &config)
+            .await?;
         let session = Uuid::now_v7();
         sqlx::query(
             "insert into sessions(id,project_id,harness_id,title,config) values($1,$2,$3,$4,$5)",
@@ -740,63 +634,7 @@ impl RuntimeService {
         self.notify(run.id);
         Ok(result)
     }
-    async fn site_metrics(&self, session: Uuid, run: Option<Uuid>) -> Result<Value> {
-        // Aggregate all canonical assistant messages, not just one UI history page.
-        let mut fields = vec![
-            "count(*) as assistant_messages".to_string(),
-            "count(*) filter(where jsonb_typeof(message->'usage')='object') as messages_with_usage"
-                .to_string(),
-        ];
-        for (name, path) in [
-            ("cost_usd", "{usage,cost,total}"),
-            ("input_tokens", "{usage,input}"),
-            ("output_tokens", "{usage,output}"),
-            ("cache_read_tokens", "{usage,cache_read}"),
-            ("cache_write_tokens", "{usage,cache_write}"),
-        ] {
-            // CASE guards the cast even if PostgreSQL reorders predicates.
-            let numeric = format!(
-                "case when jsonb_typeof(message#>'{path}')='number' then (message#>>'{path}')::numeric end"
-            );
-            let valid = format!("case when ({numeric})>=0 then ({numeric}) end");
-            fields.push(format!("sum({valid}) as {name}"));
-            fields.push(format!("count({valid}) as {name}_messages"));
-        }
-        let sql = format!(
-            "select to_jsonb(t) from (select {} from session_messages sm join messages m on m.id=sm.message_id where sm.session_id=$1 and ($2::uuid is null or sm.run_id=$2) and m.message->>'role'='assistant') t",
-            fields.join(",")
-        );
-        let mut metrics: Value = sqlx::query_scalar(&sql)
-            .bind(session)
-            .bind(run)
-            .fetch_one(&self.pool)
-            .await?;
-        let elapsed:Option<f64>=sqlx::query_scalar("select sum(extract(epoch from (coalesce(finished_at,clock_timestamp())-started_at)))::double precision from runs where session_id=$1 and ($2::uuid is null or id=$2)").bind(session).bind(run).fetch_one(&self.pool).await?;
-        metrics["sessionId"] = json!(session);
-        metrics["runId"] = json!(run);
-        metrics["runWallSeconds"] = json!(elapsed);
-        metrics["scope"] = json!(if run.is_some() {
-            "run"
-        } else {
-            "session_history"
-        });
-        metrics["completeUsage"] = json!(
-            metrics["assistant_messages"] != 0
-                && [
-                    "cost_usd_messages",
-                    "input_tokens_messages",
-                    "output_tokens_messages",
-                    "cache_read_tokens_messages",
-                    "cache_write_tokens_messages"
-                ]
-                .iter()
-                .all(|k| metrics[*k] == metrics["assistant_messages"])
-        );
-        let rate = metrics["input_tokens"]
-            .as_f64()
-            .zip(metrics["cache_read_tokens"].as_f64())
-            .and_then(|(i, c)| if i + c > 0.0 { Some(c / (i + c)) } else { None });
-        metrics["cacheHitRate"] = json!(rate);
-        Ok(metrics)
+    pub(super) async fn site_metrics(&self, session: Uuid, run: Option<Uuid>) -> Result<Value> {
+        super::metrics::read(&mut *self.pool.acquire().await?, session, run).await
     }
 }
