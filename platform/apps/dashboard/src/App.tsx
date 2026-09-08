@@ -12,11 +12,13 @@ import { SiteViewerPage } from './features/sites/SiteViewerPage'
 import { lazy, Suspense } from 'react'
 
 const ProjectSessionPage = lazy(() => import('./features/projects/ProjectSessionPage'))
+const ProjectSessionAnalyzerPage = lazy(() => import('./features/projects/ProjectSessionAnalyzerPage'))
 
 function App() {
   return (
     <Routes>
       <Route path="/projects/:projectId/sites/:siteId/view" element={<SiteViewerPage />} />
+      <Route path="/projects/:projectId/:sessionId/analyze" element={<Suspense fallback={<span className="project-chat-loading" role="status" aria-label="Loading analyzer" />}><ProjectSessionAnalyzerPage /></Suspense>} />
       <Route path="/projects/:projectId" element={<ProjectPage />}>
         <Route index element={<ProjectNewChatPage />} />
         <Route path="environments" element={<ProjectEnvironmentsPage />} />
