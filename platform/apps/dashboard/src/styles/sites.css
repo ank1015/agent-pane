@@ -2,5 +2,31 @@
 .site-viewer-frame { display: block; border: 0; width: 100%; height: 100%; background: white; }
 .site-viewer-notice { padding: 32px; color: #666; font-size: 14px; }
 .site-viewer-error { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 32px; background: #fafafa; color: #222; font-size: 14px; }
-.site-viewer-error button { padding: 8px 16px; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; background: white; }
+.site-viewer-error button { padding: 8px 16px; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; background: white; color: #222; }
 .site-viewer-error a { color: #555; text-decoration: underline; }
+.site-actions { display: flex; align-items: center; gap: 12px; }
+.site-detail-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.site-detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 20px; align-items: start; }
+.site-preview-panel, .site-management section { border: 1px solid var(--cursor-border-faint); border-radius: 8px; background: var(--dashboard-surface); overflow: hidden; }
+.site-section-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 16px; border-bottom: 1px solid var(--cursor-border-faint); }
+.site-section-heading h2, .site-management h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.site-section-heading span, .site-management p, .site-management time, .site-session-list span { font-size: 12px; color: var(--cursor-text-secondary); line-height: 1.6; }
+.site-viewer--embedded { position: relative; inset: auto; height: 650px; }
+.site-management { display: grid; gap: 16px; }
+.site-management section { padding: 16px; }
+.site-management form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.site-management input { min-width: 0; width: 100%; border: 1px solid var(--cursor-border-control); padding: 8px; border-radius: 5px; font: inherit; font-size: 13px; color: var(--cursor-text-primary); background: var(--dashboard-chrome); }
+.site-management button, .site-empty button { border: 1px solid var(--cursor-border-control); background: var(--dashboard-surface); border-radius: 5px; padding: 6px 9px; font-size: 12px; color: var(--cursor-text-primary); cursor: pointer; }
+.site-management button:disabled { opacity: .45; cursor: default; }
+.site-snapshot-list, .site-session-list { list-style: none; padding: 0; margin: 14px 0 0; }
+.site-snapshot-list li, .site-session-list li { display: flex; justify-content: space-between; gap: 12px; align-items: center; border-top: 1px solid var(--cursor-border-faint); padding: 12px 0; font-size: 13px; }
+.site-snapshot-list strong, .site-snapshot-list time { display: block; overflow-wrap: anywhere; }
+.site-restore-confirm { background: var(--cursor-overlay-06); padding: 12px; margin-top: 12px; border-radius: 6px; }
+.site-restore-confirm button + button { margin-left: 8px; }
+.site-empty { padding: 32px; color: var(--cursor-text-secondary); font-size: 14px; }
+@media(max-width: 1000px) { .site-detail-grid { grid-template-columns: minmax(0, 1fr); } .site-viewer--embedded { height: 520px; } }
+
+.site-management a { overflow-wrap: anywhere; }
+.site-management input:focus-visible, .site-management button:focus-visible { outline: 2px solid var(--cursor-border-strong); outline-offset: 2px; }
+.site-management summary { cursor: pointer; font-size: 14px; font-weight: 600; }
+.site-invocation-logs pre { max-height: 250px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }

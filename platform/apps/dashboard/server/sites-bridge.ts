@@ -25,6 +25,7 @@ export function sitesBridge(env: Record<string, string>): Plugin {
     const response = await fetch(`${upstream}/api/projects/${project}/sites${path}`, { method, redirect: 'error', signal: AbortSignal.timeout(40_000), headers: { Authorization: `Bearer ${tokens[project]}`, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
     const reader = response.body?.getReader(); const chunks: Uint8Array[] = []; let length = 0
     if (reader) for (;;) { const chunk = await reader.read(); if (chunk.done) break; length += chunk.value.length; if (length > 512 * 1024) { await reader.cancel(); throw fail(502, 'Site response is too large.') }; chunks.push(chunk.value) }
+    if (response.status === 204) return undefined
     const value = JSON.parse(Buffer.concat(chunks).toString())
     if (!response.ok) throw fail(response.status, value?.error?.message || 'Site request failed.')
     return value
@@ -46,12 +47,48 @@ export function sitesBridge(env: Record<string, string>): Plugin {
     active++
     try {
       const url = new URL(req.url, origin)
-      if (url.search) throw fail(400, 'Unexpected query parameters.')
+      const snapshotPage = req.method === 'GET' && /^\/api\/site-view\/projects\/[^/]+\/sites\/[^/]+\/snapshots$/.test(url.pathname)
+      if (url.search && !snapshotPage) throw fail(400, 'Unexpected query parameters.')
       const parts = url.pathname.slice(prefix.length).split('/').filter(Boolean)
       for (const [key, view] of views) if (view.expires <= Date.now()) views.delete(key)
       if (parts[0] === 'projects' && uuid.test(parts[1] || '') && parts[2] === 'sites') {
         const project = parts[1].toLowerCase()
         if (req.method === 'GET' && parts.length === 3) return json(200, await platform(project, ''))
+        if (uuid.test(parts[3] || '')) {
+          const site = parts[3].toLowerCase()
+          if (req.method === 'GET' && parts.length === 4) return json(200, await platform(project, `/${site}`))
+          if (req.method === 'DELETE' && parts.length === 4) {
+            await platform(project, `/${site}`, 'DELETE')
+            for (const [key, view] of views) if (view.project === project && view.site === site) views.delete(key)
+            res.writeHead(204, { 'Cache-Control': 'no-store' }); res.end(); return
+          }
+          if (req.method === 'PATCH' && parts.length === 4) {
+            const body = await read(req)
+            if (!body || typeof body.name !== 'string' || !body.name.trim() || [...body.name.trim()].length > 128 || /[\x00-\x1f\x7f]/.test(body.name) || Object.keys(body).some(k => k !== 'name')) throw fail(400, 'Provide a site name.')
+            return json(200, await platform(project, `/${site}`, 'PATCH', { name: body.name.trim() }))
+          }
+          if (req.method === 'GET' && parts.length === 5 && parts[4] === 'snapshots') {
+            const after = url.searchParams.get('after'), limit = url.searchParams.get('limit') || '20'
+            if ([...url.searchParams.keys()].some(k => !['after', 'limit'].includes(k)) || (after !== null && !uuid.test(after)) || !/^(?:[1-9]|[1-4][0-9]|50)$/.test(limit) || url.searchParams.getAll('after').length > 1 || url.searchParams.getAll('limit').length > 1) throw fail(400, 'Invalid snapshot page.')
+            return json(200, await platform(project, `/${site}/snapshots?limit=${limit}${after ? `&after=${after}` : ''}`))
+          }
+          if (req.method === 'GET' && parts.length === 5 && ['sessions', 'diagnostics'].includes(parts[4])) return json(200, await platform(project, `/${site}/${parts[4]}`))
+          if (req.method === 'GET' && parts.length === 6 && parts[4] === 'invocations' && uuid.test(parts[5])) {
+            const v = await platform(project, `/${site}/invocations/${parts[5].toLowerCase()}`)
+            return json(200, { id: v.id, status: v.status, errorCode: v.error_code, logs: v.logs, releaseId: v.release_id })
+          }
+          if (req.method === 'GET' && parts.length === 6 && parts[4] === 'authoring' && uuid.test(parts[5])) return json(200, await platform(project, `/${site}/authoring/${parts[5].toLowerCase()}`))
+          if (req.method === 'POST' && parts.length === 5 && parts[4] === 'snapshots') {
+            const body = await read(req)
+            if (!body || !uuid.test(body.id || '') || typeof body.name !== 'string' || !body.name.trim() || Buffer.byteLength(body.name) > 128 || /[\x00-\x1f\x7f]/.test(body.name) || Object.keys(body).some(k => !['id', 'name'].includes(k))) throw fail(400, 'Provide an operation ID and snapshot name.')
+            return json(200, await platform(project, `/${site}/snapshots`, 'POST', body))
+          }
+          if (req.method === 'POST' && parts.length === 7 && parts[4] === 'snapshots' && uuid.test(parts[5]) && parts[6] === 'restore') {
+            const body = await read(req)
+            if (!body || !uuid.test(body.id || '') || Object.keys(body).some(k => k !== 'id')) throw fail(400, 'Provide a restore operation ID.')
+            return json(200, await platform(project, `/${site}/snapshots/${parts[5].toLowerCase()}/restore`, 'POST', body))
+          }
+        }
         if (req.method === 'POST' && parts.length === 5 && uuid.test(parts[3]) && parts[4] === 'open') {
           const site = parts[3].toLowerCase()
           const data = await platform(project, `/${site}`)
