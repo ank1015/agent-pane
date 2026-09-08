@@ -7,6 +7,10 @@ mod parser;
 mod prepare;
 mod update;
 
+/// Apply parsed update chunks to caller-owned text without filesystem access.
+/// The caller is responsible for atomic persistence and operation receipts.
+pub use update::derive_new_contents;
+
 use execution_core::{
     ExecutionError, ExecutionErrorCode as Code, ExecutionHostId, ExecutionPath, ExecutionResult,
     ExecutionRuntime, OperationContext, OperationId, RemovePathRequest, SupervisorGenerationId,
