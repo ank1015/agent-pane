@@ -11,12 +11,90 @@ const { createChatRequest, lockedChatOptions, sessionReasoningLevels } = await v
 const { chatKeys, chatMessagesOptions, chatRunsOptions, retryRead, readCursorPages, seedAccepted } = await vite.ssrLoadModule('/src/features/projects/chat-queries.ts')
 const { postJson, ApiError } = await vite.ssrLoadModule('/src/lib/api-client.ts')
 const { RUN_EVENT_TYPES } = await vite.ssrLoadModule('/src/features/projects/chat-stream.ts')
+const { summarizeSessionUsage } = await vite.ssrLoadModule('/src/features/projects/project-session-usage.ts')
+const { buildSessionAnalysis, buildSessionReplayAnalysis } = await vite.ssrLoadModule('/src/features/projects/session-analysis.ts')
 const { ProjectEnvironmentPromptComposer } = await vite.ssrLoadModule('/src/features/projects/ProjectEnvironmentPromptComposer.tsx')
 const id = '01900000-0000-7000-8000-000000000001'
 const user = { role: 'user', id: 'user-1', timestamp: 0, content: [{ type: 'text', content: 'hello' }] }
 const run = { id: 'run', status: 'ready', created_at: '2026-09-05T00:00:00Z', final_message_id: null }
 const input = { id: 'input', run_id: 'run', status: 'pending', payload: { message: user }, handling: null, created_at: run.created_at }
 const history = { message_id: 'history', revision: 1, run_id: 'run', message: user, created_at: run.created_at }
+
+test('session usage shows the latest assistant context in thousands', () => {
+  const assistant = (id, usage) => ({
+    ...history,
+    message_id: id,
+    message: { role: 'assistant', id, usage, content: [], duration_ms: 1, native_message: null, stop_reason: 'stop', timestamp: 0 },
+  })
+  const summary = summarizeSessionUsage([
+    assistant('first', { input: 99_000, output: 1_000, cache_read: 100_000, cost: { total: 0.25 } }),
+    { ...history, message_id: 'tool', message: { role: 'tool_result' } },
+    assistant('latest', { input: 30_000, output: 1_200, cache_read: 200_000, cost: { total: 0.5 } }),
+  ])
+  assert.deepEqual(summary, { cost: '$0.75000', cache: '69.9%', context: '231.2k' })
+  assert.equal(summarizeSessionUsage([]).context, '—')
+})
+
+test('session analysis builds per-message latency and cumulative cost statistics', () => {
+  const assistant = (id, revision, duration_ms, usage, tool = false) => ({
+    ...history,
+    message_id: id,
+    revision,
+    created_at: `2026-09-05T00:00:0${revision}Z`,
+    message: { role: 'assistant', id, usage, duration_ms, model: { provider: 'openai', id: 'model' }, native_message: null, content: tool ? [{ type: 'tool_call', name: 'read', arguments: {}, tool_call_id: 'call' }] : [], stop_reason: 'stop', timestamp: 0 },
+  })
+  const analysis = buildSessionAnalysis([
+    assistant('second', 3, 2_000, { input: 30, output: 10, cache_read: 60, cost: { total: 0.2 } }, true),
+    assistant('first', 2, 1_000, { input: 50, output: 5, cache_read: 50, cache_write: 5, cost: { total: 0.1 } }),
+    history,
+  ], [{ ...run, started_at: '2026-09-05T00:00:00Z', finished_at: '2026-09-05T00:00:05Z' }])
+  assert.deepEqual(analysis.latency, [{ messageNumber: 2, value: 1_000 }, { messageNumber: 3, value: 2_000 }])
+  assert.deepEqual(analysis.cumulativeCost, [{ messageNumber: 2, value: 0.1 }, { messageNumber: 3, value: 0.30000000000000004 }])
+  assert.equal(analysis.totalTimeMs, 5_000)
+  assert.equal(analysis.totalCost, 0.30000000000000004)
+  assert.equal(analysis.inputTokens, 80)
+  assert.equal(analysis.outputTokens, 15)
+  assert.equal(analysis.cachedTokens, 110)
+  assert.equal(analysis.totalTokens, 210)
+  assert.equal(analysis.cachePercent.toFixed(1), '57.9')
+  assert.equal(analysis.messageCount, 3)
+  assert.equal(analysis.assistantMessageCount, 2)
+  assert.equal(analysis.toolCallCount, 1)
+})
+
+test('replay excludes future usage and clips completed or active runs at the selected message', () => {
+  const first = { ...history, revision: 1 }
+  const assistant = { ...history, message_id: 'answer', revision: 2, created_at: '2026-09-05T00:00:02Z', message: {
+    role: 'assistant', duration_ms: 1500, content: [], usage: { input: 20, output: 5, cache_read: 80, cost: { total: 0.1 } },
+  } }
+  const result = { ...history, message_id: 'result', revision: 3, created_at: '2026-09-05T00:00:03Z', message: { role: 'tool_result' } }
+  const future = { ...assistant, message_id: 'future', revision: 4, run_id: 'future-run', created_at: '2026-09-05T00:01:05Z' }
+  const messages = [future, result, assistant, first]
+  for (const finished_at of [null, '2026-09-05T00:00:10Z']) {
+    const runs = [
+      { ...run, started_at: '2026-09-05T00:00:00Z', finished_at },
+      { ...run, id: 'future-run', started_at: '2026-09-05T00:01:00Z', finished_at: '2026-09-05T00:01:10Z' },
+    ]
+    const initial = buildSessionReplayAnalysis(messages, runs, 0)
+    assert.equal(initial.messageCount, 1)
+    assert.equal(initial.totalCost, 0)
+    assert.equal(initial.totalTokens, 0)
+    assert.equal(initial.totalTimeMs, 0)
+    const next = buildSessionReplayAnalysis(messages, runs, 1)
+    assert.equal(next.totalCost, 0.1)
+    assert.equal(next.totalTokens, 105)
+    assert.equal(next.cachePercent, 80)
+    assert.equal(next.totalTimeMs, 2000)
+    assert.equal(next.latency.length, 1)
+    const tool = buildSessionReplayAnalysis(messages, runs, 2)
+    assert.equal(tool.totalTimeMs, 3000)
+    assert.equal(tool.totalCost, next.totalCost)
+    assert.equal(tool.messageCount, 3)
+    assert.deepEqual(buildSessionReplayAnalysis(messages, runs, 0), initial)
+  }
+  assert.equal(buildSessionReplayAnalysis(messages, [], 2).totalTimeMs, 3000)
+  assert.equal(buildSessionReplayAnalysis([], [], 0).messageCount, 0)
+})
 
 test('locked reasoning retains the harness scale instead of a single selected bar', () => {
   const levels = ['low', 'medium', 'high', 'xhigh', 'max']
