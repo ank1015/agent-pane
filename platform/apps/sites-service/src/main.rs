@@ -11,6 +11,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args().nth(1).as_deref() == Some("--backend-runtime") {
         return platform_sites_service::runtime::guest_main();
     }
+    if std::env::args().nth(1).as_deref() == Some("--validate-backend") {
+        return platform_sites_service::authoring::validate_guest();
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
