@@ -4,10 +4,12 @@
 //! binds a lease epoch, but never claims that the lease is still valid and never
 //! updates optimistic versions for the caller. See the package README.
 #![doc = include_str!("../README.md")]
+mod capabilities;
 mod error;
 mod identity;
 mod queries;
 mod transport;
+pub use capabilities::PlatformCapabilities;
 pub use error::{Error, Result, ServerError};
 pub use identity::{Command, RequestKey};
 pub use platform_runtime_contracts as types;
@@ -332,6 +334,39 @@ impl RunClient {
     }
     pub async fn append_events(&self, command: &Command<Events>) -> Result<Items<RunEvent>> {
         self.post("/events", command).await
+    }
+    /// Publish one declared, immutable output. Persist this command before sending;
+    /// exact receipt replay survives takeover. Publication does not renew the lease.
+    pub async fn publish_output(&self, command: &Command<PublishRunOutput>) -> Result<RunOutput> {
+        command.body().validate().map_err(Error::Invalid)?;
+        self.post("/outputs", command).await
+    }
+    /// Associate a harness-owned host with an authorized project environment.
+    /// Sandbox metadata must identify this project and session. Does not provision;
+    /// returns an optional sandbox lifecycle ID for explicit output publication.
+    pub async fn bind_workspace(
+        &self,
+        command: &Command<types::capabilities::BindHarnessWorkspace>,
+    ) -> Result<ExecutionWorkspace> {
+        self.post("/workspace-bindings", command).await
+    }
+    /// Read outputs of a run in this caller's project. Requires the caller's live
+    /// lease; the target may be terminal. Follow the explicit sequence cursor.
+    pub async fn run_outputs(
+        &self,
+        target: Uuid,
+        query: &RunOutputsQuery,
+    ) -> Result<RunOutputsPage> {
+        query.validate().map_err(Error::Invalid)?;
+        self.client
+            .inner
+            .transport
+            .send(
+                self.request(Method::GET, &format!("/outputs/{target}"))?
+                    .query(query),
+                true,
+            )
+            .await
     }
     pub async fn create_child(&self, command: &Command<Child>) -> Result<ChildResponse> {
         self.post("/children", command).await

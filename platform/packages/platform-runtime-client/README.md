@@ -263,3 +263,34 @@ worker takeover. A different body conflicts. As with other runtime commands,
 the original authenticated issuer may read its receipt after losing ownership,
 but cannot perform a new mutation. Reference validation does not hold database
 locks, and lease ownership is checked again before committing.
+
+## Harness-published outputs
+
+`RunClient::publish_output(&Command<PublishRunOutput>)` publishes one declared
+immutable output under the current lease. Persist the command before dispatch.
+`RunClient::run_outputs(target_run_id, &RunOutputsQuery)` reads a same-project
+run's outputs with bounded sequence pagination; the target can be terminal.
+These are explicit public results, separate from private session state. See
+[contracts, examples and recovery rules](../../CAPABILITIES.md).
+
+
+## Scoped Platform SDK
+
+`run.platform()` exposes typed discovery, session/run operations, statistics and
+output reads through the authenticated capability bridge. See the complete
+[method list, grant model and examples](../../CAPABILITIES.md#scoped-sessionrun-sdk-phase-2).
+Mutations take `Command<types::capabilities::CreateSession>` / `CreateRun` /
+`SteerRun` / `AbortRun`. Persist the command before calling; the same key and body
+survive takeover. Reads require a live source lease; accepted receipts retain the
+existing original-issuer/current-owner recovery rules. New sessions and runs use
+project admission and immutable session configuration. No database or service
+credentials enter capability arguments.
+
+The same client exposes durable sandbox lifecycle and command execution through
+`create_sandbox`/`get_sandbox`/`terminate_sandbox` and
+`bash`/`get_execution`/`execution_output`/`cancel_execution`. Accepted work survives
+lease loss; mutations replay their original receipts and getters return current
+state. `RunClient::bind_workspace` validates and associates a harness-owned host
+before publication; a sandbox binding returns an optional `sandbox_id` lifecycle
+handle. Published outputs alone never grant host access. See
+[phase 3 contracts and recovery semantics](../../CAPABILITIES.md#durable-sandbox-and-command-sdk-phase-3).
