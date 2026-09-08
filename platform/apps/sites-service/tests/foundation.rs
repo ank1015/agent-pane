@@ -113,6 +113,7 @@ impl Drop for Server {
 fn command(root: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_platform-sites-service"));
     command
+        .current_dir(root) // Never load a developer service .env into an isolated fixture.
         .env("SITES_DATA_DIR", root)
         .env("SITES_API_TOKEN", TOKEN)
         .env("RUST_LOG", "error")

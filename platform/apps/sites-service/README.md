@@ -385,4 +385,7 @@ access. It exits with `PASS` only after receiving and validating the browser res
 
 See [dashboard Sites integration](../dashboard/SITES.md) for the Sites table,
 full-page sandbox viewer, frontend `callBackend` bridge, and the runnable
-[harness-browser example](examples/harness-browser/). Agent authoring is deferred.
+[harness-browser example](examples/harness-browser/). The shared worker now includes
+the [Sites authoring harness](../../packages/harnesses/sites/README.md).
+
+[Direct two-file live authoring and user snapshots](AUTHORING.md) add a simple agent-facing workflow over this storage model.
