@@ -4,6 +4,8 @@
 use futures_util::future::BoxFuture;
 use platform_runtime_client::{Result, RunClient};
 use tokio::sync::watch;
+mod workspace;
+pub use workspace::publish_workspace;
 
 /// Signals are hints, not acknowledged inputs or optimistic concurrency tokens.
 #[derive(Clone, Copy, Debug, Default)]
