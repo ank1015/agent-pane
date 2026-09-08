@@ -50,6 +50,23 @@ pub(crate) async fn run(harness: BasicCodexToolsHarness, execution: Execution) -
             return initial_failure(&execution.client, &context, &message).await;
         }
     };
+    harness_runtime::publish_workspace(
+        &execution.client,
+        &mut context,
+        json!(config.environment),
+        platform_runtime_client::types::ExecutionWorkspace {
+            host_id: target
+                .host_id
+                .as_str()
+                .parse()
+                .map_err(|_| Error::Invalid("Invalid workspace host ID"))?,
+            workspace_root: target.workspace_root.clone(),
+            path: target.path.clone(),
+            environment_id: None,
+            sandbox_id: None,
+        },
+    )
+    .await?;
     let mut messages = std::mem::take(&mut context.messages.items);
     let revision = context.session.current_revision;
     let mut after = context.messages.next_after_revision;

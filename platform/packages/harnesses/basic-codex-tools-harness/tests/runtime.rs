@@ -668,6 +668,19 @@ async fn all_four_tools_preserve_custom_calls_and_hosted_image_content(pool: PgP
     let run = app.create().await;
     app.activate(app.claim().await).await.unwrap();
     assert_eq!(app.status(run).await, "completed");
+    let output: Value =
+        sqlx::query_scalar("select output from run_outputs where run_id=$1 and name='workspace'")
+            .bind(run)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(output["kind"], "execution_workspace");
+    assert_eq!(output["value"]["host_id"], json!(app.host));
+    assert_eq!(
+        output["value"]["workspace_root"],
+        json!(std::fs::canonicalize(app.temp.path().join("workspace")).unwrap())
+    );
+    assert_eq!(output["value"]["path"], ".");
     assert_eq!(
         std::fs::read_to_string(app.temp.path().join("workspace/file.txt")).unwrap(),
         "updated\n"
