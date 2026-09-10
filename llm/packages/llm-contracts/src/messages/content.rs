@@ -71,6 +71,15 @@ pub struct ImageContent {
 pub enum ContentPart {
     Text(TextContent),
     Image(ImageContent),
+    Audio(AudioContent),
+}
+
+/// Inline audio emitted by code-mode tools, preserving the provider data URL.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AudioContent {
+    pub audio_url: String,
 }
 
 impl Validate for ContentPart {
@@ -78,6 +87,12 @@ impl Validate for ContentPart {
         let mut issues = Vec::new();
         if let Self::Image(image) = self {
             validate_image(image, &mut issues);
+        }
+        if let Self::Audio(audio) = self {
+            if !audio.audio_url.starts_with("data:audio/") || !audio.audio_url.contains(";base64,")
+            {
+                issue(&mut issues, "audio_url", "must be a base64 audio data URL");
+            }
         }
         finish(issues)
     }

@@ -51,6 +51,20 @@ pub(crate) fn build_chat_completion_request_for_model(
         messages.push(json!({ "role": "system", "content": instructions }));
     }
     for message in &request.messages {
+        let content = match message {
+            Message::User(message) => Some(&message.content),
+            Message::ToolResult(message) => Some(&message.content),
+            _ => None,
+        };
+        if content.is_some_and(|parts| {
+            parts
+                .iter()
+                .any(|part| matches!(part, ContentPart::Audio(_)))
+        }) {
+            return Err(invalid_request(
+                "The Fireworks adapter does not support portable audio input.",
+            ));
+        }
         messages.extend(map_message(message, &request.tools)?);
     }
 
@@ -197,7 +211,7 @@ fn map_tool_result(
             .iter()
             .filter_map(|part| match part {
                 ContentPart::Text(text) => Some(text.content.as_str()),
-                ContentPart::Image(_) => None,
+                ContentPart::Image(_) | ContentPart::Audio(_) => None,
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -222,6 +236,7 @@ fn map_content(content: &[ContentPart]) -> Vec<Value> {
     content
         .iter()
         .map(|part| match part {
+            ContentPart::Audio(_) => unreachable!("portable audio is rejected before mapping"),
             ContentPart::Text(text) => json!({ "type": "text", "text": text.content }),
             ContentPart::Image(image) => {
                 let url = match &image.source {

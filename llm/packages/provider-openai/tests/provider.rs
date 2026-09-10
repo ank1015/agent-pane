@@ -234,6 +234,59 @@ fn replays_openai_native_output_for_follow_up_requests() {
 }
 
 #[test]
+fn custom_exec_preserves_inline_media_result_shapes() {
+    let mut request = request("gpt-5.6-luna");
+    request
+        .tools
+        .push(ToolDefinition::Custom(llm_contracts::CustomTool {
+            name: "exec".into(),
+            description: "Run JavaScript".into(),
+            format: llm_contracts::CustomToolFormat {
+                syntax: llm_contracts::GrammarSyntax::Lark,
+                definition: "start: /[\\s\\S]+/".into(),
+            },
+        }));
+    request
+        .messages
+        .push(Message::ToolResult(ToolResultMessage {
+            id: MessageId::new("media-result").unwrap(),
+            tool_name: "exec".into(),
+            tool_call_id: ToolCallId::new("exec-call").unwrap(),
+            content: vec![
+                ContentPart::Text(TextContent {
+                    content: "Script completed\nWall time 0.1 seconds\nOutput:\n".into(),
+                    metadata: None,
+                }),
+                ContentPart::Image(ImageContent {
+                    source: ImageSource::Base64(llm_contracts::Base64ImageSource {
+                        mime_type: "image/png".into(),
+                        data: "AAAA".into(),
+                    }),
+                    detail: Some(ImageDetail::Low),
+                    metadata: None,
+                }),
+                ContentPart::Audio(llm_contracts::AudioContent {
+                    audio_url: "data:audio/wav;base64,AAAA".into(),
+                }),
+            ],
+            details: None,
+            timestamp: Timestamp(1),
+            outcome: ToolResultOutcome::Success,
+        }));
+    let body = build_response_request(&request).unwrap();
+    assert_eq!(
+        body["input"][0],
+        json!({
+            "type":"custom_tool_call_output", "call_id":"exec-call", "output":[
+                {"type":"input_text","text":"Script completed\nWall time 0.1 seconds\nOutput:\n"},
+                {"type":"input_image","image_url":"data:image/png;base64,AAAA","detail":"low"},
+                {"type":"input_audio","audio_url":"data:audio/wav;base64,AAAA"}
+            ]
+        })
+    );
+}
+
+#[test]
 fn response_preserves_native_and_calculates_every_cost_bucket() {
     let model = find_model("gpt-5.6-luna").expect("catalog model");
     let native = json!({
