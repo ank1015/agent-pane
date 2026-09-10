@@ -5,20 +5,43 @@ use uuid::Uuid;
 #[test]
 fn registered_capabilities_match_harness_catalogs() {
     let models = environments_harness::supported_models();
-    let migration = include_str!(
+    let initial = include_str!(
         "../../../../apps/server/migrations/20260905030000_harness_supported_models.sql"
     );
-    let stored = migration
+    let initial = initial
         .split("supported_models = '")
         .nth(1)
         .unwrap()
         .split("'::jsonb")
         .next()
         .unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(stored).unwrap(),
-        serde_json::to_value(&models).unwrap()
-    );
+    let mut stored = serde_json::from_str::<Value>(initial).unwrap();
+    let migration =
+        include_str!("../../../../apps/server/migrations/20260910010000_add_gpt_6_astra.sql");
+    let update = migration
+        .split("supported_models || '")
+        .nth(1)
+        .unwrap()
+        .split("'::jsonb")
+        .next()
+        .unwrap();
+    for (provider, ids) in serde_json::from_str::<Value>(update)
+        .unwrap()
+        .as_object()
+        .unwrap()
+    {
+        stored[provider] = ids.clone();
+    }
+    assert_eq!(stored, serde_json::to_value(&models).unwrap());
+    for harness in [
+        "environments",
+        "basic-cc-tools-harness",
+        "basic-codex-tools-harness",
+        "unified-exec-only-harness",
+        "sites",
+    ] {
+        assert!(migration.contains(&format!("'{harness}'")));
+    }
     assert_eq!(models.len(), 3);
     for (provider, ids) in models {
         assert!(!ids.is_empty());
