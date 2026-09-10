@@ -4,9 +4,9 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
-import { createServer } from 'vite'
+import { createTestViteServer } from './vite-test-server.mjs'
 
-const vite = await createServer({ server: { middlewareMode: true, ws: false }, appType: 'custom' })
+const vite = await createTestViteServer()
 after(() => vite.close())
 const { ProjectEnvironmentsTable } = await vite.ssrLoadModule('/src/features/projects/ProjectEnvironmentsTable.tsx')
 const { default: App } = await vite.ssrLoadModule('/src/App.tsx')

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 import { createServer as httpServer } from 'node:http'
-import { createServer } from 'vite'
+import { createTestViteServer } from './vite-test-server.mjs'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import vm from 'node:vm'
-const vite = await createServer({ configFile: false, optimizeDeps: { noDiscovery: true, include: [] }, server: { middlewareMode: true, ws: false }, appType: 'custom' })
+const vite = await createTestViteServer()
 after(() => vite.close())
 const { validSiteCall, backendResult } = await vite.ssrLoadModule('/src/features/sites/site-bridge.ts')
 const { sitesBridge } = await vite.ssrLoadModule('/server/sites-bridge.ts')
