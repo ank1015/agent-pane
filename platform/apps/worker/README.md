@@ -109,7 +109,7 @@ availability. Neither harness is enabled automatically.
 
 `SITES_ENABLED=true` registers the trusted `sites` harness. It needs the LLM gateway
 settings, `FIRECRAWL_API_KEY` for nested search/scrape, plus Platform Sites
-access/grants for authoring. Set SITES_BROWSER_NODE and SITES_BROWSER_SCRIPT to
+access for authoring. Set SITES_BROWSER_NODE and SITES_BROWSER_SCRIPT to
 absolute paths for Node and the bundled
 `platform/packages/harnesses/sites/browser/runtime.mjs`. Install its npm dependencies
 and Chromium first; startup verifies native sandbox support. Sites is Platform-owned

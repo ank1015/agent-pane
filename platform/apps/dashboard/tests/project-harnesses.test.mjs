@@ -3,9 +3,9 @@ import { after, test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MutationObserver, QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { createServer } from 'vite'
+import { createTestViteServer } from './vite-test-server.mjs'
 
-const vite = await createServer({ server: { middlewareMode: true, ws: false }, appType: 'custom' })
+const vite = await createTestViteServer()
 after(() => vite.close())
 const { AddHarnessesDialog } = await vite.ssrLoadModule('/src/features/projects/AddHarnessesDialog.tsx')
 const { ProjectHarnessesTable } = await vite.ssrLoadModule('/src/features/projects/ProjectHarnessesTable.tsx')

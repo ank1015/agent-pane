@@ -27,9 +27,14 @@ pub(super) async fn declared(f: &Fixture) {
         .bind(json!({"type":"object","additionalProperties":false,"required":["model","account_id","serverOnly"],"properties":{"model":{"type":"object","required":["provider","id"]},"account_id":{"type":"string"},"serverOnly":{"const":"fixed"},"task":{"type":"object","properties":{"environment":{"type":"string"},"label":{"type":"string"}},"additionalProperties":false},"evaluators":{"type":"array","items":{"type":"string"}}}}))
         .bind(json!({"environment_inputs":[{"config_pointer":"/task/environment","cardinality":"single"},{"config_pointer":"/evaluators","cardinality":"multiple"}],"outputs":{"result":{"kind":"json"}}}))
         .bind(HARNESS).execute(&f.pool).await.unwrap();
-    // Exercise the real admin API and omitted environmentMode default.
-    f.request(Method::PUT,&format!("/internal/site-access/{}",f.project),ADMIN,
-        json!({"token":TOKEN,"enabled":true,"harnesses":[{"id":HARNESS,"configurableFields":["model","task","evaluators"]}],"accountIds":[f.account]}),200).await;
+    f.request(
+        Method::PUT,
+        &format!("/internal/site-access/{}", f.project),
+        ADMIN,
+        json!({"token":TOKEN,"enabled":true}),
+        200,
+    )
+    .await;
 }
 pub(super) async fn worker(f: &mut Fixture) -> (PlatformClient, String) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -69,8 +74,10 @@ pub(super) async fn claim(client: &PlatformClient, id: Uuid) -> platform_runtime
 }
 async fn finish(f: &Fixture, run: Uuid) {
     let mut tx = f.pool.begin().await.unwrap();
-    sqlx::query("update runs set status='failed',error='{}',version=version+1,worker_id=null,lease_expires_at=null,available_at=null,finished_at=clock_timestamp() where id=$1").bind(run).execute(&mut *tx).await.unwrap();
-    sqlx::query("insert into run_events(id,run_id,type,source,payload) values($1,$2,'run.failed','runtime','{}')").bind(Uuid::now_v7()).bind(run).execute(&mut *tx).await.unwrap();
+    let changed = sqlx::query("update runs set status='failed',error='{}',version=version+1,worker_id=null,lease_expires_at=null,available_at=null,finished_at=clock_timestamp() where id=$1 and status in ('ready','running','waiting')").bind(run).execute(&mut *tx).await.unwrap().rows_affected();
+    if changed == 1 {
+        sqlx::query("insert into run_events(id,run_id,type,source,payload) values($1,$2,'run.failed','runtime','{}')").bind(Uuid::now_v7()).bind(run).execute(&mut *tx).await.unwrap();
+    }
     tx.commit().await.unwrap();
 }
 
@@ -80,18 +87,23 @@ async fn shared_sites_configuration_inventory_and_atomic_admission(pool: PgPool)
     let f = Fixture::new(pool).await;
     declared(&f).await;
     let accounts = ok(f.sdk("accounts.list", json!([])).await);
-    assert_eq!(accounts["items"].as_array().unwrap().len(), 1);
+    assert_eq!(accounts["items"].as_array().unwrap().len(), 2);
     assert_eq!(
         accounts["items"][0].as_object().unwrap().len(),
         4,
         "no credentials or config"
     );
+    assert!(
+        ok(f.sdk("harnesses.list", json!([])).await)["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|h| h["id"] == HARNESS),
+        "project-enabled harnesses must be visible to Sites"
+    );
     let options = ok(f.sdk("harnesses.startOptions", json!([HARNESS])).await);
     assert_eq!(options["environmentMode"], "declared");
-    assert_eq!(
-        options["configurableFields"],
-        json!(["model", "task", "evaluators"])
-    );
+    assert!(options["configurableFields"].is_null());
     assert_eq!(
         options["harnessContract"]["environment_inputs"]
             .as_array()
@@ -186,7 +198,7 @@ async fn shared_sites_configuration_inventory_and_atomic_admission(pool: PgPool)
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires local PostgreSQL and a built sites-service binary"]
-async fn shared_sites_exact_runs_frozen_config_and_grants(pool: PgPool) {
+async fn shared_sites_exact_runs_frozen_config_and_live_authorization(pool: PgPool) {
     let f = Fixture::new(pool).await;
     declared(&f).await;
     let session = ok(f
@@ -266,35 +278,24 @@ async fn shared_sites_exact_runs_frozen_config_and_grants(pool: PgPool) {
         )
         .await);
     assert_eq!(next_page["items"][0]["id"], next["run"]["id"]);
-    sqlx::query("delete from site_account_grants where project_id=$1")
-        .bind(f.project)
-        .execute(&f.pool)
-        .await
-        .unwrap();
+    // Provider inventory remains available without a Site-specific account allowlist.
     assert_eq!(
-        ok(f.sdk("accounts.list", json!([])).await)["items"],
-        json!([])
+        ok(f.sdk("accounts.list", json!([])).await)["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
     );
-    assert_eq!(
-        f.sdk(
-            "runs.steer",
-            mutation(
-                json!({"runId":next["run"]["id"],"input":user("revoked")}),
-                "revoked"
-            )
-        )
-        .await["status"],
-        400
-    );
-    // Accepted receipts remain available, while abort does not need the removed account.
+    // Accepted receipts remain available.
     assert_eq!(ok(f.sdk("runs.create",mutation(json!({"sessionId":session["id"],"expectedRevision":0,"input":created["input"]["payload"]["message"]}),key)).await),created);
     ok(f.sdk(
         "runs.abort",
         mutation(json!({"runId":next["run"]["id"]}), "abort-next"),
     )
     .await);
-    sqlx::query("delete from site_harness_grants where project_id=$1")
+    sqlx::query("update project_harnesses set enabled=false where project_id=$1 and harness_id=$2")
         .bind(f.project)
+        .bind(HARNESS)
         .execute(&f.pool)
         .await
         .unwrap();

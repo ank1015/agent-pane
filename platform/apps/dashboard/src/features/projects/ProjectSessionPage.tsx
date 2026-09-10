@@ -1,7 +1,7 @@
 import { memo, useCallback, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
-import { LoaderCircleIcon } from 'lucide-react'
+import { ArrowUpRightIcon, LoaderCircleIcon } from 'lucide-react'
 import { CloudIcon, ComputerIcon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { ProviderIcon } from '../providers/provider-icons'
@@ -141,10 +141,19 @@ const SessionHeader = memo(function SessionHeader({ session, activeRun, messages
       </span> : null}
     </div>
     <div className="project-session-header-summary">
-      <Link className="project-session-visualizer-link" to={`/projects/${session.project_id}/${session.id}/analyze`}>Analyze</Link>
       {locked ? <span className="project-session-header-account" title={'Provider account: ' + (account?.name ?? 'Session account')}><ProviderIcon provider={locked.provider} className="project-session-header-account-icon" /><span>{account?.name ?? 'Session account'}</span></span> : null}
       <span className="project-session-header-metric" title={'Recorded cost: ' + usage.cost + ' · Cache hit rate: ' + usage.cache + ' · Latest context: ' + usage.context + ' tokens'}>{usage.cost}<span className="project-session-header-metric-separator">/</span>{usage.cache}<span className="project-session-header-metric-separator">/</span>{usage.context}</span>
       <span role="status">{activeRun?.abort_requested_at ? 'Stopping…' : activeRun?.status === 'ready' ? 'Queued' : activeRun?.status === 'waiting' ? 'Waiting' : activeRun ? 'Working' : 'Idle'}</span>
+      <Link
+        className="project-session-visualizer-link"
+        to={`/projects/${session.project_id}/${session.id}/analyze`}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Analyze session in a new tab"
+        title="Analyze session in a new tab"
+      >
+        <ArrowUpRightIcon size={14} aria-hidden="true" />
+      </Link>
     </div>
   </header>
 })

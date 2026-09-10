@@ -3,9 +3,9 @@ import { after, test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { createServer } from 'vite'
+import { createTestViteServer } from './vite-test-server.mjs'
 
-const vite = await createServer({ server: { middlewareMode: true, ws: false }, appType: 'custom' })
+const vite = await createTestViteServer()
 after(() => vite.close())
 const { MachinesSection } = await vite.ssrLoadModule('/src/features/machines/MachinesSection.tsx')
 const { MachineActionDialog } = await vite.ssrLoadModule('/src/features/machines/MachineActionDialog.tsx')

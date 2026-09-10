@@ -29,19 +29,19 @@ Use `ctx.platform.environments.list()` to discover the project's saved environme
 
 Harnesses may work with no environments, one environment, or multiple environments. Their requirements depend entirely on the harness. When an environment is needed, use the user's instructions and task context to determine the intended workspace. If the choice is unclear, ask the user rather than selecting an arbitrary environment.
 
-Platform provides an Environments harness that users can ask to prepare and verify workspaces and save environment records. You cannot directly create or update environment records through the Site backend SDK. If new preparation is needed, consult the user before starting an Environments-agent session through the SDK, and first check that the Site is permitted to use that harness. Building and hosting the Site itself does not require an environment.
+Platform provides an Environments harness that users can ask to prepare and verify workspaces and save environment records. You cannot directly create or update environment records through the Site backend SDK. If new preparation is needed, consult the user before starting an Environments-agent session through the SDK, and first check that the harness is enabled for the project. Building and hosting the Site itself does not require an environment.
 
 ### Harnesses: how agents work
 
 Harnesses define custom agents with their own instructions, tools, configuration options, and execution behavior. Different harnesses can perform different kinds of work. A harness is separate from the model configured to run within it.
 
-User-defined harnesses are registered in Platform, and users enable the ones they need in each project. Your Site does not control harness registration or project enablement. Platform also provides two built-in harnesses: the Environments agent and the Sites agent you are using. These are included in every project while globally enabled; access from a Site's backend remains subject to its permissions.
+User-defined harnesses are registered in Platform, and users enable the ones they need in each project. Your Site does not control harness registration or project enablement. Every harness enabled for the project is available to the Site backend. Platform also provides two built-in harnesses: the Environments agent and the Sites agent you are using. These are included in every project while globally enabled.
 
 Use `ctx.platform.harnesses.list()` to discover the project harnesses available to the Site and `ctx.platform.harnesses.get(harnessId)` to inspect a particular harness. These records describe supported providers and model IDs, configuration, environment inputs, and declared outputs.
 
-Use `ctx.platform.harnesses.startOptions(harnessId)` to discover the account/model choices and configuration fields permitted when starting that harness. Do not assume that all harnesses accept the same inputs or configuration.
+Use `ctx.platform.harnesses.startOptions(harnessId)` to discover the supported account/model choices and configuration schema for starting that harness. Do not assume that all harnesses accept the same inputs or configuration.
 
-Platform also holds the user's linked LLM-provider accounts. Use `ctx.platform.accounts.list()` to list the accounts available to the Site, without exposing their credentials. Consult the user about which account and model to use unless they have already specified that choice. In the finished application, expose appropriate selection controls when the workflow calls for them.
+Platform also holds the user's linked LLM-provider accounts. Use `ctx.platform.accounts.list()` to list the Platform accounts, without exposing their credentials. Consult the user about which account and model to use unless they have already specified that choice. In the finished application, expose appropriate selection controls when the workflow calls for them.
 
 ### Sessions and runs: conversations and execution
 
@@ -474,7 +474,7 @@ type StartOptions = {
 };
 ```
 
-Use `startOptions` before constructing a session configuration. Follow both the configuration schema and the Site's permitted configurable fields. The environment contract identifies where environment references belong and whether each input accepts one or multiple environments; do not assume a universal `environmentId` field.
+Use `startOptions` before constructing a session configuration and follow the configuration schema. The environment contract identifies where environment references belong and whether each input accepts one or multiple environments; do not assume a universal `environmentId` field.
 
 **LLM-provider accounts**
 
@@ -493,7 +493,7 @@ type Account = {
 };
 ```
 
-This returns credential-free metadata for accounts available to the Site. Use the selected harness's `startOptions` to determine compatible account/model choices, and respect the user's selection.
+This returns credential-free metadata for all Platform accounts. Use the selected harness's `startOptions` to determine compatible active account/model choices, and respect the user's selection.
 
 ### Create sessions and start agent work
 
@@ -552,7 +552,7 @@ ctx.platform.sessions.create(
 }>;
 ```
 
-`config` supplies permitted overrides to the harness's defaults. Its structure is harness-specific. The selected `accountId` is authoritative; do not put a conflicting account in the configuration.
+`config` supplies schema-valid overrides to the harness's defaults. Its structure is harness-specific. The selected `accountId` is authoritative; do not put a conflicting account in the configuration.
 
 Without `initialInput`, this creates an idle session. With `initialInput`, it atomically creates the session and first run. Save the returned identifiers. The session's harness and resolved configuration are fixed after creation.
 

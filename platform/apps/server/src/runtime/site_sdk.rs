@@ -174,21 +174,13 @@ pub(super) async fn harness(
     tx: &mut Transaction<'_, Postgres>,
     project: Uuid,
     id: &str,
-) -> Result<(Value, String)> {
+) -> Result<Value> {
     super::project_harnesses::require_enabled(tx, project, id).await?;
-    sqlx::query_as("select to_jsonb(h),g.environment_mode from harnesses h join site_harness_grants g on g.harness_id=h.id and g.project_id=$1 where h.id=$2 for share of h,g")
-        .bind(project).bind(id).fetch_optional(&mut **tx).await?.ok_or(RuntimeError::Invalid("Harness is not permitted for site invocation."))
-}
-pub(super) async fn account(
-    tx: &mut Transaction<'_, Postgres>,
-    project: Uuid,
-    id: Uuid,
-) -> Result<()> {
-    let found:Option<Uuid>=sqlx::query_scalar("select account_id from site_account_grants where project_id=$1 and account_id=$2 for share").bind(project).bind(id).fetch_optional(&mut **tx).await?;
-    found.ok_or(RuntimeError::Invalid(
-        "Account is not permitted for site invocation.",
-    ))?;
-    Ok(())
+    sqlx::query_scalar("select to_jsonb(h) from harnesses h where h.id=$1 for share of h")
+        .bind(id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(Into::into)
 }
 async fn environment(tx: &mut Transaction<'_, Postgres>, project: Uuid, id: Uuid) -> Result<Value> {
     sqlx::query_scalar("select jsonb_build_object('type',type,'workspace_root',workspace_root,'path',path) || case when type='machine' then jsonb_build_object('machine_id',machine_id) else jsonb_build_object('snapshot_id',snapshot_id) end from project_environments where project_id=$1 and id=$2 for share")
@@ -198,12 +190,13 @@ pub(super) async fn validate_existing(
     tx: &mut Transaction<'_, Postgres>,
     session: &SessionRow,
 ) -> Result<()> {
-    let (_, mode) = harness(tx, session.project_id, &session.harness_id).await?;
-    let id: Uuid = decode(session.config["account_id"].clone())?;
-    account(tx, session.project_id, id).await?;
-    if mode == "declared" {
-        super::capabilities::validate_frozen_inputs(tx, session).await?;
-    } else if mode == "single" {
+    let h = harness(tx, session.project_id, &session.harness_id).await?;
+    super::capabilities::validate_frozen_inputs(tx, session).await?;
+    if h["config_schema"]["properties"]
+        .get("environment")
+        .is_some()
+        && !session.config["environment"].is_null()
+    {
         let found:bool=sqlx::query_scalar("select exists(select 1 from project_environments where project_id=$1 and (jsonb_build_object('type',type,'workspace_root',workspace_root,'path',path) || case when type='machine' then jsonb_build_object('machine_id',machine_id) else jsonb_build_object('snapshot_id',snapshot_id) end)=$2)")
             .bind(session.project_id).bind(&session.config["environment"]).fetch_one(&mut **tx).await?;
         if !found {
@@ -211,10 +204,6 @@ pub(super) async fn validate_existing(
                 "Session environment is no longer authorized in this project.",
             ));
         }
-    } else if session.config.get("environment").is_some() {
-        return Err(RuntimeError::Invalid(
-            "Unexpected environment configuration.",
-        ));
     }
     Ok(())
 }
@@ -296,12 +285,15 @@ impl RuntimeService {
             "sessions.startOptions" => {
                 let a: HarnessId = decode(args)?;
                 let mut tx = self.transaction().await?;
-                let (h, mode) = harness(&mut tx, s.project, &a.harness_id).await?;
+                let h = harness(&mut tx, s.project, &a.harness_id).await?;
                 tx.commit().await?;
-                let accounts = self.site_accounts(s.project, &h, providers).await?;
+                let accounts = self.site_accounts(&h, providers).await?;
                 let props = &h["config_schema"]["properties"];
+                let environment_required = h["config_schema"]["required"]
+                    .as_array()
+                    .is_some_and(|required| required.contains(&json!("environment")));
                 Ok(
-                    json!({"harnessId":a.harness_id,"environmentRequired":mode=="single","accounts":accounts,"reasoningLevels":props["reasoning_level"]["enum"],"defaultReasoning":h["default_config"]["reasoning_level"],"webSearchSupported":props["web_search_enabled"]["type"]=="boolean","defaultWebSearch":h["default_config"]["web_search_enabled"]}),
+                    json!({"harnessId":a.harness_id,"environmentRequired":environment_required,"accounts":accounts,"reasoningLevels":props["reasoning_level"]["enum"],"defaultReasoning":h["default_config"]["reasoning_level"],"webSearchSupported":props["web_search_enabled"]["type"]=="boolean","defaultWebSearch":h["default_config"]["web_search_enabled"]}),
                 )
             }
             "sessions.start" => self.site_start(s, args, providers).await,
@@ -343,17 +335,7 @@ impl RuntimeService {
             )),
         }
     }
-    async fn site_accounts(
-        &self,
-        project: Uuid,
-        h: &Value,
-        providers: &ProviderService,
-    ) -> Result<Vec<Value>> {
-        let grants: Vec<Uuid> =
-            sqlx::query_scalar("select account_id from site_account_grants where project_id=$1")
-                .bind(project)
-                .fetch_all(&self.pool)
-                .await?;
+    async fn site_accounts(&self, h: &Value, providers: &ProviderService) -> Result<Vec<Value>> {
         let accounts = providers.list_accounts().await.map_err(|_| {
             RuntimeError::Conflict("Provider inventory is unavailable. Retry later.")
         })?;
@@ -363,10 +345,7 @@ impl RuntimeService {
             let id: Uuid = decode(a["id"].clone())?;
             let provider = a["provider"].as_str().ok_or(RuntimeError::StoredData)?;
             let models = h["supported_models"][provider].as_array();
-            if grants.contains(&id)
-                && a["status"] == "enabled"
-                && models.is_some_and(|m| !m.is_empty())
-            {
+            if a["status"] == "enabled" && models.is_some_and(|m| !m.is_empty()) {
                 selected.push(
                     json!({"accountId":id,"name":a["name"],"provider":provider,"modelIds":models}),
                 );
@@ -393,9 +372,9 @@ impl RuntimeService {
         {
             return Ok(r.body);
         }
-        let (h, _) = harness(&mut tx, s.project, &a.input.harness_id).await?;
+        let h = harness(&mut tx, s.project, &a.input.harness_id).await?;
         tx.commit().await?;
-        let accounts = self.site_accounts(s.project, &h, providers).await?;
+        let accounts = self.site_accounts(&h, providers).await?;
         if !accounts.iter().any(|v| {
             v["accountId"] == a.input.account_id.to_string()
                 && v["provider"] == a.input.model.provider
@@ -404,7 +383,7 @@ impl RuntimeService {
                     .is_some_and(|ids| ids.contains(&json!(a.input.model.id)))
         }) {
             return Err(RuntimeError::Invalid(
-                "Select a permitted active account and supported model.",
+                "Select an active account and supported model.",
             ));
         }
         let input = message(&a.input.prompt)?;
@@ -416,22 +395,20 @@ impl RuntimeService {
         {
             return Ok(r.body);
         }
-        let (h, mode) = harness(&mut tx, s.project, &a.input.harness_id).await?;
+        let h = harness(&mut tx, s.project, &a.input.harness_id).await?;
         if !h["supported_models"][&a.input.model.provider]
             .as_array()
             .is_some_and(|ids| ids.contains(&json!(a.input.model.id)))
         {
             return Err(RuntimeError::Configuration);
         }
-        account(&mut tx, s.project, a.input.account_id).await?;
         let mut patch = json!({"model":{"provider":a.input.model.provider,"id":a.input.model.id},"account_id":a.input.account_id});
-        match (mode.as_str(), a.input.environment_id) {
-            ("single", Some(id)) => {
-                patch["environment"] = environment(&mut tx, s.project, id).await?
-            }
-            ("none", None) => {
-                patch["environment"] = Value::Null;
-            }
+        let environment_required = h["config_schema"]["required"]
+            .as_array()
+            .is_some_and(|required| required.contains(&json!("environment")));
+        match (environment_required, a.input.environment_id) {
+            (true, Some(id)) => patch["environment"] = environment(&mut tx, s.project, id).await?,
+            (false, None) => {}
             _ => {
                 return Err(RuntimeError::Invalid(
                     "Environment selection does not match harness requirements.",

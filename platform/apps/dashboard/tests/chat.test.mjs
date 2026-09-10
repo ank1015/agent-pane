@@ -3,8 +3,8 @@ import { after, test } from 'node:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { QueryClient } from '@tanstack/react-query'
-import { createServer } from 'vite'
-const vite = await createServer({ server: { middlewareMode: true, ws: false }, appType: 'custom' })
+import { createTestViteServer } from './vite-test-server.mjs'
+const vite = await createTestViteServer()
 after(() => vite.close())
 const { buildConversation } = await vite.ssrLoadModule('/src/features/projects/project-conversation.ts')
 const { createChatRequest, lockedChatOptions, sessionReasoningLevels } = await vite.ssrLoadModule('/src/features/projects/chat-config.ts')

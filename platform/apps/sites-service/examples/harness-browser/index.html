@@ -18,7 +18,7 @@ async function call(path,input){return callBackend(path,input)}
 function selectOptions(node,entries){node.replaceChildren(...entries.map(([value,label])=>{const o=el('option',label);o.value=value;return o}))}
 async function loadCatalog(){
  catalog=await call('/catalog');const rows=catalog.harnesses.map(h=>{const tr=el('tr');tr.append(el('td',h.name),el('td',h.environmentMode==='single'?'Project environment':'Not required','muted'));const td=el('td'),b=el('button','Use harness');b.type='button';b.onclick=()=>choose(h).catch(showError);td.append(b);tr.append(td);return tr});
- $('harnesses').replaceChildren(...rows);if(!rows.length){const tr=el('tr'),td=el('td','No harnesses are enabled and permitted for this site.','empty');td.colSpan=3;tr.append(td);$('harnesses').append(tr)}
+ $('harnesses').replaceChildren(...rows);if(!rows.length){const tr=el('tr'),td=el('td','No harnesses are enabled for this project.','empty');td.colSpan=3;tr.append(td);$('harnesses').append(tr)}
 }
 async function choose(h){
  selected=h;runRequest=null;$('controls').hidden=true;$('choose').hidden=false;$('choose').textContent='Loading run options…';
@@ -26,7 +26,7 @@ async function choose(h){
  $('run-heading').textContent=h.name;selectOptions($('environment'),catalog.environments.map(e=>[e.id,e.name]));$('environment').parentElement.hidden=!options.environmentRequired;
  selectOptions($('account'),options.accounts.map(a=>[a.accountId,a.name+' · '+a.provider]));updateModels();selectOptions($('reasoning'),(options.reasoningLevels||[]).map(x=>[x,x]));$('reasoning-label').hidden=!options.reasoningLevels?.length;if(options.defaultReasoning)$('reasoning').value=options.defaultReasoning;
  $('choose').hidden=true;$('controls').hidden=false;$('run-button').disabled=!options.accounts.length||(options.environmentRequired&&!catalog.environments.length);
- $('run-status').textContent=!options.accounts.length?'No permitted model accounts.':options.environmentRequired&&!catalog.environments.length?'Add a project environment first.':'';
+ $('run-status').textContent=!options.accounts.length?'No compatible active model accounts.':options.environmentRequired&&!catalog.environments.length?'Add a project environment first.':'';
 }
 function updateModels(){const a=options.accounts.find(a=>a.accountId===$('account').value);selectOptions($('model'),(a?.modelIds||[]).map(x=>[x,x]))}
 $('account').onchange=()=>{runRequest=null;updateModels()};$('run-form').oninput=()=>{runRequest=null};

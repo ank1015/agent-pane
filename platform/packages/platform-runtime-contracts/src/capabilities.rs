@@ -146,8 +146,9 @@ pub struct StartOptions {
     pub config_schema: Option<JsonObject>,
     pub default_config: JsonObject,
     pub harness_contract: HarnessContract,
-    /// None for trusted agents; Sites grants explicitly allow top-level fields.
+    /// Reserved for caller-specific restrictions. None means the harness schema applies directly.
     pub configurable_fields: Option<Vec<String>>,
+    /// Informational mode derived from the harness contract and schema.
     pub environment_mode: Option<String>,
 }
 
