@@ -1,371 +1,311 @@
-use crate::{SitesHarness, browser::Browser};
-use chrono::{DateTime, Utc};
 use futures_util::future::BoxFuture;
-use harness_runtime::Signals;
-use llm_contracts::{FunctionTool, ToolArguments, ToolDefinition};
-use platform_agent_code_mode::{PlatformDispatcher, code_mode::*};
-use platform_runtime_client::{Error as RuntimeError, Result as RuntimeResult, RunClient};
+use llm_contracts::{
+    CustomTool, CustomToolFormat, FunctionTool, GrammarSyntax, ToolArguments, ToolDefinition,
+};
+use platform_runtime_client::RunClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::watch;
+use sha2::{Digest, Sha256};
+use std::sync::{Arc, Mutex};
+use tool_code_mode::live::{ContentItem, protocol::*};
+use tool_code_mode::*;
 use uuid::Uuid;
 
-#[derive(Clone)]
-pub struct WebTools {
-    pub search: tool_firecrawl_search::FirecrawlSearchToolContext,
-    pub scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext,
-}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum Plan {
-    Code {
-        input: Input,
-    },
-    Inspect {
-        id: Uuid,
-        after: Option<String>,
-        limit: u32,
-    },
-    Reconcile {
-        id: Uuid,
-        sequence: u32,
-    },
-    Wait {
-        key: Uuid,
-        run_ids: Vec<Uuid>,
-        wake_at: DateTime<Utc>,
-    },
+    Exec { input: ExecInput, admitted: bool },
+    Wait { input: WaitInput },
 }
 pub(crate) struct Output {
-    pub text: String,
+    pub content: Vec<ContentItem>,
     pub error: bool,
-    pub site_id: Option<Uuid>,
 }
 impl Output {
-    pub fn success(value: Value) -> Self {
-        let mut text = value.to_string();
-        if text.len() > 192 * 1024 {
-            // Keep receipt identities and status even when source or results dominate
-            // the trace page. A bounded report must still permit exact recovery.
-            let summarize = |call: &Value| {
-                json!({
-                    "cellId":call["cell_id"],"sequence":call["sequence"],
-                    "tool":call["tool"],"operationKey":call["operation_key"],
-                    "status":call["status"],"error":call["error"],
-                    "payloadOmitted":true
-                })
-            };
-            let calls: Vec<Value> = value["calls"]["items"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|entry| summarize(&entry["value"]))
-                .collect();
-            text=json!({
-                "truncated":true,
-                "reason":"Tool report exceeds 192 KiB; inspect one call per page or use a bounded operation getter. Receipt identities and status are preserved below.",
-                "cellId":value.get("cellId").or_else(||value.get("cell_id")).or_else(||value.get("cell").and_then(|v|v.get("id"))),
-                "status":value.get("status").or_else(||value.get("cell").and_then(|v|v.get("status"))),
-                "call":value.get("sequence").map(|_|summarize(&value)),
-                "calls":calls,
-                "next_cursor":value["calls"]["next_cursor"]
-            }).to_string();
-        }
-        Self {
-            text,
-            error: false,
-            site_id: None,
-        }
-    }
     pub fn error(message: impl Into<String>) -> Self {
         Self {
-            text: message.into(),
+            content: vec![ContentItem::InputText {
+                text: message.into(),
+            }],
             error: true,
-            site_id: None,
         }
     }
-}
-fn definition(name: &str, description: &str, schema: Value) -> ToolDefinition {
-    ToolDefinition::Function(FunctionTool {
-        name: name.into(),
-        description: description.into(),
-        parameters: schema.as_object().unwrap().clone(),
-        output_schema: None,
-        strict: Some(false),
-    })
+    pub fn report(report: Report) -> Self {
+        Self {
+            error: !report.success(),
+            content: report.render(),
+        }
+    }
 }
 pub(crate) fn definitions() -> Vec<ToolDefinition> {
     vec![
-        definition(
-            "code_mode",
-            "Run an isolated async JavaScript cell using ctx.platform, ctx.sites, tools and text. The harness assigns and persists a cell ID before dispatch. Return handles for long operations. Lost cells are interrupted, never replayed; inspect saved calls before resuming.",
-            json!({"type":"object","required":["source"],"properties":{"source":{"type":"string","maxLength":65536}},"additionalProperties":false}),
-        ),
-        definition(
-            "inspect_cell",
-            "Inspect a saved cell and bounded nested-call trace in this run. Follow next_cursor. Includes exact operation identities and results; never executes JavaScript.",
-            json!({"type":"object","required":["id"],"properties":{"id":{"type":"string","format":"uuid"},"after":{"type":"string","maxLength":256},"limit":{"type":"integer","minimum":1,"maximum":10}},"additionalProperties":false}),
-        ),
-        definition(
-            "reconcile_call",
-            "Explicitly reconcile one uncertain/prepared mutation from an interrupted or failed cell using its original saved input and operation key. This may submit a request that never arrived originally. Never reruns source.",
-            json!({"type":"object","required":["id","sequence"],"properties":{"id":{"type":"string","format":"uuid"},"sequence":{"type":"integer","minimum":0,"maximum":999}},"additionalProperties":false}),
-        ),
-        definition(
-            "wait",
-            "Release this run's worker slot until any named project run completes, the timer expires, or input arrives. Always inspect status after waking. Use timer-only waits to poll durable commands/sandboxes. Other tool calls in this response resume after waking.",
-            json!({"type":"object","required":["seconds"],"properties":{"seconds":{"type":"integer","minimum":1,"maximum":3600},"runIds":{"type":"array","maxItems":16,"uniqueItems":true,"items":{"type":"string","format":"uuid"}}},"additionalProperties":false}),
-        ),
+        ToolDefinition::Custom(CustomTool {
+            name: "exec".into(), description: EXEC_DESCRIPTION.into(),
+            format: CustomToolFormat { syntax: GrammarSyntax::Lark, definition: EXEC_GRAMMAR.into() },
+        }),
+        ToolDefinition::Function(FunctionTool {
+            name: "wait".into(), description: WAIT_DESCRIPTION.into(), strict: Some(false), output_schema: None,
+            parameters: json!({"type":"object","properties":{
+                "cell_id":{"type":"string","description":"Identifier of the running exec cell."},
+                "yield_time_ms":{"type":"number","description":"Wait before yielding more output. Defaults to 10000 ms."},
+                "max_tokens":{"type":"number","description":"Output token budget for this wait call. Defaults to 10000 tokens."},
+                "terminate":{"type":"boolean","description":"True stops the running exec cell; false or omitted waits for output."}
+            },"required":["cell_id"],"additionalProperties":false}).as_object().unwrap().clone(),
+        }),
     ]
 }
 pub(crate) fn prepare(name: &str, arguments: &ToolArguments) -> std::result::Result<Plan, String> {
-    let value = match arguments {
-        ToolArguments::Object(v) => Value::Object(v.clone()),
-        ToolArguments::String(v) => {
-            serde_json::from_str(v).map_err(|_| "Invalid JSON tool arguments")?
-        }
-    };
-    let schema = definitions()
-        .into_iter()
-        .find_map(|t| match t {
-            ToolDefinition::Function(f) if f.name == name => Some(Value::Object(f.parameters)),
-            _ => None,
-        })
-        .ok_or("Unknown tool")?;
-    if !jsonschema::validator_for(&schema)
-        .map_err(|_| "Invalid tool schema")?
-        .is_valid(&value)
-    {
-        return Err("Tool arguments do not match the declared schema".into());
-    }
-    let id = || {
-        value["id"]
-            .as_str()
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(|| "Invalid cell UUID".to_owned())
-    };
     match name {
-        "code_mode" => Ok(Plan::Code {
-            input: Input {
-                id: Uuid::now_v7(),
-                source: value["source"].as_str().unwrap().into(),
-            },
-        }),
-        "inspect_cell" => Ok(Plan::Inspect {
-            id: id()?,
-            after: value["after"].as_str().map(str::to_owned),
-            limit: value["limit"].as_u64().unwrap_or(1) as u32,
-        }),
-        "reconcile_call" => Ok(Plan::Reconcile {
-            id: id()?,
-            sequence: value["sequence"].as_u64().unwrap() as u32,
-        }),
-        "wait" => Ok(Plan::Wait {
-            key: Uuid::now_v7(),
-            run_ids: serde_json::from_value(value.get("runIds").cloned().unwrap_or(json!([])))
-                .map_err(|_| "Invalid run UUID")?,
-            wake_at: Utc::now() + chrono::Duration::seconds(value["seconds"].as_i64().unwrap()),
-        }),
-        _ => Err("Unknown tool".into()),
+        "exec" => match arguments {
+            ToolArguments::String(source) => Ok(Plan::Exec {
+                input: ExecInput::parse(source)?,
+                admitted: false,
+            }),
+            _ => Err("exec expects raw JavaScript source text".into()),
+        },
+        "wait" => {
+            let value = match arguments {
+                ToolArguments::String(input) => {
+                    serde_json::from_str(input).map_err(|_| "Invalid JSON wait arguments")?
+                }
+                ToolArguments::Object(input) => Value::Object(input.clone()),
+            };
+            Ok(Plan::Wait {
+                input: serde_json::from_value(value)
+                    .map_err(|e| format!("Invalid wait arguments: {e}"))?,
+            })
+        }
+        _ => Err("Unknown tool; use exec or wait".into()),
     }
 }
-pub(crate) fn register(registry: &mut Registry, web: bool, browser: bool) -> Result<()> {
-    if web {
-        for definition in [
-            tool_firecrawl_search::definition(),
-            tool_firecrawl_scrape::definition(),
-        ] {
-            if let ToolDefinition::Function(f) = definition {
-                registry.register(Tool {
-                    name: format!("web.{}", f.name),
-                    description: f.description,
-                    input_schema: Value::Object(f.parameters),
-                    effect: Effect::Read,
-                })?;
-            }
-        }
-    }
-    if browser {
-        registry.register(Tool { name:"browser.verify".into(), description:"Load this session's current site frontend in isolated Chromium and report DOM, runtime errors and read-only selector checks. No arbitrary URL, clicks or backend bridge; test backend separately with ctx.sites.invoke.".into(), input_schema:json!({"type":"object","properties":{"selectors":{"type":"array","maxItems":20,"items":{"type":"string","maxLength":256}}},"additionalProperties":false}), effect:Effect::Read })?;
+
+fn object(properties: Value, required: &[&str]) -> Value {
+    json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
+}
+
+pub(crate) fn register(registry: &mut Registry) -> Result<()> {
+    let mut read = tool_read::input_schema(&tool_read::ReadConfig::default());
+    read["properties"]["file_path"] = json!({"type":"string","enum":["index.html","backend.js"]});
+    let scalar = json!({"type":["null","string","number"]});
+    for (name, description, input_schema, effect) in [
+        (
+            "metadata",
+            "Get the bound site's metadata, without source files. No arguments.",
+            object(json!({}), &[]),
+            Effect::Read,
+        ),
+        (
+            "read",
+            "Read index.html or backend.js with optional one-based offset and line limit. Returns unnumbered source, revision and continuation information.",
+            read,
+            Effect::Read,
+        ),
+        (
+            "apply_patch",
+            "Apply a raw patch string, not JSON, to index.html and/or backend.js. Update edits matching context; Add replaces the entire file; Delete resets it to a blank HTML document or a backend returning 404. Hunks run in order, including same-file Delete/Add; only the validated final pair activates. No other paths or moves. Success returns {}.",
+            json!({"type":"string","minLength":1,"maxLength":49152}),
+            Effect::Mutation,
+        ),
+        (
+            "invoke",
+            "Call a live backend endpoint and return its response, errors and logs. Database and Platform effects are real.",
+            object(
+                json!({
+                    "method":{"type":"string","enum":["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]},
+                    "path":{"type":"string","minLength":1,"maxLength":2048},
+                    "query":{"type":"object","additionalProperties":{"type":"string"}},
+                    "body":{}, "idempotency_key":{"type":"string","minLength":1,"maxLength":256}
+                }),
+                &["method", "path"],
+            ),
+            Effect::Mutation,
+        ),
+        (
+            "browser",
+            "Inspect the current site in a persistent browser: evaluate runs an async JavaScript function body in the site frame and returns JSON; screenshot returns a viewport image for image(result.image); reload loads the latest release. Backend effects are real. No page API or Node globals.",
+            json!({"oneOf":[
+                object(json!({"action":{"const":"evaluate"},"code":{"type":"string","minLength":1,"maxLength":49152}}), &["action","code"]),
+                object(json!({"action":{"enum":["screenshot","reload"]}}), &["action"])
+            ]}),
+            Effect::Mutation,
+        ),
+        (
+            "sql",
+            "Execute one bounded SQLite statement on the bound site: reads, schema inspection, schema changes or data writes. Use parameters. Writes are real and have durable retry receipts.",
+            object(
+                json!({
+                    "sql":{"type":"string","minLength":1,"maxLength":49152},
+                    "params":{"type":"array","maxItems":256,"items":scalar},
+                    "idempotency_key":{"type":"string","minLength":1,"maxLength":256}
+                }),
+                &["sql"],
+            ),
+            Effect::Mutation,
+        ),
+    ] {
+        registry.register(Tool {
+            name: name.into(),
+            description: description.into(),
+            input_schema,
+            effect,
+        })?;
     }
     Ok(())
 }
-struct DispatcherWithExtras<'a> {
-    platform: &'a PlatformDispatcher,
-    web: Option<&'a WebTools>,
-    browser: Option<&'a Browser>,
-    client: &'a RunClient,
+
+pub(crate) struct SitesDispatcher {
+    pub client: RunClient,
+    pub site_id: Arc<Mutex<Option<Uuid>>>,
+    pub browser: crate::browser::BrowserSession,
 }
-impl Dispatcher for DispatcherWithExtras<'_> {
-    fn prepare(
-        &self,
-        tool: &Tool,
-        key: &str,
-        input: Value,
-    ) -> std::result::Result<Value, ToolError> {
-        if tool.name.starts_with("web.") || tool.name == "browser.verify" {
-            Ok(input)
-        } else {
-            self.platform.prepare(tool, key, input)
+impl SitesDispatcher {
+    async fn call(&self, method: &str, input: Value) -> std::result::Result<Value, ToolError> {
+        let result = self.client.platform().call(method, input).await.map_err(|error| match error {
+            platform_runtime_client::Error::Server(e) if (400..500).contains(&e.status) =>
+                site_rejection(&e),
+            _ => ToolError::uncertain("SITE_UNCERTAIN", "The site operation outcome is unknown. Do not repeat a mutation with a new key."),
+        })?;
+        if let Some(id) = result["siteId"]
+            .as_str()
+            .or_else(|| result["site_id"].as_str())
+            .or_else(|| {
+                if method == "sites.metadata" {
+                    result["id"].as_str()
+                } else {
+                    None
+                }
+            })
+            .and_then(|v| v.parse().ok())
+        {
+            *self.site_id.lock().unwrap() = Some(id);
         }
+        Ok(result)
     }
+}
+// ServerError's Display intentionally omits details to keep generic logs safe.
+// The authenticated runtime error envelope contains the public, model-facing
+// explanation; expose it explicitly here, not in generic transport logging.
+pub(crate) fn site_rejection(error: &platform_runtime_client::ServerError) -> ToolError {
+    let message = error
+        .error
+        .as_ref()
+        .map(|e| e.message.as_str())
+        .filter(|message| !message.is_empty())
+        .map(|message| format!("{error}: {message}"))
+        .unwrap_or_else(|| error.to_string());
+    ToolError::rejected(error.code().unwrap_or("SITE_REJECTED"), &message)
+}
+impl Dispatcher for SitesDispatcher {
     fn invoke<'a>(
         &'a self,
         call: &'a Call,
     ) -> BoxFuture<'a, std::result::Result<Value, ToolError>> {
         Box::pin(async move {
             match call.tool.as_str() {
-                "web.search" => {
-                    let web = self.web.ok_or_else(|| {
-                        ToolError::rejected("UNAVAILABLE", "Web research is unavailable")
-                    })?;
-                    let args = serde_json::from_value(call.input.clone()).map_err(|_| {
-                        ToolError::rejected("INVALID_INPUT", "Invalid search input")
-                    })?;
-                    tool_firecrawl_search::execute(args, &web.search)
-                        .await
-                        .map(|v| json!({"content":v.content,"details":v.details}))
+                "metadata" => self.call("sites.metadata", json!({})).await,
+                "read" => {
+                    let input: tool_read::ReadInput = serde_json::from_value(call.input.clone())
                         .map_err(|_| {
-                            ToolError::rejected(
-                                "SEARCH_FAILED",
-                                "Search failed; try a narrower query or check service availability",
-                            )
-                        })
+                            ToolError::rejected("INVALID_INPUT", "Invalid read arguments")
+                        })?;
+                    let source = self.call("sites.read", json!({})).await?;
+                    read_source(&source, &input)
                 }
-                "web.scrape" => {
-                    let web = self.web.ok_or_else(|| {
-                        ToolError::rejected("UNAVAILABLE", "Web research is unavailable")
+                "apply_patch" => {
+                    let patch = call.input.as_str().ok_or_else(|| {
+                        ToolError::rejected("INVALID_INPUT", "apply_patch takes raw patch text")
                     })?;
-                    let args = serde_json::from_value(call.input.clone()).map_err(|_| {
-                        ToolError::rejected("INVALID_INPUT", "Invalid scrape input")
+                    let result = self.call("sites.applyPatch", json!({
+                        "input":{"patch":patch},"options":{"idempotencyKey":call.operation_key}
+                    })).await?;
+                    match result["status"].as_str() {
+                        Some("succeeded") => Ok(json!({})),
+                        Some("conflict") => Err(ToolError::rejected(
+                            "PATCH_CONFLICT",
+                            "Site changed before activation. Read current source and prepare a new patch.",
+                        )),
+                        _ => Err(ToolError::uncertain(
+                            "PATCH_UNCERTAIN",
+                            "Patch activation was not confirmed. Inspect current source before further edits.",
+                        )),
+                    }
+                }
+                "invoke" | "sql" => {
+                    let mut input = call.input.clone();
+                    let object = input.as_object_mut().ok_or_else(|| {
+                        ToolError::rejected("INVALID_INPUT", "Expected arguments object")
                     })?;
-                    tool_firecrawl_scrape::execute(args, &web.scrape)
-                        .await
-                        .map(|v| json!({"content":v.content,"details":v.details}))
-                        .map_err(|_| {
-                            ToolError::rejected(
-                                "SCRAPE_FAILED",
-                                "Scrape failed; check that the public URL is supported",
-                            )
-                        })
+                    let key = object
+                        .remove("idempotency_key")
+                        .unwrap_or_else(|| json!(call.operation_key));
+                    let method = if call.tool == "invoke" {
+                        "sites.invoke"
+                    } else {
+                        "sites.sql"
+                    };
+                    let mut result = self
+                        .call(
+                            method,
+                            json!({"input":input,"options":{"idempotencyKey":key}}),
+                        )
+                        .await?;
+                    if call.tool == "invoke" {
+                        Ok(invocation_result(result))
+                    } else {
+                        if let Some(object) = result.as_object_mut() {
+                            object.remove("site_id");
+                        }
+                        Ok(result)
+                    }
                 }
-                "browser.verify" => {
-                    self.browser
-                        .ok_or_else(|| {
-                            ToolError::rejected(
-                                "UNAVAILABLE",
-                                "Browser verification is unavailable",
-                            )
-                        })?
-                        .verify(self.client, &call.input)
-                        .await
+                "browser" => {
+                    // Even a cached page must reauthorize its run before each
+                    // action; background backend calls authorize independently.
+                    self.call("sites.metadata", json!({})).await?;
+                    self.browser.invoke(&self.client, &call.input).await
                 }
-                _ => self.platform.invoke(call).await,
+                _ => Err(ToolError::rejected("UNKNOWN_TOOL", "Unknown Sites tool")),
             }
         })
     }
 }
-pub(crate) async fn execute(
-    harness: &SitesHarness,
-    client: &RunClient,
-    mut signals: watch::Receiver<Signals>,
-    plan: Plan,
-) -> RuntimeResult<Output> {
-    let mode = harness.code_mode(client.clone())?;
-    let result = match plan {
-        Plan::Code { input } => {
-            // Recovery must not depend on the worker's current optional-tool configuration.
-            let recovered = mode.recover_abandoned(input.id).await;
-            let cell = match recovered {
-                Ok(Some(cell)) => Ok(cell),
-                Ok(None) => {
-                    let dispatcher = DispatcherWithExtras {
-                        platform: &mode.dispatcher,
-                        web: harness.web.as_ref(),
-                        browser: harness.browser.as_ref(),
-                        client,
-                    };
-                    let stop = |s: Signals| s.abort_requested || s.draining || s.ownership_lost;
-                    let (send, cancel) = watch::channel(stop(*signals.borrow()));
-                    let work = mode.engine.execute(
-                        input.clone(),
-                        &mode.registry,
-                        &mode.journal,
-                        &dispatcher,
-                        cancel,
-                    );
-                    tokio::pin!(work);
-                    loop {
-                        tokio::select! {
-                            result=&mut work=>break result,
-                            changed=signals.changed()=>if changed.is_err()||stop(*signals.borrow_and_update()) { let _=send.send(true);break work.await; }
-                        }
-                    }
-                }
-                Err(e) => Err(e),
-            };
-            let cell = match cell {
-                Ok(cell) => cell,
-                Err(Error::Invalid(message)) => return Ok(Output::error(message)),
-                Err(Error::Conflict) => {
-                    return Ok(Output::error(
-                        "Saved cell conflicts; inspect the original cell",
-                    ));
-                }
-                Err(Error::Storage) => {
-                    return Err(RuntimeError::Invalid(
-                        "Cannot recover saved code cell; storage unavailable",
-                    ));
-                }
-            };
-            let mut output = Output::success(
-                json!({"cellId":cell.id,"status":cell.status,"output":cell.output,"value":cell.value,"error":cell.error,"trace":"Use inspect_cell with cellId to inspect accepted calls; do not replay interrupted source."}),
-            );
-            output.error = matches!(cell.status, CellStatus::Failed | CellStatus::Interrupted);
-            let mut after = None;
-            while let Some(inspected) = mode
-                .inspect(cell.id, after.as_deref(), 10)
-                .await
-                .map_err(|_| RuntimeError::Invalid("Cannot inspect saved code cell"))?
-            {
-                for entry in inspected.calls.items {
-                    let value = &entry.value;
-                    if value["tool"]
-                        .as_str()
-                        .is_some_and(|v| v.starts_with("sites."))
-                    {
-                        if let Some(site) = value["result"]["siteId"]
-                            .as_str()
-                            .and_then(|v| v.parse().ok())
-                        {
-                            output.site_id = Some(site);
-                        }
-                    }
-                }
-                after = inspected.calls.next_cursor;
-                if after.is_none() {
-                    break;
-                }
-            }
-            return Ok(output);
+
+pub(crate) fn read_source(
+    source: &Value,
+    input: &tool_read::ReadInput,
+) -> std::result::Result<Value, ToolError> {
+    let field = match input.file_path.as_str() {
+        "index.html" => "frontend",
+        "backend.js" => "backend",
+        _ => {
+            return Err(ToolError::rejected(
+                "INVALID_PATH",
+                "Only index.html and backend.js can be read",
+            ));
         }
-        Plan::Inspect { id, after, limit } => mode
-            .inspect(id, after.as_deref(), limit)
-            .await
-            .map(|v| json!(v)),
-        Plan::Reconcile { id, sequence } => {
-            mode.reconcile_call(id, sequence).await.map(|v| json!(v))
-        }
-        Plan::Wait { .. } => unreachable!(),
     };
-    match result {
-        Ok(value) => Ok(Output::success(value)),
-        Err(Error::Invalid(message)) => Ok(Output::error(message)),
-        Err(Error::Conflict) => Ok(Output::error(
-            "Saved operation conflicts; inspect its original identity and arguments",
-        )),
-        Err(Error::Storage) => Err(RuntimeError::Invalid(
-            "Code-mode storage unavailable; recover the saved plan",
-        )),
-    }
+    let text = source["files"][field]
+        .as_str()
+        .ok_or_else(|| ToolError::rejected("INVALID_SOURCE", "Site source is missing"))?;
+    let window = tool_read::read_text(
+        text,
+        input.offset,
+        input.limit,
+        &tool_read::ReadConfig::default(),
+    )
+    .map_err(|e| ToolError::rejected("READ_FAILED", &e.to_string()))?;
+    let mut result = serde_json::to_value(window).expect("read window serializes");
+    result["file_path"] = json!(input.file_path);
+    result["revision"] = json!(format!("{:x}", Sha256::digest(text.as_bytes())));
+    Ok(result)
+}
+
+pub(crate) fn invocation_result(value: Value) -> Value {
+    let error = value["error_code"].as_str().map(|code| json!({"code":code,"message":format!("Backend invocation failed: {code}. See logs for diagnostics.")}));
+    json!({
+        "invocation_id":value["id"],"status":value["status"],"response":value["response"],
+        "error":error,"logs":value["logs"],
+        "response_truncated":value["responseTruncated"].as_bool().unwrap_or(false),
+        "logs_truncated":value["logsTruncated"].as_bool().unwrap_or(false)
+    })
 }
