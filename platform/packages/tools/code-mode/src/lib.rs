@@ -1,7 +1,9 @@
-//! Disposable JavaScript cells with a caller-selected tool registry and durable journal.
+//! Generic JavaScript tool orchestration: live exec/wait sessions and a legacy journaled engine.
 #![doc = include_str!("../README.md")]
 mod engine;
 pub mod guest;
+pub mod live;
+pub mod live_guest;
 pub mod sandbox;
 pub use engine::{Engine, Inspect};
 use futures_util::future::BoxFuture;
@@ -27,8 +29,8 @@ pub enum Effect {
     Mutation,
 }
 
-/// A trusted adapter's tool declaration. Names are exact keys in `tools`, so
-/// namespaced and freeform tools need no lossy identifier normalization.
+/// A trusted adapter's tool declaration. The legacy engine uses exact names;
+/// live sessions normalize them into JavaScript identifiers and reject collisions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
     pub name: String,
