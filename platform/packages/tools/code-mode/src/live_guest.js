@@ -84,7 +84,10 @@
   });
   function failure(error) {
     done = true;
-    send({kind:'failure',message:String(error?.message ?? error).slice(0,2048)});
+    const summary = String(error?.name && error?.message ? `${error.name}: ${error.message}` : error?.message ?? error);
+    const stack = typeof error?.stack === 'string' ? error.stack.trim() : '';
+    const message = stack && !stack.includes(summary) ? `${summary}\n${stack}` : stack || summary;
+    send({kind:'failure',message:message.slice(0,2048)});
   }
   return (kind,value) => {
     if (kind === 'done') return done;

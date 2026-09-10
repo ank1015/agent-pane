@@ -9,22 +9,28 @@ const host = new BrowserHost((release_id, request) => new Promise((resolve, reje
   send({ kind: 'invoke', release_id, request });
 }));
 let closing = false;
-async function close() {
+async function close(exitCode = 0) {
   if (closing) return;
   closing = true;
   const forced = setTimeout(() => process.exit(1), 2500);
   await host.close().catch(() => {});
   clearTimeout(forced);
-  process.exit(0);
+  process.exit(exitCode);
 }
-process.once('SIGTERM', close);
-process.once('SIGINT', close);
-process.once('uncaughtException', close);
-process.once('unhandledRejection', close);
 
 if (process.argv.includes('--check')) {
-  await host.launch(); await host.close();
+  try {
+    await host.launch();
+    await host.close();
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  }
 } else {
+  process.once('SIGTERM', () => close());
+  process.once('SIGINT', () => close());
+  process.once('uncaughtException', () => close(1));
+  process.once('unhandledRejection', () => close(1));
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   let busy = false;
   let idle = setTimeout(close, 300000);

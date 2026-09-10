@@ -218,6 +218,27 @@ async fn module_errors_exit_and_unawaited_timers() {
     }
 }
 
+#[tokio::test]
+async fn module_failures_preserve_exception_summary_and_source_location() {
+    let (mut session, _notifications) = session();
+    for (source, summary) in [
+        ("const patch=`outer ` inner`;", "SyntaxError: expecting ';'"),
+        ("throw new Error('boom');", "Error: boom"),
+    ] {
+        let result = session
+            .exec("failure".into(), ExecInput::parse(source).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(result.status, Status::Failed, "{result:?}");
+        let error = result.error.as_deref().expect("missing JavaScript error");
+        assert!(error.starts_with(summary), "unexpected error: {error}");
+        assert!(
+            error.contains("cell.js:1"),
+            "missing source location: {error}"
+        );
+    }
+}
+
 #[test]
 fn pragma_validation_and_wait_defaults() {
     for input in [
