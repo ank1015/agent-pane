@@ -46,8 +46,11 @@ the `session-id` and `x-client-request-id` headers. These stable affinity
 signals match the Codex backend clients and keep append-only turns on a reusable
 prompt-cache route.
 
-`AssistantMessage::native_message` retains the raw terminal response and the
-completed native output items used for exact follow-up replay. Transient SSE
+`AssistantMessage::native_message` retains the terminal response with its
+`instructions` and `tools` fields removed, and the completed native output items
+used for exact follow-up replay. These echoed request settings would otherwise
+accumulate in conversation history. Previously stored assistant messages are
+not rewritten by this change. Transient SSE
 events are consumed internally but omitted from the returned message so they do
 not inflate gateway responses and persisted transcripts.
 

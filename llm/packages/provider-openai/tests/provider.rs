@@ -234,6 +234,60 @@ fn replays_openai_native_output_for_follow_up_requests() {
 }
 
 #[test]
+fn response_omits_echoed_settings_and_preserves_follow_up_replay() {
+    let native_output = json!([
+        {
+            "type": "reasoning",
+            "id": "reasoning-1",
+            "encrypted_content": "opaque"
+        },
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "configure",
+            "arguments": "{\"instructions\":\"keep\",\"tools\":[]}",
+            "future_field": {"instructions": "also keep", "tools": []}
+        }
+    ]);
+    let mut native = json!({
+        "id": "response-1",
+        "object": "response",
+        "model": "gpt-5.6-luna",
+        "status": "completed",
+        "output": native_output,
+        "instructions": "x".repeat(70_000),
+        "tools": [{"type": "function", "name": "old_tool", "description": "x".repeat(70_000)}],
+        "future_field": {"preserved": true}
+    });
+    let assistant = convert_response(
+        native.clone(),
+        find_model("gpt-5.6-luna").expect("catalog model"),
+        1,
+        1,
+    )
+    .expect("valid response");
+    native.as_object_mut().unwrap().remove("instructions");
+    native.as_object_mut().unwrap().remove("tools");
+    assert_eq!(assistant.native_message, native);
+
+    // Exercise the serialized assistant returned through the gateway and sent
+    // back by a caller, preserving opaque output fields across that round trip.
+    let serialized = serde_json::to_vec(&assistant).expect("serialize assistant");
+    assert!(serialized.len() < 2_000);
+    let assistant = serde_json::from_slice(&serialized).expect("deserialize assistant");
+    let mut request = request("gpt-5.6-luna");
+    request.instructions = Some("Current instructions".into());
+    request
+        .provider_options
+        .insert("tools".into(), json!([{"type": "web_search"}]));
+    request.messages.push(Message::Assistant(assistant));
+    let body = build_response_request(&request).expect("valid follow-up request");
+    assert_eq!(body["input"], native_output);
+    assert_eq!(body["instructions"], "Current instructions");
+    assert_eq!(body["tools"], json!([{"type": "web_search"}]));
+}
+
+#[test]
 fn custom_exec_preserves_inline_media_result_shapes() {
     let mut request = request("gpt-5.6-luna");
     request
