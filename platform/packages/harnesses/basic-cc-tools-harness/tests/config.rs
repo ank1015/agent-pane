@@ -47,18 +47,35 @@ fn workspace_paths_translate_to_private_execution_roots() {
 
 #[test]
 fn registered_models_match_compiled_capabilities() {
-    let migration = include_str!(
+    let initial = include_str!(
         "../../../../apps/server/migrations/20260905040000_basic_harness_supported_models.sql"
     );
-    let stored = migration
+    let initial = initial
         .split("supported_models = '")
         .nth(1)
         .unwrap()
         .split("'::jsonb")
         .next()
         .unwrap();
+    let mut stored = serde_json::from_str::<Value>(initial).unwrap();
+    let migration =
+        include_str!("../../../../apps/server/migrations/20260910010000_add_gpt_6_astra.sql");
+    let update = migration
+        .split("supported_models || '")
+        .nth(1)
+        .unwrap()
+        .split("'::jsonb")
+        .next()
+        .unwrap();
+    for (provider, ids) in serde_json::from_str::<Value>(update)
+        .unwrap()
+        .as_object()
+        .unwrap()
+    {
+        stored[provider] = ids.clone();
+    }
     assert_eq!(
-        serde_json::from_str::<Value>(stored).unwrap(),
+        stored,
         serde_json::to_value(basic_cc_tools_harness::supported_models()).unwrap()
     );
 }
