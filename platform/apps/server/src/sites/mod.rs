@@ -28,6 +28,12 @@ pub enum Error {
     Conflict,
     #[error("sites service unavailable")]
     Service(u16),
+    /// Bounded public error envelope from the authenticated Sites service.
+    #[error("sites service rejected the request")]
+    Rejected {
+        status: u16,
+        error: platform_runtime_contracts::ErrorInfo,
+    },
     #[error("database error")]
     Database(#[from] sqlx::Error),
     #[error("runtime error")]
@@ -36,6 +42,13 @@ pub enum Error {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
+            Self::Rejected { status, error } => {
+                return (
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+                    Json(platform_runtime_contracts::ErrorEnvelope { error }),
+                )
+                    .into_response();
+            }
             Self::Invalid(m) => (400, "INVALID_SITE_REQUEST", m),
             Self::Unauthorized => (
                 401,

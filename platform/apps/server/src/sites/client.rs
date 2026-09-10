@@ -58,8 +58,61 @@ impl SitesClient {
             bytes.extend_from_slice(&chunk);
         }
         if !status.is_success() {
+            if let Some(error) = public_rejection(status, &bytes) {
+                return Err(error);
+            }
             return Err(super::Error::Service(status.as_u16()));
         }
         serde_json::from_slice(&bytes).map_err(|_| upstream())
+    }
+}
+
+fn public_rejection(status: reqwest::StatusCode, bytes: &[u8]) -> Option<super::Error> {
+    if !status.is_client_error() {
+        return None;
+    }
+    let envelope =
+        serde_json::from_slice::<platform_runtime_contracts::ErrorEnvelope>(bytes).ok()?;
+    let error = envelope.error;
+    if error.code.is_empty()
+        || error.code.len() > 128
+        || !error
+            .code
+            .bytes()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+        || error.message.is_empty()
+        || error.message.len() > 4096
+    {
+        return None;
+    }
+    Some(super::Error::Rejected {
+        status: status.as_u16(),
+        error,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn preserves_bounded_public_rejections_but_not_server_failure_bodies() {
+        let body = br#"{"error":{"code":"INVALID_REQUEST","message":"Only index.html and backend.js may be updated."}}"#;
+        let error = public_rejection(reqwest::StatusCode::BAD_REQUEST, body).unwrap();
+        assert!(
+            matches!(error, super::super::Error::Rejected { status: 400, error } if error.message.contains("index.html"))
+        );
+        assert!(public_rejection(reqwest::StatusCode::INTERNAL_SERVER_ERROR, body).is_none());
+        assert!(
+            public_rejection(
+                reqwest::StatusCode::BAD_REQUEST,
+                b"<html>upstream error</html>"
+            )
+            .is_none()
+        );
+        let oversized = serde_json::to_vec(
+            &serde_json::json!({"error":{"code":"INVALID_REQUEST","message":"x".repeat(4097)}}),
+        )
+        .unwrap();
+        assert!(public_rejection(reqwest::StatusCode::BAD_REQUEST, &oversized).is_none());
     }
 }
