@@ -16,10 +16,16 @@ use serde_json::{Value, json};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 type Tx<'a> = Transaction<'a, Postgres>;
+fn resource_inventory(mut items: Vec<Value>) -> Value {
+    let total = items.len();
+    items.truncate(200);
+    json!({"items":items,"total":total,"truncated":total > 200})
+}
 pub(super) fn is_method(method: &str) -> bool {
     matches!(
         method,
         "sandboxes.createFromSnapshot"
+            | "execution.listResources"
             | "sandboxes.get"
             | "sandboxes.terminate"
             | "execution.bash"
@@ -179,6 +185,75 @@ async fn host_workspace(
 }
 
 impl RuntimeService {
+    async fn execution_resources(&self, caller: Caller, args: Value) -> Result<Value> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Empty {}
+        let _: Empty = decode(args)?;
+        let mut tx = self.transaction().await?;
+        authorize(&mut tx, caller).await?;
+        tx.commit().await?;
+        let gateway = self.execution.as_ref().ok_or(RuntimeError::Conflict(
+            "Execution gateway is not configured.",
+        ))?;
+        let context =
+            execution_core::OperationContext::with_timeout(std::time::Duration::from_secs(5));
+        let filter = execution_client::HostFilter {
+            kind: Some(execution_api::ExecutionHostKind::Registered),
+            ..Default::default()
+        };
+        let (hosts, accounts) = tokio::try_join!(
+            gateway.list_hosts(&context, &filter),
+            gateway.list_accounts(&context),
+        )
+        .map_err(|_| {
+            RuntimeError::Conflict("Execution resource discovery is unavailable. Retry later.")
+        })?;
+        // Do not rely only on the gateway filter, or serialize its raw records:
+        // they contain metadata and credential fingerprints outside this API.
+        let mut hosts: Vec<_> = hosts
+            .into_iter()
+            .filter(|h| {
+                h.kind == execution_api::ExecutionHostKind::Registered
+                    && h.desired_state != execution_api::DesiredHostState::Deleted
+                    && h.state != execution_api::ExecutionHostState::Deleted
+                    && h.deleted_at.is_none()
+            })
+            .collect();
+        hosts.sort_by_key(|h| h.id);
+        let mut accounts = accounts;
+        accounts.sort_by_key(|a| a.id);
+        let result = json!({
+            "machines": resource_inventory(hosts.into_iter().map(|h| json!({
+                "host_id":h.id, "name":h.name, "state":h.state,
+                "last_seen_at":h.last_seen_at,
+                "workspace_roots":h.roots.into_iter().map(|r| json!({
+                    "workspace_root":r.native_path, "read_only":r.read_only
+                })).collect::<Vec<_>>(),
+                "operating_system":h.descriptor.map(|d|d.operating_system)
+            })).collect()),
+            "sandbox_accounts": resource_inventory(accounts.into_iter().map(|a| json!({
+                "e2b_account_id":a.id, "name":a.name, "status":a.status,
+                "is_default":a.is_default
+            })).collect())
+        });
+        // Inventory I/O never holds database locks. Recheck current access
+        // before exposing its results, including the execution permission.
+        let mut tx = self.transaction().await?;
+        authorize(&mut tx, caller).await?;
+        tx.commit().await?;
+        if serde_json::to_vec(&result)
+            .map_err(|_| RuntimeError::StoredData)?
+            .len()
+            > 96 * 1024
+        {
+            return Err(RuntimeError::Invalid(
+                "Execution resource inventory exceeds 96 KiB.",
+            ));
+        }
+        Ok(result)
+    }
+
     /// Trusted harness bridge for hosts provisioned by the harness itself. A
     /// published output alone never creates this execution association.
     pub(super) async fn bind_harness_workspace(
@@ -296,6 +371,14 @@ impl RuntimeService {
         method: &str,
         args: Value,
     ) -> Result<Value> {
+        if method == "sandboxes.terminate" && matches!(caller, Caller::Site(_)) {
+            return Err(RuntimeError::Invalid(
+                "Sandbox termination is not available to site backends; sandboxes expire automatically.",
+            ));
+        }
+        if method == "execution.listResources" {
+            return self.execution_resources(caller, args).await;
+        }
         if serde_json::to_vec(&args)
             .map_err(|_| RuntimeError::StoredData)?
             .len()
@@ -373,7 +456,7 @@ impl RuntimeService {
                         snapshot_id: snapshot
                     },
                     timeout_seconds: Some(u64::from(seconds)),
-                    network_access: Some(true),
+                    network_access: Some(a.network_access.unwrap_or(true)),
                     metadata: json!({"platform_operation_id":id,"platform_project_id":project})
                 });
                 insert(

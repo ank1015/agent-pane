@@ -15,6 +15,8 @@ pub enum RuntimeError {
     Unauthorized,
     #[error("invalid runtime request")]
     Invalid(&'static str),
+    #[error("sites request rejected")]
+    SitesRejected { status: u16, error: ErrorInfo },
     #[error("runtime resource not found")]
     NotFound,
     #[error("runtime conflict")]
@@ -34,6 +36,13 @@ pub enum RuntimeError {
 impl IntoResponse for RuntimeError {
     fn into_response(self) -> Response {
         let (status, code, message) = match self {
+            Self::SitesRejected { status, error } => {
+                return (
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+                    Json(ErrorEnvelope { error }),
+                )
+                    .into_response();
+            }
             Self::Environment(error) => return error.into_response(),
             Self::AdminUnauthorized => (
                 StatusCode::UNAUTHORIZED,
