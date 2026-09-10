@@ -92,6 +92,7 @@ struct Claims {
 pub struct ContentAccess {
     pub url: String,
     pub expires_at: u64,
+    pub dashboard_origin: String,
 }
 
 impl ContentHost {
@@ -146,6 +147,7 @@ impl ContentHost {
             URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
         );
         Ok(ContentAccess {
+            dashboard_origin: self.config.dashboard_origin.clone(),
             url: format!(
                 "{}/content/{ticket}/{site}/{release}/{entry}",
                 self.config.public_origin
