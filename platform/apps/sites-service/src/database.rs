@@ -150,6 +150,9 @@ pub(crate) fn authorize(ctx: AuthContext<'_>, migrations: bool) -> Authorization
             index_name,
             table_name,
         } => migrations && application(table_name) && !protected(index_name),
+        // SQLite emits REINDEX while populating a newly created index too.
+        // Keep it authoring-only; backend requests still cannot change schema.
+        A::Reindex { index_name } => migrations && application(index_name),
         A::CreateView { view_name } | A::DropView { view_name } => {
             migrations && application(view_name)
         }
@@ -428,7 +431,7 @@ pub(crate) fn parameter(value: Value) -> DbResult<SqlValue> {
         }
     })
 }
-fn value(input: ValueRef<'_>) -> DbResult<Value> {
+pub(crate) fn value(input: ValueRef<'_>) -> DbResult<Value> {
     match input {
         ValueRef::Null => Ok(Value::Null),
         ValueRef::Integer(i) if (-SAFE_INTEGER..=SAFE_INTEGER).contains(&i) => Ok(json!(i)),

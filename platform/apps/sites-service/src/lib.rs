@@ -24,3 +24,4 @@ pub mod platform;
 pub mod authoring;
 mod authoring_data;
 mod authoring_http;
+mod authoring_sql;
