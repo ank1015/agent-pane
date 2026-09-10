@@ -75,7 +75,8 @@ pub struct AssistantMessage {
     pub usage: Option<Usage>,
     /// End-to-end request duration in milliseconds.
     pub duration_ms: u64,
-    /// Unmodified provider response, retained for lossless provider replay.
+    /// Provider-native replay data. Adapters may omit echoed request settings
+    /// while preserving the native output required for lossless replay.
     pub native_message: serde_json::Value,
     pub content: Vec<AssistantContent>,
     pub stop_reason: StopReason,

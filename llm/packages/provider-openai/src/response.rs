@@ -70,7 +70,7 @@ struct InputTokenDetails {
 
 /// Converts a complete native OpenAI response into the shared assistant contract.
 pub fn convert_response(
-    native: Value,
+    mut native: Value,
     selected_model: &OpenAiModel,
     duration_ms: u64,
     timestamp_ms: u64,
@@ -100,6 +100,13 @@ pub fn convert_response(
         .usage
         .as_ref()
         .map(|usage| usage_from_response(usage, selected_model));
+
+    // Follow-up replay uses only output. Do not retain large request settings
+    // that would otherwise be duplicated in every stored assistant message.
+    if let Some(object) = native.as_object_mut() {
+        object.remove("instructions");
+        object.remove("tools");
+    }
 
     Ok(AssistantMessage {
         id: MessageId::new(response.id)

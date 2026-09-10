@@ -5,8 +5,12 @@ A catalog-backed, non-streaming OpenAI Responses API implementation of
 
 Only model IDs in `OPENAI_MODELS` are accepted. The selected catalog entry
 provides the normalized model name, token prices, context window, and output
-limit. Every successful response includes the untouched OpenAI response in
-`AssistantMessage::native_message` and a catalog-priced usage breakdown.
+limit. Every successful response includes the OpenAI response in
+`AssistantMessage::native_message` with top-level `instructions` and `tools`
+removed, plus a catalog-priced usage breakdown. These echoed request settings
+would otherwise accumulate in conversation history. Native `output` and all
+other response fields are preserved; follow-up replay uses only `output`.
+Previously stored assistant messages are not rewritten by this change.
 
 ```rust,no_run
 use llm_contracts::{LlmRequest, LlmTransport};
