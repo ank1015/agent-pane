@@ -9,7 +9,7 @@ The production defaults are sized for this VM:
 - 32 active provider requests and 64 FIFO waiters.
 - A 120-second maximum queue wait.
 - Five gateway database connections.
-- An 8 MiB runtime request-body limit.
+- A 64 MiB runtime request-body limit, matching the gateway's local default.
 - A 20 GB standard persistent boot disk.
 
 Runtime and admin API tokens, the credential vault key, and the PostgreSQL
