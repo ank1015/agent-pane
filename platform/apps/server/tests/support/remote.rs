@@ -33,6 +33,11 @@ struct Gateway {
     block_cancel: AtomicBool,
     block_delete: AtomicBool,
     starts: AtomicUsize,
+    discovery_calls: AtomicUsize,
+    fail_discovery: AtomicBool,
+    pause_discovery: AtomicBool,
+    discovery_entered: tokio::sync::Notify,
+    release_discovery: tokio::sync::Notify,
     snapshot_roots: Mutex<BTreeMap<Uuid, std::path::PathBuf>>,
     pause_start: AtomicBool,
     start_entered: tokio::sync::Notify,
@@ -81,6 +86,36 @@ async fn get_host(State(g): State<Arc<Gateway>>, Path(id): Path<Uuid>) -> Respon
         Some((_, v)) => Json(v.clone()).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+async fn list_hosts(State(g): State<Arc<Gateway>>) -> Response {
+    g.discovery_calls.fetch_add(1, Ordering::SeqCst);
+    // Deliberately include all hosts to verify defensive filtering.
+    Json(
+        g.hosts
+            .lock()
+            .await
+            .values()
+            .map(|(_, v)| v.clone())
+            .collect::<Vec<_>>(),
+    )
+    .into_response()
+}
+async fn list_accounts(State(g): State<Arc<Gateway>>) -> Response {
+    g.discovery_calls.fetch_add(1, Ordering::SeqCst);
+    if g.pause_discovery.swap(false, Ordering::SeqCst) {
+        g.discovery_entered.notify_one();
+        g.release_discovery.notified().await;
+    }
+    if g.fail_discovery.load(Ordering::SeqCst) {
+        return (StatusCode::BAD_GATEWAY, "private-gateway-error").into_response();
+    }
+    Json(json!([{
+        "id":Uuid::nil(), "name":"Sandbox account", "status":"active",
+        "is_default":true, "credential_fingerprint":"private-fingerprint",
+        "last_verified_at":null, "created_at":chrono::Utc::now(),
+        "updated_at":chrono::Utc::now()
+    }]))
+    .into_response()
 }
 async fn delete_host(State(g): State<Arc<Gateway>>, Path(id): Path<Uuid>) -> Response {
     if g.block_delete.load(Ordering::SeqCst) {
@@ -154,6 +189,11 @@ async fn setup(pool: PgPool) -> (Fixture, Arc<Gateway>, Uuid, String) {
         block_cancel: AtomicBool::new(false),
         block_delete: AtomicBool::new(false),
         starts: AtomicUsize::new(0),
+        discovery_calls: AtomicUsize::new(0),
+        fail_discovery: AtomicBool::new(false),
+        pause_discovery: AtomicBool::new(false),
+        discovery_entered: tokio::sync::Notify::new(),
+        release_discovery: tokio::sync::Notify::new(),
         snapshot_roots: Mutex::new(BTreeMap::new()),
         pause_start: AtomicBool::new(false),
         start_entered: tokio::sync::Notify::new(),
@@ -170,7 +210,8 @@ async fn setup(pool: PgPool) -> (Fixture, Arc<Gateway>, Uuid, String) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let app = Router::new()
-        .route("/v1/hosts", post(create_host))
+        .route("/v1/hosts", post(create_host).get(list_hosts))
+        .route("/v1/e2b-accounts", get(list_accounts))
         .route("/v1/hosts/{id}", get(get_host).delete(delete_host))
         .route("/v1/hosts/{id}/operations", post(operations))
         .with_state(gateway.clone());
@@ -191,6 +232,107 @@ async fn setup(pool: PgPool) -> (Fixture, Arc<Gateway>, Uuid, String) {
 fn ok(r: Value) -> Value {
     assert_eq!(r["status"], 200, "{r}");
     r["body"].clone()
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires local PostgreSQL and a built sites-service binary"]
+async fn execution_resource_discovery_is_bounded_credential_free_and_authorized(pool: PgPool) {
+    let (f, g, host, cwd) = setup(pool).await;
+    let denied = f.sdk("execution.listResources", json!([])).await;
+    assert_ne!(denied["status"], 200, "{denied}");
+    assert_eq!(g.discovery_calls.load(Ordering::SeqCst), 0);
+    enable(&f).await;
+    g.add(Uuid::now_v7(), "e2b", json!({}), json!({"type":"base"}))
+        .await;
+    let deleted = Uuid::now_v7();
+    g.add(deleted, "registered", json!({}), Value::Null).await;
+    g.hosts.lock().await.get_mut(&deleted).unwrap().1["desired_state"] = json!("deleted");
+    g.hosts.lock().await.get_mut(&host).unwrap().1["metadata"] =
+        json!({"secret":"private-host-metadata"});
+    let result = ok(f.sdk("execution.listResources", json!([])).await);
+    let typed: c::ExecutionResources = serde_json::from_value(result.clone()).unwrap();
+    assert_eq!(typed.machines.items.len(), 1);
+    assert_eq!(typed.machines.total, 1);
+    assert!(!typed.machines.truncated);
+    assert_eq!(typed.machines.items[0].host_id, host);
+    assert_eq!(
+        typed.machines.items[0].workspace_roots[0].workspace_root,
+        cwd
+    );
+    assert!(typed.machines.items[0].operating_system.is_some());
+    assert_eq!(typed.sandbox_accounts.items[0].e2b_account_id, Uuid::nil());
+    assert_eq!(
+        result["sandbox_accounts"]["items"][0]
+            .as_object()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert!(!result.to_string().contains("private-"));
+    assert_eq!(g.starts.load(Ordering::SeqCst), 0);
+    assert!(g.keys.lock().await.is_empty());
+    let count: i64 = sqlx::query_scalar("select count(*) from platform_remote_operations")
+        .fetch_one(&f.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "discovery must not provision compute");
+
+    g.fail_discovery.store(true, Ordering::SeqCst);
+    let failed = f.sdk("execution.listResources", json!([])).await;
+    assert_ne!(failed["status"], 200);
+    assert!(!failed.to_string().contains("private-gateway-error"));
+    g.fail_discovery.store(false, Ordering::SeqCst);
+
+    g.pause_discovery.store(true, Ordering::SeqCst);
+    let (revoked, ()) = tokio::join!(f.sdk("execution.listResources", json!([])), async {
+        tokio::time::timeout(Duration::from_secs(5), g.discovery_entered.notified())
+            .await
+            .unwrap();
+        sqlx::query("update site_project_access set execution_enabled=false where project_id=$1")
+            .bind(f.project)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        g.release_discovery.notify_one();
+    });
+    assert_ne!(
+        revoked["status"], 200,
+        "must reauthorize after gateway discovery"
+    );
+    enable(&f).await;
+
+    // Reuse a fixture host without allocating hundreds of supervisors.
+    {
+        let mut hosts = g.hosts.lock().await;
+        let (runtime, original) = hosts[&host].clone();
+        for _ in 0..201 {
+            let id = Uuid::now_v7();
+            let mut value = original.clone();
+            value["id"] = json!(id);
+            hosts.insert(id, (runtime.clone(), value));
+        }
+    }
+    let result = ok(f.sdk("execution.listResources", json!([])).await);
+    assert_eq!(result["machines"]["items"].as_array().unwrap().len(), 200);
+    assert_eq!(result["machines"]["total"], 202);
+    assert_eq!(result["machines"]["truncated"], true);
+    for (_, value) in g.hosts.lock().await.values_mut() {
+        value["name"] = json!("x".repeat(1024));
+    }
+    let oversized = f.sdk("execution.listResources", json!([])).await;
+    assert_ne!(oversized["status"], 200);
+    assert!(oversized.to_string().contains("96 KiB"));
+    sqlx::query("update site_project_access set execution_enabled=false where project_id=$1")
+        .bind(f.project)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let before = g.discovery_calls.load(Ordering::SeqCst);
+    assert_ne!(
+        f.sdk("execution.listResources", json!([])).await["status"],
+        200
+    );
+    assert_eq!(g.discovery_calls.load(Ordering::SeqCst), before);
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -355,11 +497,16 @@ async fn remote_harness_sandbox_binding_preserves_files_and_rejects_output_only_
         g.keys.lock().await.is_empty(),
         "binding and verification allocate no sandbox"
     );
-    ok(f.sdk(
-        "sandboxes.terminate",
-        mutation(json!({"sandboxId":sandbox}), "cleanup"),
-    )
-    .await);
+    assert_eq!(
+        f.sdk(
+            "sandboxes.terminate",
+            mutation(json!({"sandboxId":sandbox}), "cleanup"),
+        )
+        .await["status"],
+        400
+    );
+    sqlx::query("update platform_remote_operations set expires_at=clock_timestamp()-interval '1 second' where id=$1")
+        .bind(sandbox).execute(&f.pool).await.unwrap();
     tick(&f).await;
     assert_eq!(
         ok(f.sdk("sandboxes.get", json!([sandbox])).await)["terminationConfirmed"],
@@ -558,7 +705,10 @@ async fn remote_sandbox_creation_recovery_expiry_and_project_binding(pool: PgPoo
     let accepted = ok(f
         .sdk(
             "sandboxes.createFromSnapshot",
-            mutation(json!({"environmentId":env}), "sandbox"),
+            mutation(
+                json!({"environmentId":env,"networkAccess":false}),
+                "sandbox",
+            ),
         )
         .await);
     for _ in 0..5 {
@@ -567,6 +717,39 @@ async fn remote_sandbox_creation_recovery_expiry_and_project_binding(pool: PgPoo
     let ready = ok(f.sdk("sandboxes.get", json!([accepted["id"]])).await);
     assert_eq!(ready["status"], "ready");
     assert_eq!(g.keys.lock().await.len(), 1);
+    assert_eq!(
+        g.keys.lock().await.values().next().unwrap().0["network_access"],
+        false
+    );
+    let replay = ok(f
+        .sdk(
+            "sandboxes.createFromSnapshot",
+            mutation(
+                json!({"environmentId":env,"networkAccess":false}),
+                "sandbox",
+            ),
+        )
+        .await);
+    assert_eq!(replay["id"], accepted["id"]);
+    assert_eq!(
+        f.sdk(
+            "sandboxes.createFromSnapshot",
+            mutation(json!({"environmentId":env,"networkAccess":true}), "sandbox")
+        )
+        .await["status"],
+        400
+    );
+    assert_eq!(
+        f.sdk(
+            "sandboxes.createFromSnapshot",
+            mutation(
+                json!({"environmentId":env,"networkAccess":"false"}),
+                "invalid-network"
+            )
+        )
+        .await["status"],
+        400
+    );
     assert_eq!(ready["workspace"]["environment_id"], json!(env));
     // Expiry revokes new commands immediately, but is not deletion confirmation.
     sqlx::query("update platform_remote_operations set expires_at=clock_timestamp()-interval '1 second' where id=$1").bind(id(&accepted)).execute(&f.pool).await.unwrap();
@@ -591,6 +774,31 @@ async fn remote_sandbox_creation_recovery_expiry_and_project_binding(pool: PgPoo
     let expired = ok(f.sdk("sandboxes.get", json!([accepted["id"]])).await);
     assert_eq!(expired["status"], "expired");
     assert_eq!(expired["terminationConfirmed"], true);
+    for (key, input) in [
+        ("network-default", json!({"environmentId":env})),
+        (
+            "network-enabled",
+            json!({"environmentId":env,"networkAccess":true}),
+        ),
+    ] {
+        let created = ok(f
+            .sdk("sandboxes.createFromSnapshot", mutation(input, key))
+            .await);
+        for _ in 0..5 {
+            tick(&f).await;
+        }
+        assert_eq!(
+            ok(f.sdk("sandboxes.get", json!([created["id"]])).await)["status"],
+            "ready"
+        );
+        let keys = g.keys.lock().await;
+        let request = &keys
+            .values()
+            .find(|(request, _)| request["metadata"]["platform_operation_id"] == created["id"])
+            .unwrap()
+            .0;
+        assert_eq!(request["network_access"], true);
+    }
     assert_eq!(
         f.sdk(
             "sandboxes.createFromSnapshot",
