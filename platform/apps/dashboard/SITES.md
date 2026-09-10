@@ -150,11 +150,13 @@ run acceptance, closure/reopening, and persisted session inspection.
 
 ### Real Sites harness browser smoke
 
-Start the configured Platform, Sites, worker and dashboard services. The optional
-browser probe requires `npm ci` and `npx playwright install chromium` in
-`platform/packages/harnesses/sites/browser`, plus the worker's `SITES_BROWSER_*`
-settings. The UI smoke reuses that Playwright installation. It spends real model
-usage and changes only an explicitly selected test site.
+Start the configured Platform, Sites, worker and dashboard services. The manual
+UI smoke requires `npm ci` and `npx playwright install chromium` in
+`platform/apps/dashboard/tests/browser`. This is test-only Playwright setup;
+the agent's three-action browser uses its separate runtime under
+`platform/packages/harnesses/sites/browser` (see its harness README for worker configuration).
+The UI smoke spends real
+model usage and changes only an explicitly selected test site.
 
 From Create site, select Sites and the configured ChatGPT account / GPT-5.6 Luna.
 Ask it to create a self-contained counter with heading `Sites E2E v1`, an Increment

@@ -6,7 +6,7 @@ import { useParams } from 'react-router-dom'
 import { chatMessagesOptions, chatRunsOptions, validId } from './chat-queries'
 import { useChatSession } from './chat-queries'
 import { buildSessionAnalysis, buildSessionReplayAnalysis, type SessionAnalysisPoint } from './session-analysis'
-import type { AssistantMessage, ImageContent, SessionMessage, ToolResultMessage } from './project-session-types'
+import type { AssistantMessage, MessageContentPart, SessionMessage, ToolResultMessage } from './project-session-types'
 
 const EMPTY_MESSAGES: SessionMessage[] = []
 
@@ -181,9 +181,10 @@ function ToolResultItem({ body, record }: { body: ToolResultMessage; record: Ses
   </section>
 }
 
-function RichContent({ content, plain = false }: { content: readonly ({ type: 'text'; content: string } | ({ type: 'image' } & ImageContent))[]; plain?: boolean }) {
+function RichContent({ content, plain = false }: { content: readonly MessageContentPart[]; plain?: boolean }) {
   return <>{content.map((part, index) => part.type === 'text'
     ? plain ? <pre key={`text:${index}`}>{part.content}</pre> : <MessageResponse className="project-session-markdown" key={`text:${index}`}>{part.content}</MessageResponse>
+    : part.type === 'audio' ? <audio key={`audio:${index}`} controls preload="none" src={part.audio_url} aria-label="Session audio" />
     : <img className="session-analyzer-image" key={`image:${index}`} src={part.source.type === 'url' ? part.source.url : `data:${part.source.mime_type};base64,${part.source.data}`} alt="Session attachment" loading="lazy" />)}</>
 }
 

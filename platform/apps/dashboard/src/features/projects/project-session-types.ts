@@ -23,6 +23,7 @@ export type ImageContent = {
 export type MessageContentPart =
   | TextContent
   | ({ type: 'image' } & ImageContent)
+  | { type: 'audio'; audio_url: string }
 
 export type UserMessage = {
   role: 'user'

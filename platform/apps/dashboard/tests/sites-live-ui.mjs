@@ -1,7 +1,7 @@
 // Opt-in real browser/model smoke test. See server/SITES.md for prerequisites.
 import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
-import { chromium } from '../../../packages/harnesses/sites/browser/node_modules/playwright/index.mjs'
+import { chromium } from './browser/node_modules/playwright/index.mjs'
 if (process.env.SITES_LIVE_E2E !== '1' || !process.env.SITES_E2E_STATE) throw Error('Set SITES_LIVE_E2E=1 and SITES_E2E_STATE to opt into test-site changes and model usage.')
 const statePath = process.env.SITES_E2E_STATE, s = JSON.parse(await readFile(statePath, 'utf8'))
 const origin = process.env.DASHBOARD_ORIGIN || 'http://127.0.0.1:5173', platform = process.env.PLATFORM_URL || 'http://127.0.0.1:3100'
@@ -54,7 +54,7 @@ try {
   await edit.getByRole('button', { name: /^Model:/ }).click()
   await edit.getByText('GPT-5.6 Luna', { exact: true }).click()
   for (let i = 0; i < 3; i++) await edit.getByRole('button', { name: /^Reasoning:/ }).click()
-  await edit.locator('textarea').fill('Sites Step 7 E2E edit: Read this existing site and change only the visible heading from "Sites E2E v1" to "Sites E2E v2" using ctx.sites.applyPatch. Preserve all other source and all data. Do not increment, create another site or take a snapshot. Verify h1 with browser.verify when available and finish.')
+  await edit.locator('textarea').fill('Sites Step 7 E2E edit: Read this existing site and change only the visible heading from "Sites E2E v1" to "Sites E2E v2" using tools.apply_patch. Preserve all other source and all data. Do not increment, create another site or take a snapshot. Read back the changed source and finish. Browser control is not implemented.')
   await edit.getByRole('button', { name: 'Send prompt', exact: true }).click()
   await edit.waitForURL(new RegExp(`/projects/${s.project}/[0-9a-f-]{36}$`))
   s.editSession = edit.url().split('/').at(-1); await save()
