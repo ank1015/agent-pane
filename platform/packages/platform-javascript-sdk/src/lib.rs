@@ -179,13 +179,13 @@ pub fn methods() -> Vec<Method> {
         ),
         method::<c::Sandbox>(
             "sandboxes.createFromSnapshot",
-            "Accept durable sandbox provisioning from a project snapshot. networkAccess defaults to true. Poll get until ready; sandboxes expire automatically. Prefer harness-provided workspaces when available.",
+            "Accept durable sandbox provisioning from a project snapshot. networkAccess defaults to true. Poll get until ready; sandboxes persist until explicitly terminated. timeoutSeconds controls the running window before E2B auto-pauses the sandbox. Prefer harness-provided workspaces when available.",
             true,
             mutation::<c::CreateSandboxFromSnapshot>(),
         ),
         method::<c::Sandbox>(
             "sandboxes.get",
-            "Inspect sandbox readiness, expiry and confirmed termination.",
+            "Inspect sandbox readiness and confirmed termination.",
             false,
             id("sandboxId"),
         ),

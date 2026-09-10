@@ -33,6 +33,8 @@ fn sandbox_sdk_keeps_readiness_and_exposes_optional_network_access_without_termi
     );
     let declarations = platform_javascript_sdk::declarations();
     assert!(declarations.contains("\"networkAccess\"?: boolean | null"));
+    assert!(!declarations.contains("\"expiresAt\""));
+    assert!(!declarations.contains("\"expired\""));
     assert!(!declarations.contains("terminate("));
 }
 

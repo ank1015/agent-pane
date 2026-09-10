@@ -87,6 +87,9 @@ hardware specification.
 
 `network_access` is optional for both base and snapshot sources and defaults to
 `true`. When false, the gateway sends E2B `allow_internet_access: false`.
+`timeout_seconds` is the running window before E2B auto-pauses the sandbox, not
+a retention deadline. Sandboxes preserve memory and filesystem state while
+paused, auto-resume on activity, and remain until explicitly deleted.
 
 `POST /v1/hosts` returns `202 Accepted` with the host resource. Its top-level
 `roots` array is available immediately, including while `state` is `provisioning`

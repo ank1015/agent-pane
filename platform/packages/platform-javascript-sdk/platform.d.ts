@@ -55,9 +55,9 @@ export type RunInput = { "created_at": string; "handled_at": string | null; "han
 export type RunOutput = { "created_at": string; "name": string; "output": OutputValue; "project_id": string; "run_id": string; "sequence": number; "session_id": string };
 export type RunOutputsPage = { "items": Array<RunOutput>; "next_after_sequence": number | null };
 export type RunStatus = "ready" | "running" | "waiting" | "completed" | "failed" | "aborted";
-export type Sandbox = { "createdAt": string; "environmentId": string; "error": (ErrorInfo | null); "expiresAt": string | null; "id": string; "status": SandboxStatus; "terminationConfirmed": boolean; "terminationRequested": boolean; "workspace": (ExecutionWorkspace | null) };
+export type Sandbox = { "createdAt": string; "environmentId": string; "error": (ErrorInfo | null); "id": string; "status": SandboxStatus; "terminationConfirmed": boolean; "terminationRequested": boolean; "workspace": (ExecutionWorkspace | null) };
 export type SandboxAccount = { "e2b_account_id": string; "is_default": boolean; "name": string; "status": string };
-export type SandboxStatus = "provisioning" | "ready" | "failed" | "terminated" | "expired" | "unavailable" | "terminating";
+export type SandboxStatus = "provisioning" | "ready" | "failed" | "terminated" | "unavailable" | "terminating";
 export type Session = { "active_run": (Run | null); "archived_at": string | null; "config": { [key: string]: Json }; "created_at": string; "current_revision": number; "forked_at_revision": number | null; "forked_from_session_id": string | null; "harness_contract": HarnessContract; "harness_id": string; "id": string; "last_activity_at": string; "project_id": string; "title": string | null };
 export type SessionCreated = { "callback": (RegisteredCallback | null); "input": (RunInput | null); "run": (Run | null); "session": Session };
 export type SessionMessage = { "created_at": string; "message": Json; "message_id": string; "origin_run_id": string | null; "revision": number; "run_id": string | null };
@@ -116,9 +116,9 @@ export interface Platform {
     outputs(runId: Uuid, options?: OutputOptions): Promise<RunOutputsPage>;
   }>;
   readonly sandboxes: Readonly<{
-    /** Accept durable sandbox provisioning from a project snapshot. networkAccess defaults to true. Poll get until ready; sandboxes expire automatically. Prefer harness-provided workspaces when available. */
+    /** Accept durable sandbox provisioning from a project snapshot. networkAccess defaults to true. Poll get until ready; sandboxes persist until explicitly terminated. timeoutSeconds controls the running window before E2B auto-pauses the sandbox. Prefer harness-provided workspaces when available. */
     createFromSnapshot(input: CreateSandboxFromSnapshot, options: MutationOptions): Promise<Sandbox>;
-    /** Inspect sandbox readiness, expiry and confirmed termination. */
+    /** Inspect sandbox readiness and confirmed termination. */
     get(sandboxId: Uuid): Promise<Sandbox>;
   }>;
   readonly sessions: Readonly<{

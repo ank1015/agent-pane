@@ -268,6 +268,7 @@ impl E2bControlClient {
                 timeout: self.config.sandbox_timeout_seconds,
                 auto_pause: true,
                 auto_pause_memory: true,
+                auto_resume: AutoResumeConfig { enabled: true },
                 secure: true,
                 allow_internet_access: network_access.unwrap_or(true),
             })
@@ -432,8 +433,15 @@ struct CreateSandboxRequest<'a> {
     auto_pause: bool,
     #[serde(rename = "autoPauseMemory")]
     auto_pause_memory: bool,
+    #[serde(rename = "autoResume")]
+    auto_resume: AutoResumeConfig,
     secure: bool,
     allow_internet_access: bool,
+}
+
+#[derive(Serialize)]
+struct AutoResumeConfig {
+    enabled: bool,
 }
 
 #[derive(Serialize)]
