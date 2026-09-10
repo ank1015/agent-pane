@@ -35,6 +35,10 @@ operation that resumes a paused sandbox and only extends TTL. Supervisor RPCs
 reuse the same request and operation IDs when retried, so the supervisor's
 idempotency records preserve exact semantics.
 
+Created sandboxes auto-pause with memory after their running timeout and enable
+auto-resume. The timeout is therefore a running window rather than a retention
+deadline; paused sandboxes remain available until explicitly deleted.
+
 Envd `Process.Start` is considered complete when its terminal process event is
 received; the adapter does not wait for the surrounding Connect stream to close.
 Handshake and dispatched operation retries share one total request deadline.

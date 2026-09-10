@@ -29,6 +29,7 @@ async fn creates_base_and_snapshot_sandboxes_with_the_expected_template_ids() {
         assert_eq!(body["secure"], true);
         assert_eq!(body["autoPause"], true);
         assert_eq!(body["autoPauseMemory"], true);
+        assert_eq!(body["autoResume"], json!({"enabled": true}));
         assert_eq!(body["timeout"], 300);
         let template = body["templateID"].as_str().unwrap();
         let expected_network_access = template != "snapshot-42";
