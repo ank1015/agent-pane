@@ -571,8 +571,14 @@ fn mutation(input: Value, key: &str) -> Value {
     json!([input,{"idempotencyKey":key}])
 }
 async fn enable(f: &Fixture) {
-    f.request(Method::PUT,&format!("/internal/site-access/{}",f.project),ADMIN,
-        json!({"token":TOKEN,"enabled":true,"executionEnabled":true,"harnesses":[{"id":HARNESS,"environmentMode":"single"}],"accountIds":[f.account]}),200).await;
+    f.request(
+        Method::PUT,
+        &format!("/internal/site-access/{}", f.project),
+        ADMIN,
+        json!({"token":TOKEN,"enabled":true,"executionEnabled":true}),
+        200,
+    )
+    .await;
 }
 async fn tick(f: &Fixture) {
     sqlx::query("update platform_remote_operations set next_attempt_at=next_attempt_at-interval '1 minute' where finished_at is null").execute(&f.pool).await.unwrap();

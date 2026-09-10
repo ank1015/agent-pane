@@ -255,7 +255,14 @@ impl Fixture {
             assert!(f.child.try_wait().unwrap().is_none());
             tokio::time::sleep(Duration::from_millis(30)).await;
         }
-        f.request(Method::PUT,&format!("/internal/site-access/{project}"),ADMIN,json!({"token":TOKEN,"enabled":true,"harnesses":[{"id":HARNESS,"environmentMode":"single"}],"accountIds":[account]}),200).await;
+        f.request(
+            Method::PUT,
+            &format!("/internal/site-access/{project}"),
+            ADMIN,
+            json!({"token":TOKEN,"enabled":true}),
+            200,
+        )
+        .await;
         f.request(
             Method::PUT,
             &format!("/api/projects/{project}/sites/{site}"),
@@ -387,10 +394,10 @@ async fn site_sdk_end_to_end(pool: PgPool) {
         400
     );
     let h = f.sdk("harnesses.list", json!([])).await;
-    assert_eq!(h["body"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(h["body"]["items"].as_array().unwrap().len(), 3);
     assert_eq!(
         f.sdk("harnesses.get", json!(["environments"])).await["status"],
-        400
+        200
     );
     assert_eq!(
         f.sdk("harnesses.setEnabled", json!([HARNESS, false])).await["status"],
@@ -401,7 +408,7 @@ async fn site_sdk_end_to_end(pool: PgPool) {
         400
     );
     let opts = f.sdk("sessions.startOptions", json!([HARNESS])).await;
-    assert_eq!(opts["body"]["accounts"].as_array().unwrap().len(), 1);
+    assert_eq!(opts["body"]["accounts"].as_array().unwrap().len(), 2);
     assert_eq!(opts["body"]["environmentRequired"], true);
     let mut bad = f.start();
     bad["environmentId"] = json!(f.foreign_environment);
@@ -473,8 +480,10 @@ async fn site_sdk_end_to_end(pool: PgPool) {
     assert_eq!(stopped["status"], 200);
     assert!(!stopped["body"]["run"]["abort_requested_at"].is_null());
     let mut finish = f.pool.begin().await.unwrap();
-    sqlx::query("update runs set status='aborted',version=version+1,available_at=null,finished_at=clock_timestamp() where id=$1").bind(Uuid::parse_str(run).unwrap()).execute(&mut *finish).await.unwrap();
-    sqlx::query("insert into run_events(id,run_id,type,source,payload) values($1,$2,'run.aborted','runtime','{}')").bind(Uuid::now_v7()).bind(Uuid::parse_str(run).unwrap()).execute(&mut *finish).await.unwrap();
+    let changed = sqlx::query("update runs set status='aborted',version=version+1,available_at=null,finished_at=clock_timestamp() where id=$1 and status in ('ready','running','waiting')").bind(Uuid::parse_str(run).unwrap()).execute(&mut *finish).await.unwrap().rows_affected();
+    if changed == 1 {
+        sqlx::query("insert into run_events(id,run_id,type,source,payload) values($1,$2,'run.aborted','runtime','{}')").bind(Uuid::now_v7()).bind(Uuid::parse_str(run).unwrap()).execute(&mut *finish).await.unwrap();
+    }
     finish.commit().await.unwrap();
     assert_eq!(
         f.sdk("sessions.send", json!([session,{"prompt":"Continue","expectedRevision":0},{"idempotencyKey":"missing-observation"}])).await["status"],
@@ -550,12 +559,7 @@ async fn site_sdk_end_to_end(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(operations, 4);
-    // Grant changes affect discovery/admission, but successful operation receipts remain replayable.
-    sqlx::query("delete from site_account_grants where project_id=$1")
-        .bind(f.project)
-        .execute(&f.pool)
-        .await
-        .unwrap();
+    // Successful operation receipts remain replayable.
     assert_eq!(
         f.sdk(
             "sessions.start",
@@ -570,7 +574,7 @@ async fn site_sdk_end_to_end(pool: PgPool) {
             json!([f.start(),{"idempotencyKey":"new-trial"}])
         )
         .await["status"],
-        400
+        200
     );
     f.request(
         Method::DELETE,
@@ -705,7 +709,7 @@ async fn site_reads_harness_outputs_through_the_real_backend_bridge(pool: PgPool
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires local PostgreSQL and a built sites-service binary"]
-async fn site_management_grants_and_uncertain_provisioning(pool: PgPool) {
+async fn site_management_access_and_uncertain_provisioning(pool: PgPool) {
     let mut f = Fixture::new(pool).await;
     let path = format!("/api/projects/{}/sites/{}", f.project, f.site);
     f.request(Method::PUT, &path, TOKEN, json!({"name":"Evals"}), 200)
@@ -794,7 +798,7 @@ async fn site_management_grants_and_uncertain_provisioning(pool: PgPool) {
         401,
     )
     .await;
-    // Project enablement and the site-specific grant are both necessary.
+    // Project enablement is the harness authorization source for Sites too.
     sqlx::query("update project_harnesses set enabled=false where project_id=$1 and harness_id=$2")
         .bind(f.project)
         .bind(HARNESS)
@@ -805,7 +809,8 @@ async fn site_management_grants_and_uncertain_provisioning(pool: PgPool) {
         f.sdk("harnesses.list", json!([])).await["body"]["items"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .iter()
+            .all(|h| h["id"] != HARNESS)
     );
     assert_eq!(
         f.sdk(
@@ -821,7 +826,9 @@ async fn site_management_grants_and_uncertain_provisioning(pool: PgPool) {
         Method::PUT,
         &format!("/internal/site-access/{}", f.project),
         ADMIN,
-        json!({"token":rotated,"enabled":true,"harnesses":[],"accountIds":[]}),
+        // Older control-plane callers may still send this field during rollout;
+        // it must not restore or otherwise affect project harness enablement.
+        json!({"token":rotated,"enabled":true,"harnesses":[{"id":HARNESS,"environmentMode":"single"}],"accountIds":[]}),
         200,
     )
     .await;

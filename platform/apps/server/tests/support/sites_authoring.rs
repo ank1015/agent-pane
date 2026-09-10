@@ -32,7 +32,14 @@ pub(super) async fn setup(f: &Fixture) {
     .execute(&f.pool)
     .await
     .unwrap();
-    f.request(Method::PUT,&format!("/internal/site-access/{}",f.project),ADMIN,json!({"token":TOKEN,"enabled":true,"harnesses":[{"id":"sites","configurableFields":["model","siteId"]},{"id":HARNESS,"environmentMode":"single"}],"accountIds":[f.account]}),200).await;
+    f.request(
+        Method::PUT,
+        &format!("/internal/site-access/{}", f.project),
+        ADMIN,
+        json!({"token":TOKEN,"enabled":true}),
+        200,
+    )
+    .await;
 }
 pub(super) async fn worker(f: &mut Fixture) -> (PlatformClient, String) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
