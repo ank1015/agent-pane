@@ -1,7 +1,7 @@
 // Opt-in companion for an authored callback test site; see SITES.md.
 import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
-import { chromium } from '../../../packages/harnesses/sites/browser/node_modules/playwright/index.mjs'
+import { chromium } from './browser/node_modules/playwright/index.mjs'
 if (process.env.SITES_LIVE_E2E !== '1' || !process.env.SITES_E2E_STATE) throw Error('Set SITES_LIVE_E2E=1 and SITES_E2E_STATE to opt into test-site changes and model usage.')
 const phase = process.env.SITES_CALLBACK_PHASE || 'verify'
 if (!['launch', 'verify'].includes(phase)) throw Error('SITES_CALLBACK_PHASE must be launch or verify')

@@ -8,6 +8,8 @@ use std::{io::Read, path::Path, time::Duration};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 const FILE_BYTES: usize = 48 * 1024;
+const DELETED_FRONTEND: &str = "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title></title></head><body></body></html>\n";
+const DELETED_BACKEND: &str = "export default async function handle(request, ctx) {\n  return {status: 404, body: {error: 'Not found'}};\n}\n";
 const FRONTEND: &str = "<!doctype html>\n<html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>New site</title></head><body><main><h1>New site</h1></main></body></html>\n";
 const BACKEND: &str = "export default async function handle(request, ctx) {\n  return {status: 200, body: {message: 'New site'}};\n}\n";
 #[derive(Serialize, Deserialize)]
@@ -24,7 +26,7 @@ struct Prepared {
 }
 fn invalid() -> Error {
     Error::Invalid(
-        "Only index.html and backend.js may be updated; use matching patch context and keep each file within 48 KiB.",
+        "Only index.html and backend.js may be patched with Add, Delete, or Update File; moves are unsupported. Use matching update context and keep each final file nonempty and within 48 KiB.",
     )
 }
 fn upload(path: &str, content: &str) -> FileUpload {
@@ -228,26 +230,34 @@ impl SiteService {
                     }
                     let mut files = source.files;
                     for hunk in parsed.hunks {
-                        let tool_apply_patch::Hunk::UpdateFile {
-                            path,
-                            move_path: None,
-                            chunks,
-                        } = hunk
-                        else {
-                            return Err(invalid());
-                        };
-                        let file = match path.as_str() {
-                            "index.html" => &mut files.frontend,
-                            "backend.js" => &mut files.backend,
+                        let path = hunk.source_path();
+                        let (file, deleted) = match path {
+                            "index.html" => (&mut files.frontend, DELETED_FRONTEND),
+                            "backend.js" => (&mut files.backend, DELETED_BACKEND),
                             _ => return Err(invalid()),
                         };
-                        *file = tool_apply_patch::derive_new_contents(
-                            &path,
-                            file,
-                            &chunks,
-                            tool_apply_patch::ApplyPatchFileUpdateMode::NormalizeToLf,
-                        )
-                        .map_err(|_| invalid())?;
+                        *file = match &hunk {
+                            tool_apply_patch::Hunk::AddFile { contents, .. } => contents.clone(),
+                            tool_apply_patch::Hunk::DeleteFile { .. } => deleted.into(),
+                            tool_apply_patch::Hunk::UpdateFile {
+                                move_path: None,
+                                chunks,
+                                ..
+                            } => tool_apply_patch::derive_new_contents(
+                                path,
+                                file,
+                                chunks,
+                                tool_apply_patch::ApplyPatchFileUpdateMode::NormalizeToLf,
+                            )
+                            .map_err(|_| invalid())?,
+                            tool_apply_patch::Hunk::UpdateFile {
+                                move_path: Some(_), ..
+                            } => return Err(invalid()),
+                        };
+                    }
+                    // Stage ordered hunks in memory; only the final pair is validated
+                    // and activated. Delete/Add may replace the same permanent slot.
+                    for file in [&files.frontend, &files.backend] {
                         if file.trim().is_empty() || file.len() > FILE_BYTES {
                             return Err(invalid());
                         }

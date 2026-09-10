@@ -2,6 +2,8 @@
 #![doc = include_str!("../README.md")]
 
 mod reader;
+mod text;
+pub use text::{TextReadOutput, read_text};
 
 use execution_core::{
     ExecutionError, ExecutionErrorCode, ExecutionPath, ExecutionResult, ExecutionRuntime,

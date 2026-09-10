@@ -63,6 +63,12 @@ fn page<T: JsonSchema>(name: &'static str) -> Vec<Parameter> {
 /// aliases and callbacks remain in its compatibility layer, outside this surface.
 pub fn methods() -> Vec<Method> {
     vec![
+        method::<c::ExecutionResources>(
+            "execution.listResources",
+            "List registered machines and sandbox accounts without credentials or provisioning. Each inventory contains at most 200 items, total and truncated. Requires Site execution access; discovery does not grant host access.",
+            false,
+            vec![],
+        ),
         method::<t::CursorPage<t::Environment>>(
             "environments.list",
             "List this project's environment references without provisioning hosts.",
@@ -173,7 +179,7 @@ pub fn methods() -> Vec<Method> {
         ),
         method::<c::Sandbox>(
             "sandboxes.createFromSnapshot",
-            "Accept durable sandbox provisioning from a project snapshot. Poll get until ready; never replace an evaluated workspace for verification.",
+            "Accept durable sandbox provisioning from a project snapshot. networkAccess defaults to true. Poll get until ready; sandboxes expire automatically. Prefer harness-provided workspaces when available.",
             true,
             mutation::<c::CreateSandboxFromSnapshot>(),
         ),
@@ -182,12 +188,6 @@ pub fn methods() -> Vec<Method> {
             "Inspect sandbox readiness, expiry and confirmed termination.",
             false,
             id("sandboxId"),
-        ),
-        method::<c::Sandbox>(
-            "sandboxes.terminate",
-            "Request sandbox termination; poll terminationConfirmed before assuming deletion.",
-            true,
-            mutation::<c::SandboxId>(),
         ),
         method::<c::Execution>(
             "execution.bash",

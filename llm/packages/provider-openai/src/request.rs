@@ -268,7 +268,7 @@ fn map_tool_result(
             .iter()
             .filter_map(|part| match part {
                 ContentPart::Text(text) => Some(text.content.as_str()),
-                ContentPart::Image(_) => None,
+                ContentPart::Image(_) | ContentPart::Audio(_) => None,
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -303,6 +303,7 @@ fn map_content(content: &[ContentPart]) -> Vec<Value> {
     content
         .iter()
         .map(|part| match part {
+            ContentPart::Audio(audio) => json!({"type":"input_audio","audio_url":audio.audio_url}),
             ContentPart::Text(text) => {
                 json!({ "type": "input_text", "text": text.content })
             }

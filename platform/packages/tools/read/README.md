@@ -41,6 +41,12 @@ let structured_result = serde_json::to_value(&output)?;
 
 ## Results and limits
 
+For immutable UTF-8 source that is not on an execution host, use
+`read_text(source, offset, limit, &config)`. It returns `TextReadOutput` with
+content, line bounds, EOF and continuation information. Filesystem streams and
+immutable source share the same line-window accumulator. The caller supplies
+its own source identity and revision; no fake host or execution path is needed.
+
 `ReadOutput` contains the resolved execution path, file revision, original UTF-8
 content, start/end lines, EOF, truncation reason, and next line offset. Empty
 files succeed with empty content and no end line. No synthetic empty line is

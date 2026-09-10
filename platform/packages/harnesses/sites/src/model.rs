@@ -20,18 +20,6 @@ pub fn supported_models() -> std::collections::BTreeMap<String, Vec<String>> {
                 .map(|m| m.id.to_owned())
                 .collect(),
         ),
-        (
-            "fireworks".into(),
-            provider_fireworks::FIREWORKS_MODELS
-                .iter()
-                .filter(|m| {
-                    ["low", "medium", "high", "xhigh", "max"]
-                        .iter()
-                        .all(|level| provider_fireworks::reasoning_effort(m.id, level).is_some())
-                })
-                .map(|m| m.id.to_owned())
-                .collect(),
-        ),
     ])
 }
 
@@ -81,10 +69,7 @@ pub fn provider_options(
             options
         }
         "fireworks" => {
-            let model = provider_fireworks::find_model(id).ok_or("Unknown Fireworks model")?;
-            let effort = provider_fireworks::reasoning_effort(id, effort)
-                .ok_or("Missing reasoning mapping for Fireworks model")?;
-            json!({"reasoning_effort":effort,"prompt_cache_key":session.to_string(),"max_tokens":model.max_tokens})
+            return Err("Sites exec requires raw custom-tool support, which the Fireworks adapter does not provide".into());
         }
         _ => return Err("Unsupported provider".into()),
     };

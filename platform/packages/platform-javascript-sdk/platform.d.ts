@@ -7,9 +7,9 @@ export type AccountModels = { "accountId": string; "modelIds": Array<string>; "n
 export type ArtifactReference = { "artifact_id": string; "media_type": string; "sha256": string; "size_bytes": number };
 export type Bash = { "command": string; "hostId": string; "timeoutMs"?: number | null; "workdir": string };
 export type CompletionCallback = { "path": string; "payload"?: Json };
-export type ContentPart = ({ "content": string; "metadata"?: { [key: string]: Json } | null; "type": "text" } | { "detail"?: (ImageDetail | null); "metadata"?: { [key: string]: Json } | null; "source": ImageSource; "type": "image" });
+export type ContentPart = ({ "content": string; "metadata"?: { [key: string]: Json } | null; "type": "text" } | { "detail"?: (ImageDetail | null); "metadata"?: { [key: string]: Json } | null; "source": ImageSource; "type": "image" } | { "audio_url": string; "type": "audio" });
 export type CreateRun = { "expectedRevision": number; "input": UserInput; "onComplete"?: (CompletionCallback | null); "sessionId": string };
-export type CreateSandboxFromSnapshot = { "environmentId": string; "name"?: string | null; "timeoutSeconds"?: number | null };
+export type CreateSandboxFromSnapshot = { "environmentId": string; "name"?: string | null; "networkAccess"?: boolean | null; "timeoutSeconds"?: number | null };
 export type CreateSession = { "accountId": string; "config": { [key: string]: Json }; "harnessId": string; "initialInput"?: (UserInput | null); "onComplete"?: (CompletionCallback | null); "title"?: string | null };
 export type CursorPage_Account = { "items": Array<Account>; "next_cursor": string | null };
 export type CursorPage_Environment = { "items": Array<Environment>; "next_cursor": string | null };
@@ -23,8 +23,10 @@ export type EnvironmentType = "machine" | "sandbox";
 export type ErrorInfo = { "code": string; "message": string };
 export type Execution = { "cancellationConfirmed": boolean; "cancellationRequested": boolean; "createdAt": string; "error": (ErrorInfo | null); "exitCode": number | null; "finishedAt": string | null; "hostId": string; "id": string; "outputBytes": number; "status": ExecutionStatus; "truncated": boolean };
 export type ExecutionId = { "executionId": string };
+export type ExecutionMachine = { "host_id": string; "last_seen_at": string | null; "name": string | null; "operating_system": (ResourceOperatingSystem | null); "state": string; "workspace_roots": Array<ResourceWorkspaceRoot> };
 export type ExecutionOutput = { "complete": boolean; "executionId": string; "nextCursor": string | null; "output": string; "outputBytes": number; "truncated": boolean };
 export type ExecutionOutputOptions = { "cursor"?: string | null; "limitBytes"?: number | null };
+export type ExecutionResources = { "machines": ResourceInventory_ExecutionMachine; "sandbox_accounts": ResourceInventory_SandboxAccount };
 export type ExecutionStatus = "pending" | "running" | "completed" | "failed" | "cancelled" | "lost";
 export type ExecutionWorkspace = { "environment_id": string | null; "host_id": string; "path": string; "sandbox_id"?: string | null; "workspace_root": string };
 export type Harness = { "config_schema": { [key: string]: Json } | null; "created_at": string; "default_config": { [key: string]: Json }; "description": string | null; "enabled": boolean; "harness_contract": HarnessContract; "id": string; "name": string; "project_policy": HarnessProjectPolicy; "supported_models": { [key: string]: Array<string> }; "updated_at": string };
@@ -43,6 +45,10 @@ export type OutputOptions = { "afterSequence"?: number | null; "limit"?: number 
 export type OutputValue = ({ "kind": "execution_workspace"; "value": ExecutionWorkspace } | { "kind": "json"; "value": Json } | { "kind": "artifact"; "value": ArtifactReference });
 export type PageOptions = { "cursor"?: string | null; "limit"?: number | null };
 export type RegisteredCallback = { "subscriptionId": string };
+export type ResourceInventory_ExecutionMachine = { "items": Array<ExecutionMachine>; "total": number; "truncated": boolean };
+export type ResourceInventory_SandboxAccount = { "items": Array<SandboxAccount>; "total": number; "truncated": boolean };
+export type ResourceOperatingSystem = ({ "type": "linux" } | { "type": "macos" } | { "type": "windows" } | { "name": string; "type": "other" });
+export type ResourceWorkspaceRoot = { "read_only": boolean; "workspace_root": string };
 export type Run = { "abort_requested_at": string | null; "available_at": string | null; "config": { [key: string]: Json }; "created_at": string; "error": { [key: string]: Json } | null; "final_message_id": string | null; "finished_at": string | null; "id": string; "last_event_sequence": number; "parent_run_id": string | null; "project_id": string; "session_id": string; "started_at": string | null; "status": RunStatus; "version": number };
 export type RunCreated = { "callback": (RegisteredCallback | null); "input": RunInput; "run": Run };
 export type RunInput = { "created_at": string; "handled_at": string | null; "handling": { [key: string]: Json } | null; "id": string; "kind": string; "payload": { [key: string]: Json }; "project_id": string; "run_id": string; "sequence": number; "source_run_id": string | null; "status": InputState };
@@ -50,7 +56,7 @@ export type RunOutput = { "created_at": string; "name": string; "output": Output
 export type RunOutputsPage = { "items": Array<RunOutput>; "next_after_sequence": number | null };
 export type RunStatus = "ready" | "running" | "waiting" | "completed" | "failed" | "aborted";
 export type Sandbox = { "createdAt": string; "environmentId": string; "error": (ErrorInfo | null); "expiresAt": string | null; "id": string; "status": SandboxStatus; "terminationConfirmed": boolean; "terminationRequested": boolean; "workspace": (ExecutionWorkspace | null) };
-export type SandboxId = { "sandboxId": string };
+export type SandboxAccount = { "e2b_account_id": string; "is_default": boolean; "name": string; "status": string };
 export type SandboxStatus = "provisioning" | "ready" | "failed" | "terminated" | "expired" | "unavailable" | "terminating";
 export type Session = { "active_run": (Run | null); "archived_at": string | null; "config": { [key: string]: Json }; "created_at": string; "current_revision": number; "forked_at_revision": number | null; "forked_from_session_id": string | null; "harness_contract": HarnessContract; "harness_id": string; "id": string; "last_activity_at": string; "project_id": string; "title": string | null };
 export type SessionCreated = { "callback": (RegisteredCallback | null); "input": (RunInput | null); "run": (Run | null); "session": Session };
@@ -74,6 +80,8 @@ export interface Platform {
     get(environmentId: Uuid): Promise<Environment>;
   }>;
   readonly execution: Readonly<{
+    /** List registered machines and sandbox accounts without credentials or provisioning. Each inventory contains at most 200 items, total and truncated. Requires Site execution access; discovery does not grant host access. */
+    listResources(): Promise<ExecutionResources>;
     /** Accept durable bash execution on an authorized host with absolute workdir. Returns immediately with a persistent handle. */
     bash(input: Bash, options: MutationOptions): Promise<Execution>;
     /** Read durable command status and cancellation confirmation. */
@@ -108,12 +116,10 @@ export interface Platform {
     outputs(runId: Uuid, options?: OutputOptions): Promise<RunOutputsPage>;
   }>;
   readonly sandboxes: Readonly<{
-    /** Accept durable sandbox provisioning from a project snapshot. Poll get until ready; never replace an evaluated workspace for verification. */
+    /** Accept durable sandbox provisioning from a project snapshot. networkAccess defaults to true. Poll get until ready; sandboxes expire automatically. Prefer harness-provided workspaces when available. */
     createFromSnapshot(input: CreateSandboxFromSnapshot, options: MutationOptions): Promise<Sandbox>;
     /** Inspect sandbox readiness, expiry and confirmed termination. */
     get(sandboxId: Uuid): Promise<Sandbox>;
-    /** Request sandbox termination; poll terminationConfirmed before assuming deletion. */
-    terminate(input: SandboxId, options: MutationOptions): Promise<Sandbox>;
   }>;
   readonly sessions: Readonly<{
     /** Create a session with immutable configuration; optional initialInput creates its first run atomically. onComplete requires a site backend. */
@@ -140,9 +146,8 @@ export interface AgentPlatform extends Omit<Platform, 'execution' | 'runs' | 'sa
     steer(input: SteerRun, options?: MutationOptions): Promise<MessageResponse>;
     abort(input: AbortRun, options?: MutationOptions): Promise<AbortResponse>;
   }>;
-  readonly sandboxes: Omit<Platform['sandboxes'], 'createFromSnapshot' | 'terminate'> & Readonly<{
+  readonly sandboxes: Omit<Platform['sandboxes'], 'createFromSnapshot'> & Readonly<{
     createFromSnapshot(input: CreateSandboxFromSnapshot, options?: MutationOptions): Promise<Sandbox>;
-    terminate(input: SandboxId, options?: MutationOptions): Promise<Sandbox>;
   }>;
   readonly sessions: Omit<Platform['sessions'], 'create'> & Readonly<{
     create(input: CreateSession, options?: MutationOptions): Promise<SessionCreated>;

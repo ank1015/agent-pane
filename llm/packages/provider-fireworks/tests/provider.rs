@@ -49,6 +49,20 @@ fn catalog_is_current_and_a_strict_allowlist() {
 }
 
 #[test]
+fn portable_audio_is_rejected_before_network_dispatch() {
+    let mut request = request("accounts/fireworks/models/glm-5p3-flash");
+    request.messages.push(Message::User(UserMessage {
+        id: MessageId::new("audio-user").unwrap(),
+        timestamp: Timestamp(1),
+        content: vec![ContentPart::Audio(llm_contracts::AudioContent {
+            audio_url: "data:audio/wav;base64,AAAA".into(),
+        })],
+    }));
+    let error = build_chat_completion_request(&request).unwrap_err();
+    assert!(error.message.contains("audio"));
+}
+
+#[test]
 fn maps_portable_reasoning_to_each_models_native_efforts() {
     let levels = ["low", "medium", "high", "xhigh", "max"];
     let expected = [

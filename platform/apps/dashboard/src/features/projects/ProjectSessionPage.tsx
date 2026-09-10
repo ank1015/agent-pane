@@ -105,6 +105,7 @@ const SessionComposer = memo(function SessionComposer({ session, activeRun, read
     {submission.uncertain ? <p className="project-chat-send-notice" role="alert">The last send is not confirmed. <button onClick={submission.retry}>Retry the same send</button></p> : null}
     <ProjectEnvironmentPromptComposer
       promptValue={prompt} onPromptChange={setPrompt}
+      promptLabel={session.harness_id === 'sites' ? 'Site instructions' : undefined}
       placeholder={activeRun ? 'Add a message to this run…' : 'Send a message…'}
       providerAccounts={accounts} reasoningLevels={levels} lockedOptions={locked ?? undefined} optionsReadOnly
       webSearchSupported={typeof session.config.web_search_enabled === 'boolean'}

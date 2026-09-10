@@ -22,6 +22,8 @@ struct Arguments {
     operation_id: Option<Uuid>,
     #[serde(rename = "invocationId")]
     invocation_id: Option<Uuid>,
+    // Trusted browser bridge only; the model-facing invoke tool cannot set this.
+    release_id: Option<Uuid>,
 }
 fn input<T: serde::de::DeserializeOwned>(value: Option<Value>) -> Result<T> {
     serde_json::from_value(value.ok_or(RuntimeError::Invalid("Input is required."))?)
@@ -40,10 +42,13 @@ impl RuntimeService {
         if !matches!(
             method,
             "sites.read"
+                | "sites.metadata"
+                | "sites.sql"
                 | "sites.preview"
                 | "sites.applyPatch"
                 | "sites.operation"
                 | "sites.invoke"
+                | "sites.browserInvoke"
                 | "sites.invocation"
                 | "sites.logs"
                 | "sites.query"
@@ -117,10 +122,15 @@ impl RuntimeService {
             site
         };
         let ready:bool=sqlx::query_scalar("select exists(select 1 from project_sites where id=$1 and project_id=$2 and deleted_at is null and desired_status='ready')").bind(site).bind(project).fetch_one(&mut *tx).await?;
-        if !ready {
+        if !ready && method != "sites.metadata" {
             return Err(RuntimeError::NotFound);
         }
         let (verb, suffix, mut body) = match method {
+            "sites.metadata" => (Method::GET, String::new(), None),
+            "sites.sql" => {
+                let sql: a::Sql = input(args.input.clone())?;
+                (Method::POST, "sql/statements".into(), Some(json!(sql)))
+            }
             "sites.preview" => (Method::GET, "preview".to_owned(), None),
             "sites.read" => (Method::GET, "source".to_owned(), None),
             "sites.logs" => (Method::GET, "authoring-logs".to_owned(), None),
@@ -158,19 +168,34 @@ impl RuntimeService {
                 let sql: a::Sql = input(args.input.clone())?;
                 (Method::POST, "sql".into(), Some(json!(sql)))
             }
-            "sites.invoke" => {
+            "sites.invoke" | "sites.browserInvoke" => {
                 let request: a::Request = input(args.input.clone())?;
+                let release = if method == "sites.browserInvoke" {
+                    Some(
+                        args.release_id
+                            .ok_or(RuntimeError::Invalid("Browser release is required."))?,
+                    )
+                } else {
+                    if args.release_id.is_some() {
+                        return Err(RuntimeError::Invalid("invoke uses the active release."));
+                    }
+                    None
+                };
                 (
                     Method::POST,
                     "invocations".into(),
-                    Some(json!({"request":request,"release_id":null,"timeout_ms":10000})),
+                    Some(json!({"request":request,"release_id":release,"timeout_ms":10000})),
                 )
             }
             _ => unreachable!(),
         };
         let mutation = matches!(
             method,
-            "sites.applyPatch" | "sites.invoke" | "sites.execute"
+            "sites.applyPatch"
+                | "sites.invoke"
+                | "sites.browserInvoke"
+                | "sites.execute"
+                | "sites.sql"
         );
         let mut operation = None;
         if mutation {
@@ -191,18 +216,25 @@ impl RuntimeService {
                 ));
             }
             operation = Some(id);
-            if method != "sites.execute" {
+            if !matches!(method, "sites.execute" | "sites.sql") {
                 body.as_mut().unwrap()["id"] = json!(id);
             }
-            if method == "sites.invoke" {
+            if matches!(method, "sites.invoke" | "sites.browserInvoke") {
                 sqlx::query("insert into site_invocations(site_id,id,request) values($1,$2,$3) on conflict do nothing").bind(site).bind(id).bind(body.as_ref().unwrap()).execute(&mut *tx).await?;
             }
         }
         // This commit is admission. Accepted downstream effects can finish after
         // lease loss; all subsequent admissions must authenticate the new owner.
         caller.authorize(&mut tx).await?;
+        let name: String = sqlx::query_scalar(
+            "select name from project_sites where id=$1 and project_id=$2 and deleted_at is null",
+        )
+        .bind(site)
+        .bind(project)
+        .fetch_one(&mut *tx)
+        .await?;
         tx.commit().await?;
-        let resource = client
+        let mut resource = client
             .call(
                 Method::PUT,
                 &format!("/internal/sites/{site}"),
@@ -210,26 +242,58 @@ impl RuntimeService {
             )
             .await
             .map_err(upstream)?;
+        if method == "sites.metadata" {
+            return Ok(json!({
+                "id":site,"name":name,"status":resource["status"],
+                "release_id":resource["active_release_id"],
+                "created_at":resource["created_at"],"updated_at":resource["updated_at"]
+            }));
+        }
+        // A new site's durable provisioning intent is accepted before its
+        // files/database are initialized. Wait for readiness, not a replay of
+        // the requested mutation. Metadata still exposes the immediate state.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while resource["status"] == "provisioning" && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            resource = tokio::time::timeout_at(deadline, client.call(
+                Method::GET, &format!("/internal/sites/{site}"), None,
+            )).await.map_err(|_| RuntimeError::Conflict(
+                "Site provisioning is still pending; retry the same operation with the same key.",
+            ))?.map_err(upstream)?;
+        }
         if resource["status"] != "ready" {
-            return Err(RuntimeError::Conflict(
-                "Site provisioning is pending or site is suspended; retry the same operation.",
-            ));
+            return Err(RuntimeError::Conflict(match resource["status"].as_str() {
+                Some("suspended") => {
+                    "The site is suspended. Ask the user to resume it before authoring."
+                }
+                Some("failed") => {
+                    "Site provisioning failed. Inspect site status before retrying the same operation."
+                }
+                _ => {
+                    "Site provisioning is still pending; retry the same operation with the same key."
+                }
+            }));
         }
         if method == "sites.preview" {
             let release = resource["active_release_id"]
                 .as_str()
                 .and_then(|s| Uuid::parse_str(s).ok())
                 .ok_or(RuntimeError::Conflict("No active site code yet."))?;
-            return client
+            let mut preview = client
                 .call(
                     Method::POST,
                     &format!("/internal/sites/{site}/releases/{release}/content-access"),
                     Some(&json!({"ttl_seconds":900})),
                 )
                 .await
-                .map_err(upstream);
+                .map_err(upstream)?;
+            preview["release_id"] = json!(release);
+            preview["site_id"] = json!(site);
+            return Ok(preview);
         }
-        let suffix = if method == "sites.execute" {
+        let suffix = if method == "sites.sql" {
+            format!("sql/statements/{}", operation.unwrap())
+        } else if method == "sites.execute" {
             format!("sql/{}", operation.unwrap())
         } else {
             suffix
@@ -242,7 +306,10 @@ impl RuntimeService {
             )
             .await
             .map_err(upstream)?;
-        if matches!(method, "sites.invoke" | "sites.invocation") {
+        if matches!(
+            method,
+            "sites.invoke" | "sites.browserInvoke" | "sites.invocation"
+        ) {
             if result["response"].to_string().len() > 64 * 1024 {
                 result["response"] = Value::Null;
                 result["responseTruncated"] = json!(true);
@@ -266,11 +333,19 @@ impl RuntimeService {
                 "Sites result exceeds limits; use bounded queries or individual invocation inspection.",
             ));
         }
+        if method == "sites.sql" {
+            // Transport-only identity so even SQL-only authoring publishes the
+            // bound site output. The agent adapter strips this field.
+            result["site_id"] = json!(site);
+        }
         Ok(result)
     }
 }
 fn upstream(error: crate::sites::Error) -> RuntimeError {
     match error {
+        crate::sites::Error::Rejected { status, error } => {
+            RuntimeError::SitesRejected { status, error }
+        }
         crate::sites::Error::Service(400 | 413 | 422) => RuntimeError::Invalid(
             "Sites rejected the input; check patch context, file limits and backend syntax.",
         ),

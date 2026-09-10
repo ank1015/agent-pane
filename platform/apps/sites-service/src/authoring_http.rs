@@ -16,6 +16,10 @@ pub(crate) fn routes() -> Router<App> {
         .route("/internal/sites/{id}/authoring/{operation}", get(operation))
         .route("/internal/sites/{id}/snapshots", get(snapshots))
         .route("/internal/sites/{id}/sql/query", post(query))
+        .route(
+            "/internal/sites/{id}/sql/statements/{operation}",
+            post(statement),
+        )
         .route("/internal/sites/{id}/sql/{operation}", post(execute))
         .layer(DefaultBodyLimit::max(384 * 1024))
 }
@@ -80,4 +84,12 @@ async fn logs(State(s): State<App>, Path(site): Path<Uuid>) -> Result<Json<Value
     Ok(Json(
         serde_json::json!({"items":rows.into_iter().map(|(id,release,status,error,created)|serde_json::json!({"id":id,"releaseId":release,"status":status,"errorCode":error,"createdAt":created})).collect::<Vec<_>>(),"limit":20}),
     ))
+}
+
+async fn statement(
+    State(s): State<App>,
+    Path((site, id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<platform_runtime_contracts::sites_authoring::Sql>,
+) -> Result<Json<Value>> {
+    Ok(Json(s.service.sql_statement(site, id, input).await?))
 }

@@ -57,8 +57,23 @@ New capability arguments use camelCase; existing Platform records retain snake_c
 | sessions.create/list/get/messages/stats | CreateSession, SessionCreated, Session, MessageOptions, Statistics | Implemented; legacy start/send/metrics remain compatible |
 | runs.create/list/get/steer/abort/stats | CreateRun, RunCreated, SteerRun, AbortRun, Run, Statistics | Implemented |
 | runs.outputs | OutputOptions, RunOutputsPage | Implemented for worker and site SDK |
-| sandboxes.createFromSnapshot/get/terminate | CreateSandboxFromSnapshot, Sandbox | Implemented, durable lifecycle |
+| sandboxes.createFromSnapshot/get | CreateSandboxFromSnapshot, Sandbox | Implemented, durable lifecycle with automatic expiry |
 | execution.bash/get/output/cancel | Bash, Execution, ExecutionOutput | Implemented, durable polling |
+| execution.listResources | No arguments, ExecutionResources | Implemented, credential-free bounded discovery |
+
+`ctx.platform.execution.listResources()` returns `machines` and
+`sandbox_accounts`, each with `items`, `total`, and `truncated`. It matches the
+Environments harness discovery projection: registered, non-deleted machines with
+host IDs, names, state, last-seen timestamps, native workspace roots/read-only
+flags and OS descriptors; E2B accounts with IDs, names, status and default flags.
+It lists gateway-wide resource metadata, not just hosts in saved project
+environments. Each inventory is sorted by ID and capped at 200 entries; results
+over 96 KiB fail explicitly. Raw host metadata and account credential fingerprints
+are never returned. Sites require current project access and
+`executionEnabled: true`, checked before and after gateway I/O. Discovery neither
+provisions compute nor grants host execution access. A failure in either inventory
+fails the call instead of returning a misleading partial result. The corresponding
+typed Rust client method is `run.platform().list_execution_resources()`.
 
 All mutations use MutationOptions/idempotencyKey (worker APIs use Command<T>).
 Resource lookup methods take the selected resource ID; list/get/cancel methods
@@ -352,9 +367,8 @@ it concurrently. The normal server does both using its existing gateway settings
 
 ```ts
 ctx.platform.sandboxes.createFromSnapshot(
-  {environmentId, name, timeoutSeconds}, {idempotencyKey})
+  {environmentId, name, timeoutSeconds, networkAccess}, {idempotencyKey})
 ctx.platform.sandboxes.get(sandboxId)
-ctx.platform.sandboxes.terminate({sandboxId}, {idempotencyKey})
 ctx.platform.execution.bash(
   {hostId, command, workdir, timeoutMs}, {idempotencyKey})
 ctx.platform.execution.get(executionId)
@@ -362,8 +376,15 @@ ctx.platform.execution.output(executionId, {cursor, limitBytes})
 ctx.platform.execution.cancel({executionId}, {idempotencyKey})
 ```
 
+`networkAccess` is optional and defaults to true; false disables outbound internet
+access for the created sandbox. The value is preserved in the durable creation
+request and cannot be changed by retrying with a different input under the same
+key. Sandboxes expire according to their lifetime; the JavaScript SDK exposes no
+manual termination method. The internal leased Rust client retains
+`terminate_sandbox` for host-side lifecycle management, not Site backend access.
+
 Rust `run.platform()` equivalents are `create_sandbox`, `get_sandbox`,
-`terminate_sandbox`, `bash`, `get_execution`, `execution_output`, and
+`bash`, `get_execution`, `execution_output`, and
 `cancel_execution`. Mutations use persisted `Command<T>` keys. Replaying a
 mutation returns its original acceptance snapshot; use `get` for current state.
 

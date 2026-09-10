@@ -13,6 +13,60 @@ pub use crate::{
 
 pub const SDK_VERSION: &str = "1";
 
+/// Bounded discovery, matching the Environments harness inventory shape.
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "schema", schemars(rename = "ResourceInventory_{T}"))]
+pub struct ResourceInventory<T> {
+    pub items: Vec<T>,
+    pub total: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ResourceWorkspaceRoot {
+    pub workspace_root: String,
+    pub read_only: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ExecutionMachine {
+    pub host_id: Uuid,
+    pub name: Option<String>,
+    pub state: String,
+    pub last_seen_at: Option<DateTime<Utc>>,
+    pub workspace_roots: Vec<ResourceWorkspaceRoot>,
+    pub operating_system: Option<ResourceOperatingSystem>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "name", rename_all = "snake_case")]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum ResourceOperatingSystem {
+    Linux,
+    Macos,
+    Windows,
+    Other(String),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SandboxAccount {
+    pub e2b_account_id: Uuid,
+    pub name: String,
+    pub status: String,
+    pub is_default: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ExecutionResources {
+    pub machines: ResourceInventory<ExecutionMachine>,
+    pub sandbox_accounts: ResourceInventory<SandboxAccount>,
+}
+
 /// Authenticated bridge envelope. Scope and credentials belong to the transport.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -213,6 +267,8 @@ pub struct CreateSandboxFromSnapshot {
     pub environment_id: Uuid,
     pub name: Option<String>,
     pub timeout_seconds: Option<u32>,
+    /// Outbound network access; omission defaults to true.
+    pub network_access: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

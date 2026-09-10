@@ -48,6 +48,109 @@ async fn source(s: &Server, id: Uuid) -> Value {
     .await
 }
 #[tokio::test]
+async fn add_delete_and_ordered_replacements_preserve_slots_data_and_atomicity() {
+    let root = TempDir::new().unwrap();
+    let s = Server::start(root.path()).await;
+    let id = site(&s).await;
+    for sql in [
+        "CREATE TABLE notes(value TEXT)",
+        "INSERT INTO notes VALUES ('keep me')",
+    ] {
+        value(
+            &s,
+            Method::POST,
+            &format!("/internal/sites/{id}/sql/{}", Uuid::now_v7()),
+            Some(&json!({"sql":sql})),
+        )
+        .await;
+    }
+    let replace = json!({"id":Uuid::now_v7(),"type":"patch","patch":
+        "*** Begin Patch\n*** Add File: index.html\n+<!doctype html><html><body>Replacement</body></html>\n*** Delete File: backend.js\n*** Add File: backend.js\n+export default async () => ({status: 200, body: {message: 'Replaced'}});\n*** Update File: backend.js\n@@\n-export default async () => ({status: 200, body: {message: 'Replaced'}});\n+export default async () => ({status: 200, body: {message: 'Updated'}});\n*** End Patch"});
+    let accepted = author(&s, id, &replace).await;
+    assert_eq!(accepted["status"], "succeeded");
+    let replaced = source(&s, id).await;
+    assert_eq!(
+        replaced["files"],
+        json!({
+            "frontend":"<!doctype html><html><body>Replacement</body></html>\n",
+            "backend":"export default async () => ({status: 200, body: {message: 'Updated'}});\n"
+        })
+    );
+    let invoke = || json!({"id":Uuid::now_v7(),"request":{"method":"GET","path":"/"}});
+    let invocation_path = format!("/internal/sites/{id}/invocations");
+    assert_eq!(
+        value(&s, Method::POST, &invocation_path, Some(&invoke())).await["response"],
+        json!({"status":200,"body":{"message":"Updated"}})
+    );
+
+    // Every failure occurs after a valid staged edit; no part may activate.
+    for tail in [
+        "*** Add File: backend.js\n+export default async function ( {\n",
+        "*** Add File: backend.js\n+\n",
+        "*** Add File: other.js\n+no\n",
+        "*** Delete File: ../backend.js\n",
+        "*** Update File: backend.js\n*** Move to: other.js\n@@\n-export default async () => ({status: 200, body: {message: 'Updated'}});\n+export default async () => ({status: 200, body: {}});\n",
+        "*** Update File: backend.js\n@@\n-missing context\n+replacement\n",
+    ] {
+        let input = json!({"id":Uuid::now_v7(),"type":"patch","patch":format!(
+            "*** Begin Patch\n*** Delete File: index.html\n{tail}*** End Patch")});
+        let response = s
+            .request(
+                Method::POST,
+                &format!("/internal/sites/{id}/authoring"),
+                Some(&input),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{tail}");
+        assert_eq!(source(&s, id).await, replaced);
+    }
+
+    let deleted = json!({"id":Uuid::now_v7(),"type":"patch","patch":
+        "*** Begin Patch\n*** Delete File: index.html\n*** Delete File: backend.js\n*** End Patch"});
+    let deleted_receipt = author(&s, id, &deleted).await;
+    let cleared = source(&s, id).await;
+    assert_eq!(
+        cleared["files"],
+        json!({
+            "frontend":"<!doctype html>\n<html><head><meta charset=\"utf-8\"><title></title></head><body></body></html>\n",
+            "backend":"export default async function handle(request, ctx) {\n  return {status: 404, body: {error: 'Not found'}};\n}\n"
+        })
+    );
+    assert_eq!(
+        value(&s, Method::POST, &invocation_path, Some(&invoke())).await["response"],
+        json!({"status":404,"body":{"error":"Not found"}})
+    );
+    assert_eq!(author(&s, id, &replace).await, accepted);
+    assert_eq!(
+        source(&s, id).await,
+        cleared,
+        "old receipt must not restore old source"
+    );
+
+    // Validate only final source, not a temporary empty Add before its replacement.
+    let restored = json!({"id":Uuid::now_v7(),"type":"patch","patch":
+        "*** Begin Patch\n*** Add File: backend.js\n+\n*** Add File: backend.js\n+export default async () => ({status: 200, body: {restored: true}});\n*** End Patch"});
+    author(&s, id, &restored).await;
+    let final_source = source(&s, id).await;
+    assert_eq!(author(&s, id, &deleted).await, deleted_receipt);
+    assert_eq!(
+        source(&s, id).await,
+        final_source,
+        "replayed Delete must not clear newer code"
+    );
+    assert_eq!(
+        value(
+            &s,
+            Method::POST,
+            &format!("/internal/sites/{id}/sql/query"),
+            Some(&json!({"sql":"SELECT value FROM notes"}))
+        )
+        .await,
+        json!([{"value":"keep me"}])
+    );
+}
+
+#[tokio::test]
 async fn live_edits_validate_pair_and_replay_without_overwriting_newer_code() {
     let root = TempDir::new().unwrap();
     let s = Server::start(root.path()).await;
@@ -58,7 +161,7 @@ async fn live_edits_validate_pair_and_replay_without_overwriting_newer_code() {
     let original = source(&s, id).await;
     for text in [
         "*** Begin Patch\n*** Update File: ../backend.js\n@@\n-x\n+y\n*** End Patch",
-        "*** Begin Patch\n*** Delete File: index.html\n*** End Patch",
+        "*** Begin Patch\n*** Delete File: other.html\n*** End Patch",
         "*** Begin Patch\n*** Update File: backend.js\n@@\n-export default async function handle(request, ctx) {\n+export default async function ( {\n*** End Patch",
     ] {
         let response = s

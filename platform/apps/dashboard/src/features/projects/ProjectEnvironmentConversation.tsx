@@ -29,6 +29,7 @@ import type { StickToBottomContext } from 'use-stick-to-bottom'
 import type { ProjectConversationItem } from './project-conversation'
 import type {
   ImageContent,
+  MessageContentPart,
   ProjectRunSummary,
   SessionMessage,
 } from './project-session-types'
@@ -504,7 +505,7 @@ const RunDuration = memo(function RunDuration({
 function ContentParts({
   content,
 }: {
-  content: readonly (ImageContent & { type: 'image' } | { type: 'text'; content: string })[]
+  content: readonly MessageContentPart[]
 }) {
   return content.map((part, index) =>
     part.type === 'text' ? (
@@ -514,6 +515,8 @@ function ContentParts({
       >
         {part.content}
       </MessageResponse>
+    ) : part.type === 'audio' ? (
+      <audio key={`audio:${index}`} controls preload="none" src={part.audio_url} aria-label="Audio attachment" />
     ) : (
       <img
         className="project-session-message-image"

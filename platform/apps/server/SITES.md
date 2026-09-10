@@ -239,8 +239,9 @@ or provisioning execution hosts. Existing worker tests cover run execution.
    `executionEnabled` when commands/sandboxes are needed. Use declared harness
    config fields (`model`, `reasoning_level`, `environment` or `siteId` as
    applicable); account IDs are granted separately.
-3. Start a worker with `SITES_ENABLED=true`, LLM gateway credentials and optional
-   research/browser configuration. Sites is Platform-owned and cannot be removed
+3. Start a worker with `SITES_ENABLED=true`, LLM gateway credentials and the
+   required Node/Playwright browser configuration (see the Sites harness README).
+   Sites is Platform-owned and cannot be removed
    from an individual project. Catalog availability alone does not guarantee a
    capable worker.
 4. Configure the dashboard's server-only project token map and exact content

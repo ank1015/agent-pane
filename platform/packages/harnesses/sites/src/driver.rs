@@ -1,4 +1,9 @@
-use std::{future::Future, time::Duration};
+use std::{
+    future::Future,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tool_code_mode::live::{ContentItem, Notification, Session as CodeSession};
 
 use harness_runtime::{Execution, Signals};
 use llm_client::{CompletionRequest, IdempotencyKey, RunState};
@@ -54,10 +59,21 @@ pub(crate) async fn run(harness: SitesHarness, execution: Execution) -> Result<(
                 .filter(|message| message.revision <= revision),
         );
     }
+    if messages.iter().any(|entry| match &entry.message {
+        Message::ToolResult(result) => matches!(result.tool_name.as_str(), "code_mode" | "inspect_cell" | "reconcile_call"),
+        Message::Assistant(message) => message.content.iter().any(|part| matches!(part,
+            AssistantContent::ToolCall { name, .. } if matches!(name.as_str(), "code_mode" | "inspect_cell" | "reconcile_call"))),
+        _ => false,
+    }) {
+        return initial_failure(&execution.client, &context, "This session uses the retired Sites tool protocol. Start a new Sites session for exec/wait; existing site data is unchanged.").await;
+    }
     let state = if let Some(checkpoint) = &context.checkpoint {
+        if checkpoint.state.get("version").and_then(Value::as_u64) != Some(4) {
+            return initial_failure(&execution.client, &context, "This checkpoint uses the retired Sites tool surface. Start a new Sites session; existing site data is unchanged.").await;
+        }
         let state: State = serde_json::from_value(Value::Object(checkpoint.state.clone()))
             .map_err(|_| Error::Invalid("invalid harness checkpoint"))?;
-        if state.version != 1 {
+        if state.version != 4 {
             return Err(Error::Invalid("unsupported harness checkpoint version"));
         }
         state
@@ -69,12 +85,8 @@ pub(crate) async fn run(harness: SitesHarness, execution: Execution) -> Result<(
             return Ok(());
         }
         State {
-            version: 1,
-            instructions: prompt::generate(
-                config.system_prompt_append.as_deref(),
-                harness.web.is_some(),
-                harness.browser.is_some(),
-            ),
+            version: 4,
+            instructions: prompt::generate(config.system_prompt_append.as_deref()),
             provider_options: config
                 .provider_options(context.session.id)
                 .map_err(|_| Error::Invalid("invalid provider policy"))?,
@@ -95,8 +107,9 @@ pub(crate) async fn run(harness: SitesHarness, execution: Execution) -> Result<(
             .harness_contract
             .outputs
             .contains_key("site"),
-        parked: false,
-        pending_wait: None,
+        code_session: None,
+        notifications: None,
+        observed_site: Arc::new(Mutex::new(state.site_id)),
         state,
         messages,
         run_id: context.run.run.id,
@@ -130,8 +143,9 @@ struct Driver {
     signals: watch::Receiver<Signals>,
     config: Config,
     publish_site: bool,
-    parked: bool,
-    pending_wait: Option<Wait>,
+    code_session: Option<CodeSession>,
+    notifications: Option<tokio::sync::mpsc::Receiver<Notification>>,
+    observed_site: Arc<Mutex<Option<Uuid>>>,
     state: State,
     messages: Vec<SessionMessage>,
     run_id: Uuid,
@@ -146,7 +160,7 @@ struct Driver {
 impl Driver {
     async fn drive(&mut self) -> Result<()> {
         loop {
-            if self.finished || self.parked {
+            if self.finished {
                 return Ok(());
             }
             if self.signals.has_changed().is_err() {
@@ -172,6 +186,7 @@ impl Driver {
                 .await?;
                 return Ok(());
             }
+            self.flush_notifications().await?;
             match self.state.phase.clone() {
                 Phase::Boundary { final_message } => {
                     if self.boundary(final_message).await? {
@@ -540,66 +555,100 @@ impl Driver {
                 }
             }
         };
-        if let Plan::Wait {
-            key,
-            run_ids,
-            wake_at,
-        } = plan
-        {
-            if run_ids.contains(&self.run_id) {
-                return self
-                    .tool_result(
-                        assistant,
-                        index,
-                        call,
-                        Output::error("Cannot wait on this run itself"),
-                    )
-                    .await;
+        if let Plan::Exec { admitted: true, .. } = &plan {
+            return self.tool_result(assistant, index, call, Output::error(
+                "Script interrupted by loss of the runtime. Source was not replayed. Inspect downstream operation handles before repeating effects."
+            )).await;
+        }
+        if let Plan::Exec { input, .. } = &plan {
+            // Commit before dispatch. Recovery of this marker must never replay arbitrary tools.
+            self.state.phase = Phase::Tools {
+                assistant,
+                index,
+                plan: Some(Box::new(Plan::Exec {
+                    input: input.clone(),
+                    admitted: true,
+                })),
+            };
+            self.save(Vec::new(), Vec::new(), Disposition::Running)
+                .await?;
+        }
+        if self.code_session.is_none() {
+            let (session, notifications) = self
+                .harness
+                .code_mode(self.client.clone(), self.observed_site.clone())?;
+            self.code_session = Some(session);
+            self.notifications = Some(notifications);
+        }
+        let mut session = self.code_session.take().unwrap();
+        let mut notifications = self.notifications.take().unwrap();
+        let AssistantContent::ToolCall { tool_call_id, .. } = call else {
+            unreachable!()
+        };
+        let mut operation = Box::pin(async {
+            match plan {
+                Plan::Exec { input, .. } => session.exec(tool_call_id.as_str().into(), input).await,
+                Plan::Wait { input } => session.wait(input).await,
             }
-            for id in &run_ids {
-                if let Err(error) = self
-                    .client
-                    .platform()
-                    .call("runs.get", json!({"runId":id}))
-                    .await
-                {
-                    if matches!(&error, Error::Server(e) if (400..500).contains(&e.status)) {
-                        return self
-                            .tool_result(
-                                assistant,
-                                index,
-                                call,
-                                Output::error(
-                                    "Wait target is unavailable in this project's grants",
-                                ),
-                            )
-                            .await;
-                    }
-                    return Err(error);
+        });
+        let mut signals = self.signals.clone();
+        let report = loop {
+            if self.interrupted() {
+                break None;
+            }
+            tokio::select! {
+                result = &mut operation => break Some(result),
+                notification = notifications.recv() => {
+                    if let Some(notification) = notification { self.save_notification(notification).await?; }
+                }
+                changed = signals.changed() => {
+                    if changed.is_err() || self.interrupted() { break None; }
                 }
             }
-            self.pending_wait = Some(Wait {
-                wait_key: key.to_string(),
-                mode: WaitMode::Any,
-                deadline_at: None,
-                metadata: object(json!({"tool":"wait","runIds":run_ids})),
-                dependencies: run_ids
-                    .iter()
-                    .map(|id| Dependency::RunCompletion { target_run_id: *id })
-                    .chain(std::iter::once(Dependency::Timer { wake_at }))
-                    .collect(),
-            });
-            self.parked = true;
-            return self.tool_result(assistant, index, call, Output::success(json!({"waitId":key,"runIds":run_ids,"wakeAt":wake_at,"next":"Activation resumes on completion, timer or input. Read current status; waking does not establish success."}))).await;
+        };
+        // Drop the borrow before restoring the session. On interruption its processes are cancelled.
+        drop(operation);
+        let output = match report {
+            Some(Ok(report)) => Output::report(report),
+            Some(Err(message)) => Output::error(message),
+            None => Output::error("Script interrupted; accepted nested effects may still exist."),
+        };
+        self.notifications = Some(notifications);
+        self.code_session = Some(session);
+        if self.interrupted() {
+            self.code_session = None;
         }
-        let output =
-            crate::tools::execute(&self.harness, &self.client, self.signals.clone(), plan).await?;
-        if let Some(site) = output.site_id {
-            self.state.site_id = Some(site);
-        }
-        // Nested journal transactions advance the run version without changing the checkpoint.
+        self.state.site_id = *self.observed_site.lock().unwrap();
         self.refresh().await?;
         self.tool_result(assistant, index, call, output).await
+    }
+
+    async fn save_notification(&mut self, notification: Notification) -> Result<()> {
+        let call = self.messages.iter().rev().find_map(|message| {
+            let Message::Assistant(message) = &message.message else { return None };
+            message.content.iter().find(|content| matches!(content,
+                AssistantContent::ToolCall { tool_call_id, .. } if tool_call_id.as_str() == notification.call_id)).cloned()
+        }).ok_or(Error::Invalid("Notification references an unknown exec call"))?;
+        self.refresh().await?;
+        self.save(
+            vec![tool_message(&call, notification.text, false)],
+            Vec::new(),
+            Disposition::Running,
+        )
+        .await
+    }
+
+    async fn flush_notifications(&mut self) -> Result<()> {
+        loop {
+            let notification = self
+                .notifications
+                .as_mut()
+                .and_then(|receiver| receiver.try_recv().ok());
+            let Some(notification) = notification else {
+                return Ok(());
+            };
+            self.save_notification(notification).await?;
+        }
     }
 
     async fn tool_result(
@@ -614,67 +663,48 @@ impl Driver {
             index: index + 1,
             plan: None,
         };
-        let disposition = if self.parked {
-            Disposition::Waiting
-        } else {
-            Disposition::Running
-        };
         self.save(
-            vec![tool_message(call, output.text, output.error)],
+            vec![tool_output_message(call, output)],
             Vec::new(),
-            disposition,
+            Disposition::Running,
         )
         .await
     }
 
     async fn abort(&mut self) -> Result<()> {
-        match self.state.phase.clone() {
-            Phase::Model {
-                job,
-                operation,
-                revision,
-                ..
-            } => {
-                // Recover an ambiguous submit with the SAME identity/payload, never
-                // a new generation. Persist the recovered handle before aborting it.
-                let job = match job {
-                    Some(job) => job,
-                    None => {
-                        let key = IdempotencyKey::new(format!("sites:{}:{operation}", self.run_id))
-                            .map_err(|_| Error::Invalid("invalid LLM identity"))?;
-                        let job = self
-                            .harness
-                            .llm
-                            .submit(&key, &self.request(revision))
-                            .await
-                            .map_err(|_| {
-                                Error::Invalid("could not reconcile LLM operation for abort")
-                            })?
-                            .run_id;
-                        if let Phase::Model { job: saved, .. } = &mut self.state.phase {
-                            *saved = Some(job);
-                        }
-                        self.save(Vec::new(), Vec::new(), Disposition::Running)
-                            .await?;
-                        job
-                    }
-                };
-                self.harness.llm.abort(job).await.map_err(|_| {
-                    Error::Invalid("LLM abort outcome uncertain; recover and reconcile")
-                })?;
-            }
-            Phase::Tools {
-                plan: Some(plan), ..
-            } => {
-                if let Plan::Code { input } = *plan {
-                    let mode = self.harness.code_mode(self.client.clone())?;
-                    mode.recover_abandoned(input.id)
+        self.code_session = None;
+        if let Phase::Model {
+            job,
+            operation,
+            revision,
+            ..
+        } = self.state.phase.clone()
+        {
+            // Recover an ambiguous submit with the SAME identity/payload, never
+            // a new generation. Persist the recovered handle before aborting it.
+            let job = match job {
+                Some(job) => job,
+                None => {
+                    let key = IdempotencyKey::new(format!("sites:{}:{operation}", self.run_id))
+                        .map_err(|_| Error::Invalid("invalid LLM identity"))?;
+                    let job = self
+                        .harness
+                        .llm
+                        .submit(&key, &self.request(revision))
                         .await
-                        .map_err(|_| Error::Invalid("cannot recover interrupted cell"))?;
-                    self.refresh().await?;
+                        .map_err(|_| Error::Invalid("could not reconcile LLM operation for abort"))?
+                        .run_id;
+                    if let Phase::Model { job: saved, .. } = &mut self.state.phase {
+                        *saved = Some(job);
+                    }
+                    self.save(Vec::new(), Vec::new(), Disposition::Running)
+                        .await?;
+                    job
                 }
-            }
-            _ => {}
+            };
+            self.harness.llm.abort(job).await.map_err(|_| {
+                Error::Invalid("LLM abort outcome uncertain; recover and reconcile")
+            })?;
         }
         let messages = self.unfinished_tools(
             "Run aborted. Tool execution was cancelled or its interrupted outcome is unknown.",
@@ -781,7 +811,6 @@ impl Driver {
         });
         commit.messages = messages;
         commit.input_results = inputs;
-        commit.waits = self.pending_wait.take().into_iter().collect();
         commit.disposition = disposition;
         if serde_json::to_vec(&commit).unwrap().len() > COMMIT_LIMIT {
             return Err(Error::Invalid(
@@ -834,6 +863,16 @@ impl Driver {
 }
 
 fn tool_message(call: &AssistantContent, text: String, error: bool) -> AppendMessage {
+    tool_output_message(
+        call,
+        Output {
+            content: vec![ContentItem::InputText { text }],
+            error,
+        },
+    )
+}
+
+fn tool_output_message(call: &AssistantContent, output: Output) -> AppendMessage {
     let AssistantContent::ToolCall {
         name, tool_call_id, ..
     } = call
@@ -847,13 +886,39 @@ fn tool_message(call: &AssistantContent, text: String, error: bool) -> AppendMes
             id: MessageId::new(id.to_string()).unwrap(),
             tool_name: name.clone(),
             tool_call_id: tool_call_id.clone(),
-            content: vec![ContentPart::Text(TextContent {
-                content: text,
-                metadata: None,
-            })],
+            content: output
+                .content
+                .into_iter()
+                .map(|item| match item {
+                    ContentItem::InputText { text } => ContentPart::Text(TextContent {
+                        content: text,
+                        metadata: None,
+                    }),
+                    ContentItem::InputAudio { audio_url } => {
+                        ContentPart::Audio(llm_contracts::AudioContent { audio_url })
+                    }
+                    ContentItem::InputImage { image_url, detail } => {
+                        let (mime, data) = image_url
+                            .strip_prefix("data:")
+                            .and_then(|url| url.split_once(";base64,"))
+                            .unwrap_or(("image/png", ""));
+                        ContentPart::Image(llm_contracts::ImageContent {
+                            source: llm_contracts::ImageSource::Base64(
+                                llm_contracts::Base64ImageSource {
+                                    mime_type: mime.into(),
+                                    data: data.into(),
+                                },
+                            ),
+                            detail: detail
+                                .and_then(|detail| serde_json::from_value(json!(detail)).ok()),
+                            metadata: None,
+                        })
+                    }
+                })
+                .collect(),
             details: None,
             timestamp: Timestamp(now_ms() as u64),
-            outcome: if error {
+            outcome: if output.error {
                 ToolResultOutcome::Error {
                     error: ToolResultError {
                         message: "Tool execution failed; see result content".into(),

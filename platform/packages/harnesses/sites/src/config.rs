@@ -16,7 +16,7 @@ pub struct Config {
 pub fn config_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["model","reasoning_level"],"properties":{
         "model":{"type":"object","additionalProperties":false,"required":["provider","id"],"properties":{
-            "provider":{"enum":["openai","chatgpt","fireworks"]},"id":{"type":"string","minLength":1},"name":{"type":["string","null"]}}},
+            "provider":{"enum":["openai","chatgpt"]},"id":{"type":"string","minLength":1},"name":{"type":["string","null"]}}},
         "reasoning_level":{"enum":["low","medium","high","xhigh","max"]},
         "account_id":{"type":["string","null"],"format":"uuid"},
         "siteId":{"type":["string","null"],"format":"uuid","description":"Existing project site, or null to create a site on first authoring access. Multiple sessions can edit the same live site."},
@@ -26,6 +26,9 @@ pub fn config_schema() -> Value {
 impl Config {
     pub fn parse(value: &JsonObject) -> Result<Self, String> {
         let value = Value::Object(value.clone());
+        if value["model"]["provider"] == "fireworks" {
+            return Err("Sites exec requires raw custom-tool support; choose an OpenAI or ChatGPT model because the Fireworks adapter does not support it".into());
+        }
         if !jsonschema::validator_for(&config_schema())
             .map_err(|e| e.to_string())?
             .is_valid(&value)
