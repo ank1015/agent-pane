@@ -38,13 +38,16 @@ impl RuntimeService {
             .bind(processor).fetch_optional(&mut *tx).await?;
         tx.commit().await?;
         let Some(mut r) = row else { return Ok(false) };
-        let expired = r.expires_at <= Utc::now();
-        r.cancel_requested |= expired;
+        let deadline_reached = r.kind == "execution"
+            && r.deadline_at
+                .is_some_and(|deadline_at| deadline_at <= Utc::now());
+        r.cancel_requested |= deadline_reached;
         let outcome = if r.kind == "sandbox" {
-            sandbox_step(gateway, &mut r, expired).await
+            sandbox_step(gateway, &mut r).await
         } else {
             execution_step(gateway, &mut r).await
         };
+        let succeeded = outcome.is_ok();
         let retry_delay = if let Err(error) = outcome {
             // Transport failures never imply successful termination or permission
             // to invent a new execution identity. Keep the prepared request.
@@ -76,8 +79,9 @@ impl RuntimeService {
         } else {
             1
         };
-        sqlx::query("update platform_remote_operations set host_id=$4,workspace=$5,state=$6,status=$7,error=$8,output=$9,output_bytes=$10,truncated=$11,exit_code=$12,cancel_requested=cancel_requested or $13,cancellation_confirmed=$14,finished_at=$15,next_attempt_at=clock_timestamp()+make_interval(secs=>$16::double precision),processor_id=null,processor_expires_at=null where id=$1 and processor_id=$2 and process_epoch=$3 and processor_expires_at>clock_timestamp()")
-            .bind(r.id).bind(processor).bind(r.process_epoch).bind(r.host_id).bind(r.workspace).bind(r.state).bind(r.status).bind(r.error).bind(r.output).bind(r.output_bytes).bind(r.truncated).bind(r.exit_code).bind(r.cancel_requested).bind(r.cancellation_confirmed).bind(r.finished_at).bind(f64::from(retry_delay)).execute(&self.pool).await?;
+        let park = succeeded && r.kind == "sandbox" && r.status == "ready" && !r.cancel_requested;
+        sqlx::query("update platform_remote_operations set host_id=$4,workspace=$5,state=$6,status=$7,error=$8,output=$9,output_bytes=$10,truncated=$11,exit_code=$12,cancel_requested=cancel_requested or $13,cancellation_confirmed=$14,finished_at=$15,next_attempt_at=case when $16 then 'infinity'::timestamptz else clock_timestamp()+make_interval(secs=>$17::double precision) end,processor_id=null,processor_expires_at=null where id=$1 and processor_id=$2 and process_epoch=$3 and processor_expires_at>clock_timestamp()")
+            .bind(r.id).bind(processor).bind(r.process_epoch).bind(r.host_id).bind(r.workspace).bind(r.state).bind(r.status).bind(r.error).bind(r.output).bind(r.output_bytes).bind(r.truncated).bind(r.exit_code).bind(r.cancel_requested).bind(r.cancellation_confirmed).bind(r.finished_at).bind(park).bind(f64::from(retry_delay)).execute(&self.pool).await?;
         Ok(true)
     }
 }
@@ -91,12 +95,11 @@ fn stored<T: DeserializeOwned>(v: Value) -> std::result::Result<T, ExecutionErro
 async fn sandbox_step(
     gateway: &ExecutionClient,
     r: &mut Remote,
-    expired: bool,
 ) -> std::result::Result<(), ExecutionError> {
     let ctx = OperationContext::with_timeout(Duration::from_secs(10));
     if r.host_id.is_none() && r.state["submitted"] != true {
         if r.cancel_requested {
-            finish_sandbox(r, expired);
+            finish_sandbox(r);
         } else {
             r.state["submitted"] = json!(true);
         }
@@ -142,7 +145,7 @@ async fn sandbox_step(
         host = gateway.delete_host(&ctx, host.id).await?;
     }
     if host.state == HostState::Deleted {
-        finish_sandbox(r, expired);
+        finish_sandbox(r);
     } else if r.cancel_requested {
         r.status = "terminating".into();
     } else if host.state == HostState::Ready {
@@ -165,8 +168,8 @@ async fn sandbox_step(
     r.error = None;
     Ok(())
 }
-fn finish_sandbox(r: &mut Remote, expired: bool) {
-    r.status = if expired { "expired" } else { "terminated" }.into();
+fn finish_sandbox(r: &mut Remote) {
+    r.status = "terminated".into();
     r.cancellation_confirmed = true;
     r.finished_at = Some(Utc::now());
 }

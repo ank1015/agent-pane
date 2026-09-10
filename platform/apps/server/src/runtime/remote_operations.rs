@@ -81,13 +81,13 @@ struct Remote {
     cancel_requested: bool,
     cancellation_confirmed: bool,
     created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
+    deadline_at: Option<DateTime<Utc>>,
     finished_at: Option<DateTime<Utc>>,
     process_epoch: i64,
 }
 fn view(r: &Remote) -> Value {
     if r.kind == "sandbox" {
-        json!({"id":r.id,"environmentId":r.environment_id,"status":r.status,"workspace":if r.host_id.is_some() {r.workspace.clone()} else {Value::Null},"error":r.error,"createdAt":r.created_at,"expiresAt":r.expires_at,"terminationRequested":r.cancel_requested,"terminationConfirmed":r.cancellation_confirmed})
+        json!({"id":r.id,"environmentId":r.environment_id,"status":r.status,"workspace":if r.host_id.is_some() {r.workspace.clone()} else {Value::Null},"error":r.error,"createdAt":r.created_at,"terminationRequested":r.cancel_requested,"terminationConfirmed":r.cancellation_confirmed})
     } else {
         json!({"id":r.id,"hostId":r.host_id,"status":r.status,"exitCode":r.exit_code,"error":r.error,"createdAt":r.created_at,"finishedAt":r.finished_at,"cancellationRequested":r.cancel_requested,"cancellationConfirmed":r.cancellation_confirmed,"outputBytes":r.output_bytes,"truncated":r.truncated})
     }
@@ -173,7 +173,7 @@ async fn host_workspace(
             return Ok(w);
         }
     }
-    let rows:Vec<Value>=sqlx::query_scalar("select workspace from platform_remote_operations where project_id=$1 and kind='sandbox' and host_id=$2 and status='ready' and not cancel_requested and expires_at>clock_timestamp() for share")
+    let rows:Vec<Value>=sqlx::query_scalar("select workspace from platform_remote_operations where project_id=$1 and kind='sandbox' and host_id=$2 and status='ready' and not cancel_requested for share")
         .bind(project).bind(host).fetch_all(&mut **tx).await?;
     for v in rows {
         let w: ExecutionWorkspace = decode(v)?;
@@ -344,18 +344,8 @@ impl RuntimeService {
                     json!(w),
                     json!({"adopted":true}),
                     "provisioning",
-                    binding.timeout_seconds.min(86400) as i64,
+                    None,
                 )
-                .await?;
-                sqlx::query(
-                    "update platform_remote_operations set expires_at=$2,state='{}' where id=$1",
-                )
-                .bind(id)
-                .bind(
-                    host.created_at
-                        + chrono::Duration::seconds(binding.timeout_seconds.min(86400) as i64),
-                )
-                .execute(&mut *tx)
                 .await?;
             }
         }
@@ -373,7 +363,7 @@ impl RuntimeService {
     ) -> Result<Value> {
         if method == "sandboxes.terminate" && matches!(caller, Caller::Site(_)) {
             return Err(RuntimeError::Invalid(
-                "Sandbox termination is not available to site backends; sandboxes expire automatically.",
+                "Sandbox termination is not available to site backends.",
             ));
         }
         if method == "execution.listResources" {
@@ -470,7 +460,7 @@ impl RuntimeService {
                     json!({"workspace_root":e["workspace_root"],"path":e["path"],"sandbox_id":id}),
                     request,
                     "provisioning",
-                    i64::from(seconds),
+                    None,
                 )
                 .await?;
                 id
@@ -505,7 +495,7 @@ impl RuntimeService {
                     json!(w),
                     json!(a),
                     "pending",
-                    (timeout / 1000 + 60) as i64,
+                    Some((timeout / 1000 + 60) as i64),
                 )
                 .await?;
                 id
@@ -562,14 +552,14 @@ async fn insert(
     workspace: Value,
     request: Value,
     status: &str,
-    seconds: i64,
+    deadline_seconds: Option<i64>,
 ) -> Result<()> {
     let (site, invocation) = match caller {
         Caller::Site(s) => (Some(s.site), Some(s.invocation)),
         _ => (None, None),
     };
-    sqlx::query("insert into platform_remote_operations(id,project_id,kind,environment_id,host_id,workspace,request,status,expires_at,source_run_id,site_id,invocation_id) values($1,$2,$3,$4,$5,$6,$7,$8,clock_timestamp()+make_interval(secs=>$9::double precision),$10,$11,$12)")
-        .bind(id).bind(project).bind(kind).bind(env).bind(host).bind(workspace).bind(request).bind(status).bind(seconds as f64).bind(caller.source()).bind(site).bind(invocation).execute(&mut **tx).await?;
+    sqlx::query("insert into platform_remote_operations(id,project_id,kind,environment_id,host_id,workspace,request,status,deadline_at,source_run_id,site_id,invocation_id) values($1,$2,$3,$4,$5,$6,$7,$8,clock_timestamp()+make_interval(secs=>$9::double precision),$10,$11,$12)")
+        .bind(id).bind(project).bind(kind).bind(env).bind(host).bind(workspace).bind(request).bind(status).bind(deadline_seconds.map(|seconds| seconds as f64)).bind(caller.source()).bind(site).bind(invocation).execute(&mut **tx).await?;
     Ok(())
 }
 fn m_name(name: &str) -> Result<()> {
