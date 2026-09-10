@@ -85,11 +85,8 @@ impl Caller {
     async fn harness(self, tx: &mut Tx<'_>, project: Uuid, id: &str) -> Result<Value> {
         match self {
             Self::Site(_) => {
-                let (mut h, mode) = site_sdk::harness(tx, project, id).await?;
-                let fields: Vec<String> = sqlx::query_scalar("select configurable_fields from site_harness_grants where project_id=$1 and harness_id=$2")
-                    .bind(project).bind(id).fetch_one(&mut **tx).await?;
-                h["environmentMode"] = json!(mode);
-                h["configurableFields"] = json!(fields);
+                let mut h = site_sdk::harness(tx, project, id).await?;
+                add_site_harness_metadata(&mut h);
                 Ok(h)
             }
             Self::Agent { .. } => {
@@ -110,6 +107,24 @@ impl Caller {
             validate_frozen_inputs(tx, session).await
         }
     }
+}
+
+fn add_site_harness_metadata(harness: &mut Value) {
+    let mode = if harness["harness_contract"]["environment_inputs"]
+        .as_array()
+        .is_some_and(|inputs| !inputs.is_empty())
+    {
+        "declared"
+    } else if harness["config_schema"]["required"]
+        .as_array()
+        .is_some_and(|required| required.contains(&json!("environment")))
+    {
+        "single"
+    } else {
+        "none"
+    };
+    harness["environmentMode"] = json!(mode);
+    harness["configurableFields"] = Value::Null;
 }
 
 pub(super) fn is_method(method: &str) -> bool {
@@ -389,19 +404,10 @@ impl RuntimeService {
         project: Uuid,
         method: &str,
         args: Value,
-        mut accounts: Vec<Value>,
+        accounts: Vec<Value>,
     ) -> Result<Value> {
         match method {
             "accounts.list" | "harnesses.startOptions" => {
-                if matches!(caller, Caller::Site(_)) {
-                    let grants: Vec<Uuid> = sqlx::query_scalar(
-                        "select account_id from site_account_grants where project_id=$1",
-                    )
-                    .bind(project)
-                    .fetch_all(&mut **tx)
-                    .await?;
-                    accounts.retain(|a| grants.iter().any(|id| a["accountId"] == id.to_string()));
-                }
                 if method == "accounts.list" {
                     let a: List = decode(args)?;
                     return inventory_page(
@@ -446,8 +452,11 @@ impl RuntimeService {
                 let tag = format!("harnesses:{project}:{}", caller.identity());
                 let after = inventory_cursor(a.options.cursor.as_deref(), &tag)?;
                 let count = model::limit(a.options.limit)?;
-                let rows: Vec<Value> = sqlx::query_scalar(r#"select to_jsonb(h) || case when $2 then jsonb_build_object('environmentMode',g.environment_mode,'configurableFields',g.configurable_fields) else '{}'::jsonb end from harnesses h left join project_harnesses p on p.harness_id=h.id and p.project_id=$1 left join site_harness_grants g on g.harness_id=h.id and g.project_id=$1 where h.enabled and (h.project_policy='required' or coalesce(p.enabled,false)) and (not $2 or g.harness_id is not null) and h.id collate "C">$3 order by h.id collate "C" limit $4"#)
-                    .bind(project).bind(matches!(caller,Caller::Site(_))).bind(after).bind(count+1).fetch_all(&mut **tx).await?;
+                let mut rows: Vec<Value> = sqlx::query_scalar(r#"select to_jsonb(h) from harnesses h left join project_harnesses p on p.harness_id=h.id and p.project_id=$1 where h.enabled and (h.project_policy='required' or coalesce(p.enabled,false)) and h.id collate "C">$2 order by h.id collate "C" limit $3"#)
+                    .bind(project).bind(after).bind(count+1).fetch_all(&mut **tx).await?;
+                if matches!(caller, Caller::Site(_)) {
+                    rows.iter_mut().for_each(add_site_harness_metadata);
+                }
                 inventory_page(rows, a.options, &tag, "id")
             }
             "harnesses.get" => {
@@ -605,20 +614,6 @@ impl RuntimeService {
                         "accountId conflicts with config.account_id.",
                     ));
                 }
-                if matches!(caller, Caller::Site(_)) {
-                    let allowed = h["configurableFields"]
-                        .as_array()
-                        .ok_or(RuntimeError::StoredData)?;
-                    if a.config
-                        .keys()
-                        .any(|k| k != "account_id" && !allowed.contains(&json!(k)))
-                    {
-                        return Err(RuntimeError::Invalid(
-                            "Configuration field is not permitted by this site's harness grant.",
-                        ));
-                    }
-                    site_sdk::account(&mut tx, project, a.account_id).await?;
-                }
                 a.config.insert("account_id".into(), json!(a.account_id));
                 let config = configuration::resolve(&mut tx, &a.harness_id, &a.config).await?;
                 validate_account_model(&config, &h, &accounts)?;
@@ -628,8 +623,6 @@ impl RuntimeService {
                 sqlx::query("insert into sessions(id,project_id,harness_id,title,config) values($1,$2,$3,$4,$5)")
                     .bind(session).bind(project).bind(a.harness_id).bind(a.title).bind(config).execute(&mut *tx).await?;
                 let row = m::session(&mut tx, session).await?;
-                // Legacy grants still constrain their environment object. Declared
-                // grants accept any number of references from the frozen contract.
                 caller.existing(&mut tx, &row).await?;
                 let (run, input) = if let Some(input) = a.initial_input {
                     let (id, i) = m::start_with_parent(
@@ -791,7 +784,7 @@ fn validate_account_model(config: &Value, harness: &Value, accounts: &[Value]) -
         })
     {
         return Err(RuntimeError::Invalid(
-            "Select a permitted active account and supported model.",
+            "Select an active account and supported model.",
         ));
     }
     Ok(())

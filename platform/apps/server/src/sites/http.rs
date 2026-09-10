@@ -121,25 +121,19 @@ async fn authenticate(
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct Grant {
-    id: String,
-    #[serde(default = "declared_mode")]
-    environment_mode: String,
-    #[serde(default)]
-    configurable_fields: Vec<String>,
-}
-fn declared_mode() -> String {
-    "declared".into()
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Access {
     token: String,
     enabled: bool,
     #[serde(default)]
     execution_enabled: bool,
-    harnesses: Vec<Grant>,
-    account_ids: Vec<Uuid>,
+    // Accepted during rollout for older control-plane callers. Harness access is
+    // derived exclusively from project_harnesses and these values are ignored.
+    #[serde(default, rename = "harnesses")]
+    _legacy_harnesses: Vec<Value>,
+    // Provider inventory is owned by Platform. Older callers may still send a
+    // Site-specific account list during rollout, but it has no authorization effect.
+    #[serde(default, rename = "accountIds")]
+    _legacy_account_ids: Vec<Uuid>,
 }
 async fn access(
     State(s): State<SitesService>,
@@ -147,9 +141,6 @@ async fn access(
     Json(input): Json<Access>,
 ) -> Result<Json<Value>> {
     validate_token(&input.token)?;
-    if input.harnesses.len() > 64 || input.account_ids.len() > 64 {
-        return Err(invalid("At most 64 harness and account grants."));
-    }
     let hash = token_hash(&input.token);
     if hash == s.capability_hash || s.admin_hash.as_deref() == Some(&hash) {
         return Err(invalid(
@@ -164,35 +155,6 @@ async fn access(
         .ok_or(Error::NotFound)?;
     sqlx::query("insert into site_project_access(project_id,token_hash,enabled,execution_enabled) values($1,$2,$3,$4) on conflict(project_id) do update set token_hash=$2,enabled=$3,execution_enabled=$4")
         .bind(project).bind(hash).bind(input.enabled).bind(input.execution_enabled).execute(&mut *tx).await?;
-    sqlx::query("delete from site_harness_grants where project_id=$1")
-        .bind(project)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("delete from site_account_grants where project_id=$1")
-        .bind(project)
-        .execute(&mut *tx)
-        .await?;
-    for grant in input.harnesses {
-        if !platform_runtime_contracts::is_valid_harness_id(&grant.id)
-            || !matches!(
-                grant.environment_mode.as_str(),
-                "none" | "single" | "declared"
-            )
-            || grant.configurable_fields.len() > 64
-            || grant.configurable_fields.iter().any(|f| {
-                f.is_empty()
-                    || f.len() > 128
-                    || f.chars().any(char::is_control)
-                    || f == "account_id"
-            })
-        {
-            return Err(invalid("Invalid harness grant."));
-        }
-        sqlx::query("insert into site_harness_grants(project_id,harness_id,environment_mode,configurable_fields) values($1,$2,$3,$4)").bind(project).bind(grant.id).bind(grant.environment_mode).bind(grant.configurable_fields).execute(&mut *tx).await?;
-    }
-    for id in input.account_ids {
-        sqlx::query("insert into site_account_grants(project_id,account_id) values($1,$2) on conflict do nothing").bind(project).bind(id).execute(&mut *tx).await?;
-    }
     tx.commit().await?;
     Ok(Json(json!({"projectId":project,"enabled":input.enabled})))
 }
