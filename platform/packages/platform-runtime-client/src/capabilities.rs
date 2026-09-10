@@ -16,6 +16,9 @@ impl RunClient {
     }
 }
 impl PlatformCapabilities<'_> {
+    pub async fn list_execution_resources(&self) -> Result<c::ExecutionResources> {
+        self.read("execution.listResources", json!({})).await
+    }
     /// Dynamic adapter for registered code-mode tools. Scope and credentials are
     /// still supplied only by this RunClient; server validation remains authoritative.
     pub async fn call(&self, method: &str, args: Value) -> Result<Value> {
