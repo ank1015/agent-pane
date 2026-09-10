@@ -79,9 +79,9 @@ pub fn allowed(method: &str) -> bool {
     matches!(
         method,
         "runs.outputs"
+            | "execution.listResources"
             | "sandboxes.createFromSnapshot"
             | "sandboxes.get"
-            | "sandboxes.terminate"
             | "execution.bash"
             | "execution.get"
             | "execution.output"
