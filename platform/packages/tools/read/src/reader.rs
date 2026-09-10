@@ -1,4 +1,4 @@
-use crate::{FOOTER_RESERVE, ReadConfig, ReadOutput, Truncation, error};
+use crate::{ReadConfig, ReadOutput, error, text::LineReader};
 use execution_core::{
     ExecutionErrorCode as Code, ExecutionPath, ExecutionResult, ExecutionRuntime, FileKind,
     OperationContext, ReadFileRequest, StatRequest,
@@ -45,16 +45,7 @@ pub(crate) async fn read(
             "host did not provide a file revision for a consistent read",
         )
     })?;
-    let mut output = ReadOutput {
-        path: path.clone(),
-        revision,
-        content: String::new(),
-        start_line: start,
-        end_line: None,
-        eof: false,
-        truncation: None,
-        next_offset: None,
-    };
+    let mut reader = LineReader::new(start, limit, config)?;
     let chunk = config.chunk_bytes.min(
         runtime
             .descriptor()
@@ -69,11 +60,6 @@ pub(crate) async fn read(
         ));
     }
     let mut position = 0u64;
-    let mut line_number = 1u64;
-    let mut prefix_bytes = 7usize;
-    let mut line = Vec::new();
-    let mut rendered_bytes = 0usize;
-    let budget = config.max_output_bytes - FOOTER_RESERVE;
     loop {
         context.checkpoint()?;
         let remaining = config.max_scan_bytes.saturating_sub(position);
@@ -97,7 +83,7 @@ pub(crate) async fn read(
             )
             .await?;
         context.checkpoint()?;
-        if reply.metadata.revision.as_ref() != Some(&output.revision)
+        if reply.metadata.revision.as_ref() != Some(&revision)
             || reply.metadata.size != metadata.size
         {
             return Err(error(
@@ -130,82 +116,30 @@ pub(crate) async fn read(
             if index % 4096 == 0 {
                 context.checkpoint()?;
             }
-            if line_number >= start
-                && output
-                    .end_line
-                    .is_some_and(|last| last - start + 1 >= limit)
-            {
-                output.truncation = Some(Truncation::LineLimit);
-                output.next_offset = Some(line_number);
-                return Ok(output);
-            }
-            if *byte == 0 {
-                return Err(error(
-                    Code::Unsupported,
-                    "file contains binary data (NUL); read supports UTF-8 text only",
-                ));
-            }
-            if line_number >= start {
-                line.push(*byte);
-                // Reserve a newline for display even for an unterminated line.
-                if rendered_bytes + prefix_bytes + line.len() + usize::from(*byte != b'\n') > budget
-                {
-                    if output.end_line.is_none() {
-                        return Err(error(
-                            Code::ResourceExhausted,
-                            format!(
-                                "line {line_number} exceeds the output limit; use bash to inspect part of this line"
-                            ),
-                        ));
-                    }
-                    output.truncation = Some(Truncation::ByteLimit);
-                    output.next_offset = Some(line_number);
-                    return Ok(output);
-                }
-                if *byte == b'\n' {
-                    append(&mut output, &line, line_number, &mut rendered_bytes)?;
-                    line.clear();
-                }
-            }
-            if *byte == b'\n' {
-                line_number = line_number
-                    .checked_add(1)
-                    .ok_or_else(|| error(Code::ResourceExhausted, "line number overflow"))?;
-                prefix_bytes = line_number.to_string().len().max(6) + 1;
+            if reader.feed(*byte)? {
+                return Ok(result(path, revision, reader.output));
             }
         }
         position = end;
         if reply.eof {
-            if !line.is_empty() {
-                append(&mut output, &line, line_number, &mut rendered_bytes)?;
-            }
-            if output.end_line.is_none() && !(metadata.size == 0 && start == 1) {
-                return Err(error(
-                    Code::InvalidRequest,
-                    format!("offset {start} is beyond the end of the file"),
-                ));
-            }
-            output.eof = true;
-            return Ok(output);
+            return Ok(result(path, revision, reader.finish(metadata.size == 0)?));
         }
     }
 }
 
-fn append(
-    output: &mut ReadOutput,
-    bytes: &[u8],
-    number: u64,
-    rendered_bytes: &mut usize,
-) -> ExecutionResult<()> {
-    let text = std::str::from_utf8(bytes).map_err(|_| {
-        error(
-            Code::Unsupported,
-            "requested content is not valid UTF-8 text",
-        )
-    })?;
-    *rendered_bytes +=
-        number.to_string().len().max(6) + 1 + bytes.len() + usize::from(!bytes.ends_with(b"\n"));
-    output.content.push_str(text);
-    output.end_line = Some(number);
-    Ok(())
+fn result(
+    path: ExecutionPath,
+    revision: execution_core::FileRevision,
+    window: crate::TextReadOutput,
+) -> ReadOutput {
+    ReadOutput {
+        path,
+        revision,
+        content: window.content,
+        start_line: window.start_line,
+        end_line: window.end_line,
+        eof: window.eof,
+        truncation: window.truncation,
+        next_offset: window.next_offset,
+    }
 }
