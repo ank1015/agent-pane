@@ -9,6 +9,9 @@ use tracing_subscriber::EnvFilter;
 type Health = Arc<RwLock<Snapshot>>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().nth(1).as_deref() == Some("--live-code-mode-runtime") {
+        return tool_code_mode::live_guest::main();
+    }
     if std::env::args().nth(1).as_deref() == Some("--code-mode-runtime") {
         return tool_code_mode::guest::main();
     }
@@ -118,47 +121,16 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             )?;
         }
         if sites_enabled {
-            let web = match std::env::var("FIRECRAWL_API_KEY") {
-                Ok(key) if key.is_empty() => None,
-                Ok(key) => Some(sites_harness::WebTools {
-                    search: tool_firecrawl_search::FirecrawlSearchToolContext::new(key.clone())?,
-                    scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext::new(key)?,
-                }),
-                Err(std::env::VarError::NotPresent) => None,
-                Err(error) => return Err(error.into()),
+            let browser = sites_harness::BrowserConfig {
+                node: std::env::var("SITES_BROWSER_NODE")?.into(),
+                script: std::env::var("SITES_BROWSER_SCRIPT")?.into(),
             };
-            let browser = match (
-                std::env::var_os("SITES_BROWSER_NODE").filter(|v| !v.is_empty()),
-                std::env::var_os("SITES_BROWSER_SCRIPT").filter(|v| !v.is_empty()),
-            ) {
-                (None, None) => None,
-                (Some(node), Some(script)) => {
-                    let node = std::path::PathBuf::from(node);
-                    let script = std::path::PathBuf::from(script);
-                    if !node.is_absolute()
-                        || !script.is_absolute()
-                        || !node.is_file()
-                        || !script.is_file()
-                    {
-                        return Err(
-                            "Sites browser requires existing absolute executable and script paths"
-                                .into(),
-                        );
-                    }
-                    Some(sites_harness::Browser { node, script })
-                }
-                _ => {
-                    return Err(
-                        "Set both SITES_BROWSER_NODE and SITES_BROWSER_SCRIPT, or neither".into(),
-                    );
-                }
-            };
+            browser.check().await?;
             registry.register(
                 sites_harness::ID,
                 Arc::new(sites_harness::SitesHarness::new(
                     llm,
                     std::env::current_exe()?,
-                    web,
                     browser,
                 )),
             )?;
