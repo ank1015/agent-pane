@@ -2,7 +2,27 @@
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type SqlValue = null | string | number;
 type ImageContent = { type: "image"; mimeType: "image/jpeg"; data: string };
+type TruncatedWebDetails = { truncated: true; reason: string };
+type WebToolResult<T extends Json> = {
+  content: string;
+  details: T | TruncatedWebDetails;
+};
 declare const tools: {
+  search(args: { query: string }): Promise<WebToolResult<{
+    query: string;
+    results: Array<{
+      title: string | null; description: string | null; url: string;
+      category: string | null;
+    }>;
+    warning: string | null; search_id: string | null; credits_used: number | null;
+  }>>;
+  scrape(args: { url: string }): Promise<WebToolResult<{
+    url: string; source_url: string; title: string | null;
+    description: string | null; language: string | null;
+    content_type: string | null; status_code: Json; warning: string | null;
+    truncated: boolean; original_markdown_bytes: number;
+    returned_markdown_bytes: number;
+  }>>;
   metadata(): Promise<{
     id: string; name: string;
     status: "provisioning" | "ready" | "suspended" | "failed";

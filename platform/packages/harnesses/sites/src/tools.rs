@@ -1,6 +1,7 @@
 use futures_util::future::BoxFuture;
 use llm_contracts::{
-    CustomTool, CustomToolFormat, FunctionTool, GrammarSyntax, ToolArguments, ToolDefinition,
+    ContentPart, CustomTool, CustomToolFormat, FunctionTool, GrammarSyntax, ToolArguments,
+    ToolDefinition,
 };
 use platform_runtime_client::RunClient;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,15 @@ use std::sync::{Arc, Mutex};
 use tool_code_mode::live::{ContentItem, protocol::*};
 use tool_code_mode::*;
 use uuid::Uuid;
+
+const CODE_MODE_WEB_RESULT_BYTES: usize = 127 * 1024;
+const WEB_CONTENT_TRUNCATION_MARKER: &str = "\n[... web content truncated for code mode ...]";
+
+#[derive(Clone)]
+pub struct WebTools {
+    pub search: tool_firecrawl_search::FirecrawlSearchToolContext,
+    pub scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext,
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -150,6 +160,20 @@ pub(crate) fn register(registry: &mut Registry) -> Result<()> {
             effect,
         })?;
     }
+    for definition in [
+        tool_firecrawl_search::definition(),
+        tool_firecrawl_scrape::definition(),
+    ] {
+        let ToolDefinition::Function(tool) = definition else {
+            return Err(Error::Invalid("Web tool must be a function tool"));
+        };
+        registry.register(Tool {
+            name: tool.name,
+            description: tool.description,
+            input_schema: Value::Object(tool.parameters),
+            effect: Effect::Read,
+        })?;
+    }
     Ok(())
 }
 
@@ -157,6 +181,7 @@ pub(crate) struct SitesDispatcher {
     pub client: RunClient,
     pub site_id: Arc<Mutex<Option<Uuid>>>,
     pub browser: crate::browser::BrowserSession,
+    pub web: WebTools,
 }
 impl SitesDispatcher {
     async fn call(&self, method: &str, input: Value) -> std::result::Result<Value, ToolError> {
@@ -264,10 +289,90 @@ impl Dispatcher for SitesDispatcher {
                     self.call("sites.metadata", json!({})).await?;
                     self.browser.invoke(&self.client, &call.input).await
                 }
+                "search" => {
+                    let arguments = serde_json::from_value(call.input.clone()).map_err(|_| {
+                        ToolError::rejected("SEARCH_INVALID_ARGUMENTS", "Invalid search arguments")
+                    })?;
+                    let output = tool_firecrawl_search::execute(arguments, &self.web.search)
+                        .await
+                        .map_err(search_error)?;
+                    Ok(web_output(output.content, output.details))
+                }
+                "scrape" => {
+                    let arguments = serde_json::from_value(call.input.clone()).map_err(|_| {
+                        ToolError::rejected("SCRAPE_INVALID_ARGUMENTS", "Invalid scrape arguments")
+                    })?;
+                    let output = tool_firecrawl_scrape::execute(arguments, &self.web.scrape)
+                        .await
+                        .map_err(scrape_error)?;
+                    Ok(web_output(output.content, output.details))
+                }
                 _ => Err(ToolError::rejected("UNKNOWN_TOOL", "Unknown Sites tool")),
             }
         })
     }
+}
+
+fn search_error(error: tool_firecrawl_search::FirecrawlSearchToolError) -> ToolError {
+    let (name, message, _) = error.into_parts();
+    web_error("SEARCH", name, message)
+}
+
+fn scrape_error(error: tool_firecrawl_scrape::FirecrawlScrapeToolError) -> ToolError {
+    let (name, message, _) = error.into_parts();
+    web_error("SCRAPE", name, message)
+}
+
+fn web_error(prefix: &str, name: &str, message: String) -> ToolError {
+    let code = format!("{prefix}_{}", name.to_ascii_uppercase());
+    if matches!(name, "invalid_arguments" | "configuration_error") {
+        ToolError::rejected(&code, &message)
+    } else {
+        // A failed remote response can still consume Firecrawl credits, so do
+        // not invite an automatic replay when the outcome is unclear.
+        ToolError::uncertain(&code, &message)
+    }
+}
+
+pub(crate) fn web_output(content: Vec<ContentPart>, details: Option<Value>) -> Value {
+    let content = content
+        .into_iter()
+        .filter_map(|part| match part {
+            ContentPart::Text(text) => Some(text.content),
+            ContentPart::Image(_) | ContentPart::Audio(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut result = json!({"content":content,"details":details});
+    if encoded_len(&result) <= CODE_MODE_WEB_RESULT_BYTES {
+        return result;
+    }
+
+    result["details"] = json!({
+        "truncated": true,
+        "reason": "Structured details omitted because the combined code-mode result exceeded its limit; use content instead."
+    });
+    if encoded_len(&result) <= CODE_MODE_WEB_RESULT_BYTES {
+        return result;
+    }
+
+    let original = result["content"].as_str().unwrap_or_default().to_owned();
+    let mut end = original.len();
+    while encoded_len(&result) > CODE_MODE_WEB_RESULT_BYTES && end > 0 {
+        end = end.saturating_sub(4 * 1024);
+        while !original.is_char_boundary(end) {
+            end -= 1;
+        }
+        result["content"] = json!(format!(
+            "{}{WEB_CONTENT_TRUNCATION_MARKER}",
+            &original[..end]
+        ));
+    }
+    result
+}
+
+fn encoded_len(value: &Value) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX, |encoded| encoded.len())
 }
 
 pub(crate) fn read_source(

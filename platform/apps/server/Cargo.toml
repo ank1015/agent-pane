@@ -40,6 +40,8 @@ harness-runtime.workspace = true
 llm-client = { path = "../../../llm/packages/llm-client" }
 platform-agent-code-mode.workspace = true
 tool-code-mode.workspace = true
+tool-firecrawl-search = { path = "../../packages/tools/firecrawl-search" }
+tool-firecrawl-scrape = { path = "../../packages/tools/firecrawl-scrape" }
 execution-supervisor-core = { path = "../../../execution/packages/execution-supervisor-core" }
 execution-wire = { path = "../../../execution/packages/execution-wire" }
 tempfile = "3"

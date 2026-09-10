@@ -22,6 +22,7 @@ use tool_code_mode::{
     Registry,
     live::{Notification, Session},
 };
+pub use tools::WebTools;
 pub const ID: &str = "sites";
 
 #[derive(Clone)]
@@ -29,13 +30,15 @@ pub struct SitesHarness {
     llm: LlmClient,
     guest: PathBuf,
     browser: BrowserConfig,
+    web: WebTools,
 }
 impl SitesHarness {
-    pub fn new(llm: LlmClient, guest: PathBuf, browser: BrowserConfig) -> Self {
+    pub fn new(llm: LlmClient, guest: PathBuf, browser: BrowserConfig, web: WebTools) -> Self {
         Self {
             llm,
             guest,
             browser,
+            web,
         }
     }
     fn code_mode(
@@ -53,6 +56,7 @@ impl SitesHarness {
                 client,
                 site_id,
                 browser: browser::BrowserSession::new(self.browser.clone()),
+                web: self.web.clone(),
             }),
             vec![],
         )
