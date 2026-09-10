@@ -1,5 +1,110 @@
 # Generic code mode
 
+`tool-code-mode::live::Session` is the general exec/wait runtime. It has **no
+Codex dependency**: no Codex crate, executable, service, configuration, or checkout
+is needed at build or run time. Its implementation uses this package's existing
+QuickJS dependency and OS-sandboxed child processes. Sites uses this live runtime.
+
+## Outer protocol
+
+Expose only these two tools. Provider-neutral grammar, descriptions, argument
+parsing, and result types are in `live::protocol`; Sites' `src/tools.rs` shows
+the conversion to the LLM contract. Tool results are content items, not a JSON
+object containing a script's return value.
+
+| Tool | Input | Result |
+| --- | --- | --- |
+| `exec` | Raw JavaScript async module, with optional first-line `// @exec: {"yield_time_ms":10000,"max_output_tokens":1000}` | Status header plus emitted content; running results include the cell ID |
+| `wait` | `{cell_id: string, yield_time_ms?: number, max_tokens?: number, terminate?: boolean}`; no extra properties | Only new content, or final completion/failure/termination; collecting terminal state closes the cell |
+
+Both yield time and output budget default to 10,000. Wait is a JSON function;
+exec is a custom freeform tool using `EXEC_GRAMMAR`, not `{source: ...}` JSON.
+Use `ExecInput::parse` before `Session::exec`. An exec/wait `Report::render()`
+returns `Vec<ContentItem>` with this serialized union:
+
+```ts
+type ContentItem =
+  | {type: "input_text"; text: string}
+  | {type: "input_image"; image_url: string; detail?: string}
+  | {type: "input_audio"; audio_url: string};
+```
+
+The first item is `Script running with cell ID <id>`, `Script completed`,
+`Script failed`, or `Script terminated`, followed by
+`\nWall time <seconds to one decimal> seconds\nOutput:\n`.
+Errors append `Script error:\n<message>` before output truncation.
+`Report::success()` supplies tool-success metadata separately.
+
+## Registering arbitrary tools
+
+Use the existing `Registry` and `Dispatcher` traits, with no Platform adapter
+required. Object-schema tools receive objects; string-schema tools receive raw
+strings. A dispatcher returns arbitrary JSON-compatible values, which remain in
+JavaScript unless emitted. Nested inputs are schema-validated after preparation.
+
+```rust,ignore
+let mut registry = Registry::default();
+registry.register(Tool {
+    name: "my.echo".into(), description: "Echo text".into(),
+    input_schema: serde_json::json!({"type":"string"}), effect: Effect::Read,
+})?;
+let (mut session, mut notifications) = live::Session::new(
+    "/opt/platform/code-mode-runtime", registry, std::sync::Arc::new(MyDispatcher), vec![],
+)?;
+let report = session.exec("outer-call-id".into(), live::protocol::ExecInput::parse(
+    "text(await tools.my_echo('hello'));"
+)?).await?;
+```
+
+Keep the session and drain its bounded notification receiver while executing
+and between tool calls. Notifications contain `{call_id, cell_id, text}`; the
+embedding harness appends each as an additional output for the original exec
+call. Supply tool schemas/descriptions to the model as part of its instructions.
+`ALL_TOOLS` contains only `{name, description}`. Names are normalized to ASCII
+JavaScript identifiers; normalized collisions and `exec`/`wait` are rejected.
+Optional trusted `Extension` factories can provide SDK namespaces under `ctx`.
+
+Each cell is a fresh async module with top-level await, not a REPL or function.
+Helpers are `text`, `image`, `audio`, `generatedImage`, `store`, `load`, `notify`,
+`setTimeout`, `clearTimeout`, `yield_control`, and `exit`. No Node, console,
+filesystem, network API, or module loader is installed. Image/audio helpers
+accept inline base64 data URLs or MCP content blocks. Ordinary globals do not
+persist; explicit JSON store/load values are shared live across session cells.
+Promise.all dispatches concurrently. Cells continue after timed yields, and an
+awaited yield_control creates an output boundary. When the module completes,
+unawaited timers and tool futures are discarded. Dropping a session cancels cells.
+External effects already accepted by a tool can survive cancellation.
+
+Build `code-mode-runtime`, or handle `--live-code-mode-runtime` in your host
+binary by calling `live_guest::main()` before loading configuration/credentials.
+The worker handles both the live and legacy guest entry points.
+
+### Compatibility and lifecycle limits
+
+The exec/wait input contracts and content/status shapes follow the reference
+protocol; this is **not a V8 implementation** or a claim of complete engine
+equivalence. QuickJS language details, resource limits, and conservative
+data-URL-size audio budgeting can differ. Text uses UTF-8-safe head/tail
+truncation at approximately four bytes per token. Images retain their order.
+
+The embedding host owns session lifetime. In Sites it lasts for one active run
+activation: completion, crash, drain, or worker replacement ends live cells and
+their in-memory store. There is no automatic source replay or resumable process
+snapshot. Sites checkpoints admission before dispatch and reports interruption
+after recovery. Keep durable state/operation handles in downstream services and
+use explicit idempotency keys for mutations that may need retrying.
+
+Live limits: 32 uncollected cells, 10,000 calls per cell, 1,024 pending operations,
+256 KiB per bridge frame and per uncollected output batch (at most 1,000 items),
+128 KiB session store, 64 KiB arguments, 128 KiB nested results, and 2 MiB bootstrap.
+Existing sandbox heap/stack and registry limits below also apply. There is no
+fixed execution timeout; the host must collect or cancel live work.
+
+## Legacy journaled engine
+
+The original `Engine` API below remains for existing callers. It is separate
+from `live::Session` and is **not** the outer tool interface used by Sites.
+
 `tool-code-mode` runs one disposable JavaScript cell against an explicit tool
 registry. It has no Platform, Sites, provider, database or remote-host dependency.
 Any JSON-compatible tool can be adapted: use an object schema for function tools
