@@ -4,6 +4,14 @@ use serde_json::json;
 use uuid::Uuid;
 
 #[test]
+fn astra_is_available_through_both_supported_providers() {
+    let models = supported_models();
+    for provider in ["openai", "chatgpt"] {
+        assert!(models[provider].iter().any(|id| id == "gpt-6-astra"));
+    }
+}
+
+#[test]
 fn ordinary_responses_policy_and_native_history_work_for_both_providers() {
     for (provider, models) in supported_models() {
         for model in models {
