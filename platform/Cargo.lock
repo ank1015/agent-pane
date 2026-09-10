@@ -1867,6 +1867,8 @@ dependencies = [
  "tool-bash-minimal",
  "tool-code-mode",
  "tool-filesystem",
+ "tool-firecrawl-scrape",
+ "tool-firecrawl-search",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -2691,6 +2693,8 @@ dependencies = [
  "tokio",
  "tool-apply-patch",
  "tool-code-mode",
+ "tool-firecrawl-scrape",
+ "tool-firecrawl-search",
  "tool-read",
  "uuid",
 ]

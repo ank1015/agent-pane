@@ -9,6 +9,14 @@ fn config(provider: &str, model: &str, effort: &str) -> Value {
 }
 
 #[test]
+fn astra_is_available_through_both_supported_providers() {
+    let models = supported_models();
+    for provider in ["openai", "chatgpt"] {
+        assert!(models[provider].iter().any(|id| id == "gpt-6-astra"));
+    }
+}
+
+#[test]
 fn provider_policies_preserve_native_history_and_accept_two_function_tools() {
     for (provider, models) in supported_models() {
         for model in models {

@@ -239,6 +239,19 @@ test('mutation seeding never pretends an unloaded existing history is complete',
   client.clear()
 })
 
+test('generated titles remain trimmed when truncation lands on whitespace', () => {
+  for (const [harnessId, prefix] of [['sites', '(Sites) '], ['environments', '(Env) '], ['basic-cc-tools-harness', '']]) {
+    for (const whitespace of [' ', '\n', '\t']) {
+      const prompt = 'x'.repeat(79 - prefix.length) + whitespace + 'rest of the full prompt'
+      const request = createChatRequest({ id: harnessId }, undefined, {
+        prompt, accountId: id, provider: 'chatgpt', modelId: 'gpt-6-astra', reasoningLevel: 'high',
+      })
+      assert.equal(request.title, prefix + 'x'.repeat(79 - prefix.length))
+      assert.equal(request.initial_run.input.content[0].content, prompt)
+    }
+  }
+})
+
 test('Sites freezes an optional site and needs no authoring environment', () => {
   const harness = { id: 'sites', config_schema: { properties: { siteId: { type: ['string', 'null'] } } } }
   const submission = { prompt: 'Build a results site', accountId: id, provider: 'chatgpt', modelId: 'gpt-5.6-luna', reasoningLevel: 'low' }

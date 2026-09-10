@@ -36,7 +36,7 @@ export function createChatRequest(harness: Harness, environment: ProjectEnvironm
     config.siteId = siteId
   }
   const titlePrefix = harness.id === ENVIRONMENTS_HARNESS_ID ? '(Env) ' : harness.id === SITES_HARNESS_ID ? '(Sites) ' : ''
-  const title = (titlePrefix + submission.prompt.trim()).slice(0, 80)
+  const title = (titlePrefix + submission.prompt.trim()).slice(0, 80).trimEnd()
   return { harness_id: harness.id, title, config_override: config, initial_run: { expected_session_revision: 0, input: userMessage(submission.prompt) } }
 }
 

@@ -17,3 +17,18 @@ cargo fmt --check
 cargo clippy --workspace --all-targets
 cargo test --workspace
 ```
+
+## Local development
+
+After configuring the `.env` files from the examples in each app and installing
+the dashboard dependencies, start the API server, Sites service, worker, and
+dashboard together from any directory:
+
+```sh
+platform/start.sh
+```
+
+The launcher waits for the API before starting the worker. Press Ctrl-C to stop
+the complete stack; if any app exits, the launcher stops the others. The API
+startup wait defaults to 300 seconds and can be changed with
+`PLATFORM_START_TIMEOUT_SECONDS`.

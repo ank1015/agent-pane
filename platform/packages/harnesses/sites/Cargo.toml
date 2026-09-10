@@ -24,6 +24,8 @@ uuid.workspace = true
 tool-code-mode.workspace = true
 tool-apply-patch.workspace = true
 tool-read = { path = "../../tools/read" }
+tool-firecrawl-search = { path = "../../tools/firecrawl-search" }
+tool-firecrawl-scrape = { path = "../../tools/firecrawl-scrape" }
 sha2.workspace = true
 
 [target.'cfg(unix)'.dependencies]

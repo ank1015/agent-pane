@@ -177,6 +177,12 @@ async fn setup(
             script: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../packages/harnesses/sites/browser/runtime.mjs"),
         },
+        ::sites_harness::WebTools {
+            search: tool_firecrawl_search::FirecrawlSearchToolContext::new("sites-test-key")
+                .unwrap(),
+            scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext::new("sites-test-key")
+                .unwrap(),
+        },
     );
     let (worker, _) = super::sites_authoring::worker(f).await;
     (harness, script, worker)

@@ -5,6 +5,29 @@ use llm_contracts::ModelPricingAbove;
 /// Complete allowlist of models accepted by this provider.
 pub const OPENAI_MODELS: &[OpenAiModel] = &[
     OpenAiModel {
+        id: "gpt-6-astra",
+        name: "GPT-6 Astra",
+        pricing: ModelPricing {
+            base: ModelCost {
+                input: 10.0,
+                output: 50.0,
+                cache_read: 1.0,
+                cache_write: 12.5,
+            },
+            above: Some(ModelPricingAbove {
+                prompt_tokens: 272_000,
+                cost: ModelCost {
+                    input: 20.0,
+                    output: 75.0,
+                    cache_read: 2.0,
+                    cache_write: 25.0,
+                },
+            }),
+        },
+        context_window: 1_050_000,
+        max_tokens: 128_000,
+    },
+    OpenAiModel {
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",
         pricing: ModelPricing {

@@ -30,7 +30,8 @@ fn request(model_id: &str) -> LlmRequest {
 #[test]
 fn catalog_is_the_openai_catalog_and_a_strict_allowlist() {
     assert_eq!(CHATGPT_MODELS, provider_openai::OPENAI_MODELS);
-    assert_eq!(CHATGPT_MODELS.len(), 3);
+    assert_eq!(CHATGPT_MODELS.len(), 4);
+    assert!(find_model("gpt-6-astra").is_some());
     assert!(find_model("gpt-5.6-sol").is_some());
 
     let error =

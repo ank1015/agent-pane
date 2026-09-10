@@ -121,6 +121,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             )?;
         }
         if sites_enabled {
+            let firecrawl_key = std::env::var("FIRECRAWL_API_KEY")
+                .map_err(|_| "FIRECRAWL_API_KEY is required when SITES_ENABLED=true")?;
+            let web = sites_harness::WebTools {
+                search: tool_firecrawl_search::FirecrawlSearchToolContext::new(
+                    firecrawl_key.clone(),
+                )?,
+                scrape: tool_firecrawl_scrape::FirecrawlScrapeToolContext::new(firecrawl_key)?,
+            };
             let browser = sites_harness::BrowserConfig {
                 node: std::env::var("SITES_BROWSER_NODE")?.into(),
                 script: std::env::var("SITES_BROWSER_SCRIPT")?.into(),
@@ -132,6 +140,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
                     llm,
                     std::env::current_exe()?,
                     browser,
+                    web,
                 )),
             )?;
         }

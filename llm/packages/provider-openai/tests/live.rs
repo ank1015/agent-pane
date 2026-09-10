@@ -71,7 +71,7 @@ fn minimal_request(model_id: &str) -> LlmRequest {
         tools: Vec::new(),
         provider_options: Map::from_iter([
             ("max_output_tokens".into(), json!(64)),
-            ("reasoning".into(), json!({ "effort": "none" })),
+            ("reasoning".into(), json!({ "effort": "low" })),
             ("store".into(), json!(false)),
         ]),
         metadata: BTreeMap::new(),

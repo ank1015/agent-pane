@@ -33,7 +33,21 @@ fn request(model_id: &str) -> LlmRequest {
 
 #[test]
 fn catalog_is_a_strict_allowlist() {
-    assert_eq!(OPENAI_MODELS.len(), 3);
+    assert_eq!(OPENAI_MODELS.len(), 4);
+    let astra = find_model("gpt-6-astra").expect("Astra must be cataloged");
+    assert_eq!(astra.name, "GPT-6 Astra");
+    assert_eq!(astra.context_window, 1_050_000);
+    assert_eq!(astra.max_tokens, 128_000);
+    assert_eq!(astra.pricing.base.input, 10.0);
+    assert_eq!(astra.pricing.base.output, 50.0);
+    assert_eq!(astra.pricing.base.cache_read, 1.0);
+    assert_eq!(astra.pricing.base.cache_write, 12.5);
+    let long = astra.pricing.above.expect("Astra has long-context pricing");
+    assert_eq!(long.prompt_tokens, 272_000);
+    assert_eq!(long.cost.input, 20.0);
+    assert_eq!(long.cost.output, 75.0);
+    assert_eq!(long.cost.cache_read, 2.0);
+    assert_eq!(long.cost.cache_write, 25.0);
     assert!(find_model("gpt-5.6-sol").is_some());
 
     let error = build_response_request(&request("gpt-unknown"))

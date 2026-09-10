@@ -1,8 +1,10 @@
 # Sites harness
 
 A site-authoring harness with exactly two outer tools, raw JavaScript `exec`
-and JSON `wait`, and six inner tools:
+and JSON `wait`, and eight inner tools:
 
+- `search({query})`: up to ten public-web results with source metadata.
+- `scrape({url})`: bounded Markdown from a public webpage or PDF.
 - `metadata()`: bound site metadata, no source listing.
 - `read({file_path, offset?, limit?})`: one of index.html/backend.js, shared
   line-window reading, source revision and continuation information.
@@ -21,15 +23,16 @@ and JSON `wait`, and six inner tools:
 - `sql({sql,params?,idempotency_key?})`: one bounded SQLite statement,
   including schema inspection, schema changes, DML and RETURNING.
 
-There are no agent-side ctx wrappers, raw Platform tools, web tools or legacy
-browser probes. The backend still receives its application SDK through ctx;
+There are no agent-side ctx wrappers, raw Platform tools or legacy browser
+probes. The backend still receives its application SDK through ctx;
 its reference is clearly labeled backend-only in the prompt. See
 [src/tools.d.ts](src/tools.d.ts) for the model-facing contracts.
 
-All tools use the session's site binding. Metadata/reading may lazily provision
-a new site; new sites have default two-file scaffolding. Edits are live, not
-drafts. Code snapshots and rollback are user operations and do not undo SQL.
-Internal authoring/invocation records remain service infrastructure, not tools.
+The six Site tools use the session's site binding; search and scrape access only
+public web content. Metadata/reading may lazily provision a new site; new sites
+have default two-file scaffolding. Edits are live, not drafts. Code snapshots and
+rollback are user operations and do not undo SQL. Internal authoring/invocation
+records remain service infrastructure, not tools.
 
 Code mode uses the independent tool-code-mode live session with no extensions.
 The host checkpoints cell admission; interrupted scripts are not replayed.
@@ -74,15 +77,16 @@ Production should run the worker/browser in resource-bounded containers as a
 non-root user with Chromium sandbox support; browser contexts alone are not OS
 isolation. Content requests are restricted to the signed release path, redirects
 and WebSockets are blocked, and production content sandbox headers are required.
-Sites-only workers still need no execution gateway or Firecrawl credentials.
-Enable SITES_ENABLED with the LLM gateway and content listener configured.
+Sites-only workers need no execution gateway, but do require FIRECRAWL_API_KEY for
+the nested search and scrape tools. Enable SITES_ENABLED with the LLM gateway and
+content listener configured.
 
 Checkpoint protocol v4 is breaking: older checkpoints are rejected, not migrated.
 Start a new Sites session for the new tool surface. Site data is preserved.
 Only OpenAI/ChatGPT providers currently support the outer custom-tool contract.
 
 Verification:
-`cargo test -p sites-harness -p tool-read -p tool-code-mode`.
+`cargo test -p sites-harness -p tool-read -p tool-code-mode -p tool-firecrawl-search -p tool-firecrawl-scrape`.
 The service SQL tests cover real SQLite reads, writes, schema, bounded results
 and receipts. Server integration tests additionally require PostgreSQL and
 built platform-sites-service/code-mode-runtime binaries.
