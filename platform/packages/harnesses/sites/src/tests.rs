@@ -1,5 +1,5 @@
 use super::*;
-use llm_contracts::{ToolArguments, ToolDefinition};
+use llm_contracts::{ContentPart, TextContent, ToolArguments, ToolDefinition};
 use serde_json::{Value, json};
 #[test]
 fn public_site_rejection_details_are_explicit_without_changing_transport_logs() {
@@ -53,7 +53,7 @@ fn main_prompt_explains_the_role_and_site_scope() {
     for concept in [
         "custom web applications",
         "not every Site needs them",
-        "Your authoring tools automatically target it.",
+        "Your Site-specific authoring tools automatically target it.",
         "`tools.metadata()` inside `exec`",
         "project's allowed environments and harnesses",
         "Build a functioning application, not just a visual mockup.",
@@ -99,7 +99,12 @@ fn main_prompt_explains_the_role_and_site_scope() {
         "max_output_tokens?: number;",
         "max_tokens?: number;",
         "Do not resubmit the original JavaScript to collect its result.",
-        "## The six authoring tools",
+        "`tools.search`",
+        "`tools.scrape`",
+        "public-web research",
+        "untrusted task data",
+        "## The eight authoring tools",
+        "### search and scrape: research the public web",
         "### metadata: inspect the current Site",
         "### read: read one source file",
         "### apply_patch: edit and activate source",
@@ -148,7 +153,7 @@ fn tool_plans_validate_raw_exec_and_cell_wait() {
     assert!(tools::prepare("reconcile_call", &args(json!({}))).is_err());
 }
 #[test]
-fn registry_validates_the_six_tool_inputs() {
+fn registry_validates_the_eight_tool_inputs() {
     let mut registry = tool_code_mode::Registry::default();
     tools::register(&mut registry).unwrap();
     let names: Vec<_> = registry.tools().map(|t| t.name.as_str()).collect();
@@ -160,6 +165,8 @@ fn registry_validates_the_six_tool_inputs() {
             "invoke",
             "metadata",
             "read",
+            "scrape",
+            "search",
             "sql"
         ]
     );
@@ -183,6 +190,8 @@ fn registry_validates_the_six_tool_inputs() {
         ),
         ("browser", json!({"action":"screenshot"})),
         ("browser", json!({"action":"reload"})),
+        ("search", json!({"query":"SQLite WAL durability"})),
+        ("scrape", json!({"url":"https://sqlite.org/wal.html"})),
         ("sql", json!({"sql":"select ?","params":[7]})),
     ] {
         assert!(
@@ -204,6 +213,13 @@ fn registry_validates_the_six_tool_inputs() {
             json!({"action":"reload","url":"https://example.com"}),
         ),
         ("browser", json!({"action":"click"})),
+        ("search", json!({"query":""})),
+        ("search", json!({"query":"SQLite","limit":1})),
+        ("scrape", json!({"url":""})),
+        (
+            "scrape",
+            json!({"url":"https://example.com","format":"html"}),
+        ),
         ("sql", json!({"sql":"select ?","params":[true]})),
     ] {
         assert!(
@@ -211,6 +227,43 @@ fn registry_validates_the_six_tool_inputs() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn web_output_preserves_text_and_structured_details() {
+    let result = tools::web_output(
+        vec![ContentPart::Text(TextContent {
+            content: "Search results for: SQLite".into(),
+            metadata: None,
+        })],
+        Some(json!({"query":"SQLite","results":[{"url":"https://sqlite.org"}]})),
+    );
+    assert_eq!(
+        result,
+        json!({
+            "content":"Search results for: SQLite",
+            "details":{"query":"SQLite","results":[{"url":"https://sqlite.org"}]}
+        })
+    );
+}
+
+#[test]
+fn web_output_stays_within_the_nested_result_limit() {
+    let result = tools::web_output(
+        vec![ContentPart::Text(TextContent {
+            content: "\0".repeat(64 * 1024),
+            metadata: None,
+        })],
+        Some(json!({"payload":"x".repeat(128 * 1024)})),
+    );
+    assert!(serde_json::to_vec(&result).unwrap().len() <= 127 * 1024);
+    assert_eq!(result["details"]["truncated"], true);
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("truncated for code mode")
+    );
 }
 
 #[test]
@@ -285,5 +338,9 @@ fn outside_tools_have_only_raw_exec_and_wait_contracts() {
         assert_eq!(properties[name]["type"], kind);
     }
     assert!(wait.output_schema.is_none());
-    assert!(!supported_models().contains_key("fireworks"));
+    let models = supported_models();
+    assert!(!models.contains_key("fireworks"));
+    for provider in ["openai", "chatgpt"] {
+        assert!(models[provider].iter().any(|id| id == "gpt-6-astra"));
+    }
 }
