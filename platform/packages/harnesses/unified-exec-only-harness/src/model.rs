@@ -4,7 +4,12 @@ use serde_json::json;
 use uuid::Uuid;
 
 // Explicit behavior policy, separate from the provider-owned pricing catalog.
-const MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
+const MODELS: &[&str] = &[
+    "gpt-6-astra",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+];
 
 pub fn supported_models() -> std::collections::BTreeMap<String, Vec<String>> {
     let mut models: std::collections::BTreeMap<String, Vec<String>> = ["openai", "chatgpt"]
