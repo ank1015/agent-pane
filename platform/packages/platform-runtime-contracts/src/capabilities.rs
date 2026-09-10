@@ -267,6 +267,7 @@ pub struct Statistics {
 pub struct CreateSandboxFromSnapshot {
     pub environment_id: Uuid,
     pub name: Option<String>,
+    /// Running window before E2B auto-pauses the persistent sandbox.
     pub timeout_seconds: Option<u32>,
     /// Outbound network access; omission defaults to true.
     pub network_access: Option<bool>,
@@ -280,7 +281,6 @@ pub enum SandboxStatus {
     Ready,
     Failed,
     Terminated,
-    Expired,
     Unavailable,
     Terminating,
 }
@@ -295,7 +295,6 @@ pub struct Sandbox {
     pub workspace: Option<ExecutionWorkspace>,
     pub error: Option<crate::ErrorInfo>,
     pub created_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
     pub termination_requested: bool,
     pub termination_confirmed: bool,
 }
