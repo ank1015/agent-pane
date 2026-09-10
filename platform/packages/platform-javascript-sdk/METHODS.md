@@ -4,6 +4,16 @@ Generated from the shared Rust capability contracts. Platform methods are shared
 
 Mutations in site handlers require a stable `options.idempotencyKey`. Agent code mode assigns one before dispatch if omitted. Explicit keys are preserved. A mutation replay returns its acceptance receipt; getters return current state.
 
+## ctx.platform.execution.listResources
+
+List registered machines and sandbox accounts without credentials or provisioning. Each inventory contains at most 200 items, total and truncated. Requires Site execution access; discovery does not grant host access.
+
+```ts
+execution.listResources(): Promise<ExecutionResources>
+```
+
+Read: scoped by the trusted caller transport.
+
 ## ctx.platform.environments.list
 
 List this project's environment references without provisioning hosts.
@@ -186,7 +196,7 @@ Read: scoped by the trusted caller transport.
 
 ## ctx.platform.sandboxes.createFromSnapshot
 
-Accept durable sandbox provisioning from a project snapshot. Poll get until ready; never replace an evaluated workspace for verification.
+Accept durable sandbox provisioning from a project snapshot. networkAccess defaults to true. Poll get until ready; sandboxes expire automatically. Prefer harness-provided workspaces when available.
 
 ```ts
 sandboxes.createFromSnapshot(input: CreateSandboxFromSnapshot, options?: MutationOptions): Promise<Sandbox>
@@ -203,16 +213,6 @@ sandboxes.get(sandboxId: Uuid): Promise<Sandbox>
 ```
 
 Read: scoped by the trusted caller transport.
-
-## ctx.platform.sandboxes.terminate
-
-Request sandbox termination; poll terminationConfirmed before assuming deletion.
-
-```ts
-sandboxes.terminate(input: SandboxId, options?: MutationOptions): Promise<Sandbox>
-```
-
-Mutation: preserve its operation identity across retries.
 
 ## ctx.platform.execution.bash
 
