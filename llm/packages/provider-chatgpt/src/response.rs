@@ -30,12 +30,18 @@ pub fn convert_response_events(
         return Err(provider_event_error(terminal));
     }
 
-    let terminal_response = terminal.get("response").cloned().ok_or_else(|| {
+    let mut terminal_response = terminal.get("response").cloned().ok_or_else(|| {
         invalid_response(
             "ChatGPT terminal event must contain a response object.",
             native_envelope(None, Vec::new()),
         )
     })?;
+    // Follow-up replay uses output; echoed request settings need not accumulate
+    // in the terminal response retained by every assistant message.
+    if let Some(response) = terminal_response.as_object_mut() {
+        response.remove("instructions");
+        response.remove("tools");
+    }
     let mut output = terminal_response
         .get("output")
         .and_then(Value::as_array)

@@ -164,7 +164,10 @@ fn native_output_is_replayed_on_follow_up_requests() {
                 "response": {
                     "id": "response-1",
                     "model": "gpt-5.6-luna",
-                    "status": "completed"
+                    "status": "completed",
+                    "instructions": "x".repeat(70_000),
+                    "tools": [{"type": "function", "name": "old_tool", "description": "x".repeat(70_000)}],
+                    "future_field": {"instructions": "keep", "tools": []}
                 }
             }),
         ],
@@ -173,12 +176,31 @@ fn native_output_is_replayed_on_follow_up_requests() {
         1,
     )
     .expect("valid response");
+    assert_eq!(
+        assistant.native_message["response"],
+        json!({
+            "id": "response-1",
+            "model": "gpt-5.6-luna",
+            "status": "completed",
+            "future_field": {"instructions": "keep", "tools": []}
+        })
+    );
     let expected = assistant.native_message["output"].clone();
+    assert_eq!(expected, json!([native_item]));
+    let serialized = serde_json::to_vec(&assistant).expect("serialize assistant");
+    assert!(serialized.len() < 2_000);
+    let assistant = serde_json::from_slice(&serialized).expect("deserialize assistant");
     let mut request = request("gpt-5.6-luna");
+    request.instructions = Some("Current instructions".into());
+    request
+        .provider_options
+        .insert("tools".into(), json!([{"type": "web_search"}]));
     request.messages.push(Message::Assistant(assistant));
 
     let body = build_response_request(&request).expect("valid follow-up request");
     assert_eq!(body["input"], expected);
+    assert_eq!(body["instructions"], "Current instructions");
+    assert_eq!(body["tools"], json!([{"type": "web_search"}]));
 }
 
 #[test]
