@@ -25,6 +25,10 @@ pub(crate) fn invalid_response(message: impl Into<String>, native: Value) -> Llm
 }
 
 pub(crate) fn network_error(error: &reqwest::Error) -> LlmError {
+    // reqwest classifies a response stream that ends or fails mid-body as a
+    // body/decode error, even though retrying the request can succeed.
+    let can_retry =
+        error.is_timeout() || error.is_connect() || error.is_body() || error.is_decode();
     let provider_type = if error.is_timeout() {
         "timeout"
     } else if error.is_connect() {
@@ -37,7 +41,7 @@ pub(crate) fn network_error(error: &reqwest::Error) -> LlmError {
         provider_code: None,
         provider_type: Some(provider_type.to_owned()),
         http_status: error.status().map(|status| status.as_u16()),
-        can_retry: error.is_timeout() || error.is_connect(),
+        can_retry,
         retry_after_ms: None,
         native_error: None,
     }

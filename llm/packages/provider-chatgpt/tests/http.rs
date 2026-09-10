@@ -160,6 +160,36 @@ async fn complete_normalizes_http_errors() {
 }
 
 #[tokio::test]
+async fn complete_marks_response_body_decode_errors_retryable() {
+    let body = "data: {";
+    let declared_length = body.len() + 100;
+    let (base_url, captured) = spawn_server_with_content_length(
+        "200 OK",
+        &[],
+        body,
+        "text/event-stream",
+        Some(declared_length),
+    )
+    .await;
+    let provider = ChatGptProvider::new(
+        ChatGptConfig::new("oauth-token", "account-123")
+            .expect("valid config")
+            .with_base_url(format!("{base_url}/backend-api"))
+            .expect("valid test URL"),
+    )
+    .expect("valid provider");
+
+    let error = provider
+        .complete(request())
+        .await
+        .expect_err("truncated response body must fail");
+    captured.await.expect("mock server completed");
+
+    assert_eq!(error.provider_type.as_deref(), Some("network_error"));
+    assert!(error.can_retry);
+}
+
+#[tokio::test]
 async fn responses_lite_sends_the_native_codex_header() {
     let sse = sse_body(&[json!({
         "type": "response.completed",
@@ -264,6 +294,16 @@ async fn spawn_server(
     body: &str,
     content_type: &str,
 ) -> (String, JoinHandle<String>) {
+    spawn_server_with_content_length(status, headers, body, content_type, None).await
+}
+
+async fn spawn_server_with_content_length(
+    status: &str,
+    headers: &[(&str, &str)],
+    body: &str,
+    content_type: &str,
+    content_length: Option<usize>,
+) -> (String, JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind mock server");
@@ -275,6 +315,7 @@ async fn spawn_server(
         .collect::<Vec<_>>();
     let body = body.to_owned();
     let content_type = content_type.to_owned();
+    let content_length = content_length.unwrap_or(body.len());
     let handle = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accept HTTP request");
         let mut request = Vec::new();
@@ -307,8 +348,7 @@ async fn spawn_server(
         }
 
         let mut response = format!(
-            "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n",
-            body.len()
+            "HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {content_length}\r\nconnection: close\r\n"
         );
         for (name, value) in headers {
             response.push_str(&format!("{name}: {value}\r\n"));
