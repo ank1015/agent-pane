@@ -505,13 +505,12 @@ async fn remote_harness_sandbox_binding_preserves_files_and_rejects_output_only_
         .await["status"],
         400
     );
-    sqlx::query("update platform_remote_operations set expires_at=clock_timestamp()-interval '1 second' where id=$1")
-        .bind(sandbox).execute(&f.pool).await.unwrap();
     tick(&f).await;
-    assert_eq!(
-        ok(f.sdk("sandboxes.get", json!([sandbox])).await)["terminationConfirmed"],
-        true
-    );
+    let persistent = ok(f.sdk("sandboxes.get", json!([sandbox])).await);
+    assert!(persistent.get("expiresAt").is_none());
+    assert_eq!(persistent["status"], "ready");
+    assert_eq!(persistent["terminationRequested"], false);
+    assert_eq!(persistent["terminationConfirmed"], false);
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -697,8 +696,8 @@ async fn remote_commands_are_durable_and_verify_published_workspace(pool: PgPool
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires local PostgreSQL and a built sites-service binary"]
-async fn remote_sandbox_creation_recovery_expiry_and_project_binding(pool: PgPool) {
-    let (f, g, _, cwd) = setup(pool).await;
+async fn remote_sandbox_creation_recovery_persistence_and_project_binding(pool: PgPool) {
+    let (mut f, g, _, cwd) = setup(pool).await;
     enable(&f).await;
     let env = Uuid::now_v7();
     let snapshot = Uuid::now_v7();
@@ -757,9 +756,45 @@ async fn remote_sandbox_creation_recovery_expiry_and_project_binding(pool: PgPoo
         400
     );
     assert_eq!(ready["workspace"]["environment_id"], json!(env));
-    // Expiry revokes new commands immediately, but is not deletion confirmation.
-    sqlx::query("update platform_remote_operations set expires_at=clock_timestamp()-interval '1 second' where id=$1").bind(id(&accepted)).execute(&f.pool).await.unwrap();
+    assert!(ready.get("expiresAt").is_none());
+    let parked: bool = sqlx::query_scalar(
+        "select next_attempt_at='infinity'::timestamptz from platform_remote_operations where id=$1",
+    )
+    .bind(id(&accepted))
+    .fetch_one(&f.pool)
+    .await
+    .unwrap();
+    assert!(parked, "ready persistent sandboxes should not be polled");
+    let command = ok(f
+        .sdk(
+            "execution.bash",
+            mutation(
+                json!({"hostId":ready["workspace"]["host_id"],"workdir":cwd,"command":"true"}),
+                "persistent",
+            ),
+        )
+        .await);
+    assert_eq!(done(&f, id(&command)).await["status"], "completed");
+
+    // Only explicit termination revokes work and asks the gateway to delete.
     g.block_delete.store(true, Ordering::SeqCst);
+    let started = ok(f
+        .sdk("sessions.start", mutation(f.start(), "terminator"))
+        .await);
+    let source: Uuid = serde_json::from_value(started["runId"].clone()).unwrap();
+    let (client, _) = super::capabilities::worker(&mut f).await;
+    let run = super::capabilities::claim(&client, source).await;
+    let requested = run
+        .platform()
+        .terminate_sandbox(&Cmd::new(
+            RequestKey::new("terminate").unwrap(),
+            c::SandboxId {
+                sandbox_id: id(&accepted),
+            },
+        ))
+        .await
+        .unwrap();
+    assert!(requested.termination_requested);
     tick(&f).await;
     let pending = ok(f.sdk("sandboxes.get", json!([accepted["id"]])).await);
     assert_eq!(pending["terminationRequested"], true);
@@ -769,7 +804,7 @@ async fn remote_sandbox_creation_recovery_expiry_and_project_binding(pool: PgPoo
             "execution.bash",
             mutation(
                 json!({"hostId":ready["workspace"]["host_id"],"workdir":cwd,"command":"true"}),
-                "expired"
+                "terminated"
             )
         )
         .await["status"],
@@ -777,9 +812,9 @@ async fn remote_sandbox_creation_recovery_expiry_and_project_binding(pool: PgPoo
     );
     g.block_delete.store(false, Ordering::SeqCst);
     tick(&f).await;
-    let expired = ok(f.sdk("sandboxes.get", json!([accepted["id"]])).await);
-    assert_eq!(expired["status"], "expired");
-    assert_eq!(expired["terminationConfirmed"], true);
+    let terminated = ok(f.sdk("sandboxes.get", json!([accepted["id"]])).await);
+    assert_eq!(terminated["status"], "terminated");
+    assert_eq!(terminated["terminationConfirmed"], true);
     for (key, input) in [
         ("network-default", json!({"environmentId":env})),
         (
