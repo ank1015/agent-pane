@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { once } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BrowserHost, IMAGE_BYTES, validCall, backendResult } from './host.mjs';
 
 const dashboard = 'http://127.0.0.1:1';
@@ -105,6 +107,21 @@ test('bridge rejects malformed requests and preserves HTTP/backend failures', ()
   assert.ok(!validCall({ ...valid, release_id: release2 }));
   assert.throws(() => backendResult({ status: 'failed' }), /execution failed/);
   assert.throws(() => backendResult({ status: 'succeeded', response: { status: 500, body: {} } }), /500/);
+});
+
+test('preflight exits nonzero when the configured browser cannot launch', async t => {
+  const emptyBrowserCache = await mkdtemp(join(tmpdir(), 'sites-browser-check-'));
+  t.after(() => rm(emptyBrowserCache, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [new URL('./runtime.mjs', import.meta.url).pathname, '--check'], {
+    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: emptyBrowserCache },
+    stdio: ['ignore', 'ignore', 'pipe']
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const [code] = await once(child, 'exit');
+  assert.notEqual(code, 0);
+  assert.match(stderr, /Executable doesn't exist|browserType\.launch/);
 });
 
 test('oversized screenshot fails without resizing or truncating media', async t => {
