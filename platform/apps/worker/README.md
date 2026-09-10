@@ -108,8 +108,9 @@ availability. Neither harness is enabled automatically.
 ## Sites harness
 
 `SITES_ENABLED=true` registers the trusted `sites` harness. It needs the LLM gateway
-settings, plus Platform Sites access/grants for authoring. Set SITES_BROWSER_NODE
-and SITES_BROWSER_SCRIPT to absolute paths for Node and the bundled
+settings, `FIRECRAWL_API_KEY` for nested search/scrape, plus Platform Sites
+access/grants for authoring. Set SITES_BROWSER_NODE and SITES_BROWSER_SCRIPT to
+absolute paths for Node and the bundled
 `platform/packages/harnesses/sites/browser/runtime.mjs`. Install its npm dependencies
 and Chromium first; startup verifies native sandbox support. Sites is Platform-owned
 and does not require project opt-in.
@@ -119,4 +120,5 @@ the same live site. There is no development sandbox, draft or agent publication
 step. See [Sites harness](../../packages/harnesses/sites/README.md) for recovery,
 browser setup, limits, and the complete system prompt. The only outer tools are
 exec/wait; the browser has evaluate/screenshot/reload actions inside code mode.
-No agent Platform SDK or Firecrawl tools are exposed.
+No agent Platform SDK is exposed; search and scrape are available only inside
+exec as `tools.search` and `tools.scrape`.
