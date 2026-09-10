@@ -54,7 +54,7 @@ not rewritten by this change. Transient SSE
 events are consumed internally but omitted from the returned message so they do
 not inflate gateway responses and persisted transcripts.
 
-`CHATGPT_MODELS` directly shares the three generated entries and pricing from
+`CHATGPT_MODELS` directly shares the four generated entries and pricing from
 `provider-openai`, making the catalog a strict allowlist that cannot drift from
 the OpenAI provider catalog.
 
