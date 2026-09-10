@@ -564,7 +564,9 @@ async fn all_application_routes_and_cooperative_abort(pool: PgPool) {
             202,
         )
         .await;
-    assert_eq!(aborted["run"]["status"], "ready");
+    assert_eq!(aborted["run"]["status"], "aborted");
+    assert!(aborted["run"]["started_at"].is_null());
+    assert!(aborted["run"]["finished_at"].is_string());
     assert!(aborted["run"]["abort_requested_at"].is_string());
     assert_eq!(aborted["input"]["kind"], "abort");
     let again = app
@@ -577,9 +579,22 @@ async fn all_application_routes_and_cooperative_abort(pool: PgPool) {
         .await;
     assert_eq!(again["input"], aborted["input"]);
     let events = app.get(&format!("/api/runs/{run}/events")).await;
-    assert_eq!(events["items"].as_array().unwrap().len(), 3);
+    assert_eq!(events["items"].as_array().unwrap().len(), 4);
     assert_eq!(events["items"][2]["type"], "run.abort_requested");
-    fail(&app, run).await;
+    assert_eq!(events["items"][3]["type"], "run.aborted");
+    let inputs = app.get(&format!("/api/runs/{run}/inputs")).await;
+    for input in inputs["items"].as_array().unwrap() {
+        assert_eq!(
+            input["status"],
+            if input["kind"] == "abort" {
+                "handled"
+            } else {
+                "rejected"
+            }
+        );
+        assert_eq!(input["handling"]["reason"], "aborted_before_start");
+    }
+    assert!(app.get(&format!("/api/sessions/{session}")).await["active_run"].is_null());
     assert_eq!(
         app.post(
             &format!("/api/runs/{run}/abort"),
@@ -609,7 +624,7 @@ async fn all_application_routes_and_cooperative_abort(pool: PgPool) {
     assert_eq!(stream.headers()["content-type"], "text/event-stream");
     let body = stream.text().await.unwrap();
     assert!(body.contains("event: run.created"), "{body}");
-    assert!(body.contains("event: run.failed"), "{body}");
+    assert!(body.contains("event: run.aborted"), "{body}");
     assert!(body.contains("id: 4"), "{body}");
 }
 
@@ -1205,6 +1220,45 @@ async fn stream_replay_external_commits_terminal_drain_and_disconnect(pool: PgPo
 
 #[sqlx::test(migrations = "./migrations")]
 #[ignore = "requires DATABASE_URL; isolated SQLx database"]
+async fn repeated_abort_repairs_legacy_unstarted_run(pool: PgPool) {
+    let app = App::new(pool).await;
+    let created = app.create("queued", true).await;
+    let run = uuid(&created["run"]["id"]);
+    let input = Uuid::now_v7();
+    // Reproduce the previous server's durable state after aborting an unclaimed run.
+    let mut tx = app.pool.begin().await.unwrap();
+    sqlx::query("insert into run_inputs(id,project_id,run_id,kind,payload,deduplication_key) values($1,$2,$3,'abort','{}','runtime:abort')")
+        .bind(input).bind(app.project).bind(run).execute(&mut *tx).await.unwrap();
+    sqlx::query(
+        "update runs set abort_requested_at=clock_timestamp(),version=version+1 where id=$1",
+    )
+    .bind(run)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("insert into run_events(id,run_id,type,source,payload) values($1,$2,'run.abort_requested','runtime',$3)")
+        .bind(Uuid::now_v7()).bind(run).bind(json!({"input_id":input})).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let repaired = app
+        .post(
+            &format!("/api/runs/{run}/abort"),
+            "retry-abort",
+            json!({}),
+            202,
+        )
+        .await;
+    assert_eq!(repaired["run"]["status"], "aborted");
+    assert!(repaired["run"]["started_at"].is_null());
+    assert_eq!(repaired["input"]["id"], input.to_string());
+    assert_eq!(repaired["input"]["status"], "handled");
+    let events = app.get(&format!("/api/runs/{run}/events")).await;
+    assert_eq!(events["items"].as_array().unwrap().len(), 3);
+    assert_eq!(events["items"][2]["type"], "run.aborted");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+#[ignore = "requires DATABASE_URL; isolated SQLx database"]
 async fn active_worker_ownership_is_preserved_and_abort_does_not_cascade(pool: PgPool) {
     let app = App::new(pool).await;
     let source = app.create("parent", true).await;
@@ -1281,6 +1335,21 @@ async fn active_worker_ownership_is_preserved_and_abort_does_not_cascade(pool: P
         app.get(&format!("/api/runs/{parent}")).await["status"],
         "running"
     );
+    // A previously claimed run can be ready again after yielding. It still needs
+    // worker cleanup and must not take the never-started cancellation shortcut.
+    sqlx::query("update runs set status='ready',available_at=clock_timestamp(),worker_id=null,lease_expires_at=null,version=version+1 where id=$1")
+        .bind(parent).execute(&app.pool).await.unwrap();
+    let yielded = app
+        .post(
+            &format!("/api/runs/{parent}/abort"),
+            "abort-yielded",
+            json!({}),
+            202,
+        )
+        .await;
+    assert_eq!(yielded["run"]["status"], "ready");
+    assert!(yielded["run"]["finished_at"].is_null());
+    assert_eq!(yielded["input"]["status"], "pending");
 }
 
 #[sqlx::test(migrations = "./migrations")]

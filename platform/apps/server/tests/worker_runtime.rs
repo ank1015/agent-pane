@@ -1149,14 +1149,14 @@ async fn children_forks_messages_abort_and_completion_wake(pool: PgPool) {
         )
         .await;
     assert_eq!(aborted["input"]["source_run_id"], json!(parent));
-    assert_eq!(aborted["run"]["status"], "ready");
-    app.claim(&w, "abort-start", 1).await;
-    app.ack(&w, target, 1).await;
-    let mut body = base(&app.context(&w, target, 1).await);
-    body["disposition"] = json!({"status":"aborted"});
-    assert_eq!(
-        app.commit(&w, target, 1, "abort-ack", body, 200).await["run"]["status"],
-        "aborted"
+    assert_eq!(aborted["run"]["status"], "aborted");
+    assert_eq!(aborted["input"]["status"], "handled");
+    assert!(aborted["run"]["started_at"].is_null());
+    assert!(
+        app.claim(&w, "abort-start", 1).await["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
     assert_eq!(app.context(&w, parent, 2).await["run"]["status"], "running");
 }

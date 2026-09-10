@@ -76,6 +76,7 @@ pub(super) async fn request_abort(
     source: Option<Uuid>,
 ) -> Result<Value> {
     if run.abort_requested_at.is_some() {
+        abort_unstarted(tx, run).await?;
         return Ok(sqlx::query_scalar("select to_jsonb(i)-'deduplication_key' from run_inputs i where run_id=$1 and deduplication_key='runtime:abort'")
             .bind(run.id).fetch_optional(&mut **tx).await?.unwrap_or(Value::Null));
     }
@@ -92,9 +93,41 @@ pub(super) async fn request_abort(
         payload["source_run_id"] = json!(source);
     }
     event(tx, run.id, "run.abort_requested", payload).await?;
+    if abort_unstarted(tx, run).await? {
+        return Ok(sqlx::query_scalar(
+            "select to_jsonb(i)-'deduplication_key' from run_inputs i where run_id=$1 and deduplication_key='runtime:abort'",
+        )
+        .bind(run.id)
+        .fetch_one(&mut **tx)
+        .await?);
+    }
     wake(tx, run.id, "abort").await?;
     activity(tx, run.session_id).await?;
     Ok(input)
+}
+
+/// Only never-claimed runs can be stopped without harness cleanup. The caller
+/// holds the run lock, serializing this transition with worker claims.
+async fn abort_unstarted(tx: &mut Tx<'_>, run: &RunRow) -> Result<bool> {
+    let changed = sqlx::query("update runs set status='aborted',available_at=null,finished_at=clock_timestamp(),version=version+1 where id=$1 and status='ready' and started_at is null and lease_epoch=0 and worker_id is null and abort_requested_at is not null")
+        .bind(run.id).execute(&mut **tx).await?.rows_affected();
+    if changed == 0 {
+        return Ok(false);
+    }
+    sqlx::query("update run_inputs set status=case when kind='abort' then 'handled' else 'rejected' end,handling=jsonb_build_object('reason','aborted_before_start'),handled_at=clock_timestamp() where run_id=$1 and status='pending'")
+        .bind(run.id).execute(&mut **tx).await?;
+    sqlx::query("update run_waits set status='cancelled',resolved_at=clock_timestamp(),result=jsonb_build_object('reason','run_terminated') where run_id=$1 and status='pending'")
+        .bind(run.id).execute(&mut **tx).await?;
+    event(
+        tx,
+        run.id,
+        "run.aborted",
+        json!({"reason":"aborted_before_start"}),
+    )
+    .await?;
+    activity(tx, run.session_id).await?;
+    hint(tx, run.id).await?;
+    Ok(true)
 }
 pub(super) async fn start_with_parent(
     tx: &mut Tx<'_>,
@@ -398,7 +431,9 @@ impl RuntimeService {
             .ok_or(RuntimeError::NotFound)?;
         session(&mut tx, session_id).await?;
         let r = run(&mut tx, id).await?;
-        r.live()?;
+        if r.status != "aborted" {
+            r.live()?;
+        }
         let i = request_abort(&mut tx, &r, request.reason.as_deref(), None).await?;
         let reply = Reply::new(202, json!({"run":run_json(&mut tx,id).await?,"input":i}));
         receipts::save(&mut tx, r.project_id, scope, id, key, &hash, &reply).await?;
