@@ -112,6 +112,28 @@ async fn complete_normalizes_retryable_http_errors() {
 }
 
 #[tokio::test]
+async fn complete_marks_response_body_decode_errors_retryable() {
+    let body = json!({"id": "truncated"});
+    let declared_length = body.to_string().len() + 100;
+    let (base_url, captured) =
+        spawn_server_with_content_length("200 OK", &[], body, Some(declared_length)).await;
+    let config = OpenAiConfig::new("secret-key")
+        .expect("valid config")
+        .with_base_url(format!("{base_url}/v1"))
+        .expect("valid test URL");
+    let provider = OpenAiProvider::new(config).expect("valid provider");
+
+    let error = provider
+        .complete(request("gpt-5.6-luna"))
+        .await
+        .expect_err("truncated response body must fail");
+    captured.await.expect("mock server completed");
+
+    assert_eq!(error.provider_type.as_deref(), Some("network_error"));
+    assert!(error.can_retry);
+}
+
+#[tokio::test]
 async fn responses_lite_sends_the_native_codex_header() {
     let native = json!({
         "id": "response-lite",
@@ -219,6 +241,15 @@ async fn spawn_server(
     headers: &[(&str, &str)],
     body: Value,
 ) -> (String, JoinHandle<String>) {
+    spawn_server_with_content_length(status, headers, body, None).await
+}
+
+async fn spawn_server_with_content_length(
+    status: &str,
+    headers: &[(&str, &str)],
+    body: Value,
+    content_length: Option<usize>,
+) -> (String, JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind mock server");
@@ -229,6 +260,7 @@ async fn spawn_server(
         .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
         .collect::<Vec<_>>();
     let body = serde_json::to_string(&body).expect("serializable mock body");
+    let content_length = content_length.unwrap_or(body.len());
     let handle = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.expect("accept HTTP request");
         let mut request = Vec::new();
@@ -261,8 +293,7 @@ async fn spawn_server(
         }
 
         let mut response = format!(
-            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n",
-            body.len()
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {content_length}\r\nconnection: close\r\n"
         );
         for (name, value) in headers {
             response.push_str(&format!("{name}: {value}\r\n"));
