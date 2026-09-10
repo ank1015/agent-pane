@@ -30,7 +30,8 @@ to true for both sources. Base-only `source.ram` accepts 1024, 2048, 4096 or 819
 MiB (default 2048); vCPU is automatic. Snapshots retain their source hardware.
 These options are persisted with the creation request for retry-safe replay.
 Optional name and `timeout_seconds` map to the
-gateway. Returned lifecycle resources are polled to readiness, with a ten-minute
+gateway's running window before E2B auto-pauses the persistent sandbox. Returned
+lifecycle resources are polled to readiness, with a ten-minute
 per-operation readiness window; timeout results include the known resource ID
 and do not delete it. Gateway filesystem requests resume paused builders on use.
 Account discovery returns metadata only, never credentials. Lists return up to

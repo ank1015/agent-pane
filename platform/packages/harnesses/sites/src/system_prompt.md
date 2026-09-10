@@ -888,13 +888,11 @@ type Sandbox = {
     | 'ready'
     | 'failed'
     | 'terminated'
-    | 'expired'
     | 'unavailable'
     | 'terminating';
   workspace: ExecutionWorkspace | null;
   error: { code: string; message: string } | null;
   createdAt: string;
-  expiresAt: string | null;
   terminationRequested: boolean;
   terminationConfirmed: boolean;
 };
@@ -902,7 +900,7 @@ type Sandbox = {
 
 `environmentId` must identify a sandbox environment. It is not a raw provider snapshot ID or account ID. `networkAccess` defaults to `true`; set it to `false` to disable outbound internet access, including package downloads, in the created sandbox.
 
-Creation returns a durable handle before provisioning necessarily finishes. Save it and inspect readiness through `sandboxes.get` in subsequent requests. Use the returned workspace only when the sandbox is ready. Sandboxes expire automatically according to their lifetime; `timeoutSeconds` defaults to 3600 and accepts 1–86400 seconds. The SDK has no manual sandbox termination method. Expiry prevents new work, but use the returned status and termination flags when confirmed cleanup matters.
+Creation returns a durable handle before provisioning necessarily finishes. Save it and inspect readiness through `sandboxes.get` in subsequent requests. Use the returned workspace only when the sandbox is ready. Sandboxes persist until explicitly terminated; `timeoutSeconds` defaults to 3600 and accepts 1–86400 seconds, and controls how long E2B runs the sandbox before auto-pausing it. A paused sandbox resumes automatically on activity. The SDK has no manual sandbox termination method.
 
 Most environment-based harnesses accept an environment reference, provision their own sandbox, and expose the actual workspace—including its host ID—through run outputs. Prefer that workflow when supported. Use `createFromSnapshot` only when your application needs a separate sandbox outside the harness-managed workflow.
 
