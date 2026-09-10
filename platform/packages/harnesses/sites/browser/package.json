@@ -1,1 +1,11 @@
-{"private":true,"type":"module","dependencies":{"playwright":"1.63.0"},"scripts":{"install-browser":"playwright install chromium"}}
+{
+  "name": "sites-browser-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": { "playwright": "1.63.0" },
+  "scripts": {
+    "install-browser": "playwright install chromium",
+    "check": "node runtime.mjs --check",
+    "test": "node --test runtime.test.mjs"
+  }
+}
